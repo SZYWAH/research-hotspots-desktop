@@ -1,0 +1,46 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CHROME_BINARY=/usr/bin/chromium \
+    CHROME_DRIVER_PATH=/usr/bin/chromedriver \
+    CNKI_HEADLESS=1 \
+    CNKI_WAIT_TIMEOUT=20 \
+    CNKI_PAGELOAD_TIMEOUT=45 \
+    CNKI_IMPLICIT_WAIT=2
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-driver \
+    build-essential \
+    gcc \
+    g++ \
+    ca-certificates \
+    fonts-dejavu \
+    fonts-noto-cjk \
+    libglib2.0-0 \
+    libnss3 \
+    libfontconfig1 \
+    libxss1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libgbm1 \
+    libxshmfence1 \
+    libfreetype6 \
+    libjpeg62-turbo \
+    libpng16-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements_docker_cnki.txt /app/requirements_docker_cnki.txt
+RUN pip install --no-cache-dir -r requirements_docker_cnki.txt
+
+COPY . /app
+
+RUN mkdir -p /app/data/exports
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app17.py", "--server.address=0.0.0.0", "--server.port=8501"]

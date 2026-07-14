@@ -1,0 +1,42 @@
+# Local secrets. Commit only the documented example files.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.local.example
+
+# Local databases, browser profiles, caches, and visual-review snapshots.
+/源代码/data/library/*.sqlite
+/源代码/data/library/*.sqlite-*
+/源代码/data/library/import-manifests/
+/源代码/data/exports/
+/data/
+/源代码/tmp/
+/源代码/work/
+/源代码/.visual-review/
+/源代码/outputs/
+
+# Frontend build artifacts and dependency stores.
+/源代码/node_modules/
+/源代码/dist/
+/源代码/.pnpm-store/
+**/*.tsbuildinfo
+
+# Rust and Tauri build output.
+/源代码/src-tauri/target/
+/源代码/src-tauri/gen/
+
+# Local editor and operating-system files.
+/源代码/.idea/
+/源代码/.agents/
+/源代码/__pycache__/
+**/*.py[cod]
+Thumbs.db
+.DS_Store
+
+# Local AI tooling and course-delivery binaries are not part of the source baseline.
+/.agents/
+/.claude/
+/.codex/
+/数据集.sql
+/*.docx
+/*.pptx

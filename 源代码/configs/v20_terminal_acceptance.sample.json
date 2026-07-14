@@ -1,0 +1,23 @@
+{
+  "$schema": "./v20_terminal_acceptance.schema.json",
+  "libraryPath": "data\\samples\\papers_sample.jsonl",
+  "databaseDir": "data\\library",
+  "minValidRows": 4,
+  "minImportedRows": 4,
+  "minClusters": 1,
+  "exportStarMap": true,
+  "minStarMapHotspots": 1,
+  "minStarMapEvidenceIds": 1,
+  "minStarMapLinks": 0,
+  "minStarMapEvidenceCoverage": 0.8,
+  "minStarMapEvolutionCoverage": 0.8,
+  "minStarMapSourceDistributionCoverage": 0.8,
+  "exportHotspotEvidence": true,
+  "minHotspotRepresentativePapers": 1,
+  "generateHotspotReport": true,
+  "minHotspotReportPapers": 1,
+  "minReportCitations": 1,
+  "minReportReferences": 1,
+  "minReportChars": 200,
+  "skipBaseline": true
+}

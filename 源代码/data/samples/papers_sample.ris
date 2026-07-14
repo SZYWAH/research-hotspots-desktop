@@ -1,0 +1,25 @@
+TY  - JOUR
+TI  - Local SQLite Evidence Profiles for Research Hotspot Reports
+AU  - Chen, Yu
+AU  - Zhang, Lei
+PY  - 2025
+JO  - Research Software Notes
+AB  - This study describes local SQLite evidence profiles for traceable research hotspot reports.
+KW  - sqlite evidence
+KW  - report traceability
+DO  - 10.0000/sample-ris.1
+UR  - https://example.org/sample-ris-1
+ER  -
+
+TY  - CONF
+TI  - Semantic Star Maps for Large-Scale Literature Exploration
+AU  - Liu, Fang
+PY  - 2023
+T2  - Conference on Visual Literature Analytics
+AB  - The paper presents a semantic star map interface for exploring large-scale literature collections.
+KW  - semantic visualization
+KW  - literature exploration
+DO  - 10.0000/sample-ris.2
+UR  - https://example.org/sample-ris-2
+ER  -
+
