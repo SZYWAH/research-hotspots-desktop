@@ -3060,7 +3060,7 @@ function GalaxyView({
       ?? topicPoints[0]?.scopedPaperId
       ?? "";
     if (!targetPaperId) return;
-    if (!automation.paperSelected || selectedGalaxyPaperId !== targetPaperId) {
+    if (!automation.paperSelected) {
       automation.paperSelected = true;
       setSelectedGalaxyPaperId(targetPaperId);
       return;
@@ -3271,8 +3271,16 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="论文拾取 当前 / P95 / 候选" value={`${formatPerformanceMs(galaxyPerformance.systemPaperPickMs)} / ${formatPerformanceMs(galaxyPerformance.systemPaperPickP95Ms)} / ${galaxyPerformance.systemPaperPickCandidateCount}`} />
                 <GalaxyDiagnosticMetric label="当前论文 / 详情缓存" value={`${galaxyPerformance.systemSelectedPaperType === "representative" ? "代表论文" : galaxyPerformance.systemSelectedPaperType === "ordinary" ? "普通论文" : "未选择"} / ${galaxyPaperDetailCacheStateLabel(galaxyPerformance.systemPaperDetailCacheState)}`} />
                 <GalaxyDiagnosticMetric label="论文详情查询" value={galaxyPerformance.systemPaperDetailQueryMs > 0 ? formatPerformanceMs(galaxyPerformance.systemPaperDetailQueryMs) : "未查询"} />
-                <GalaxyDiagnosticMetric label="论文飞行 / 进度" value={`${galaxyPaperFocusStateLabel(galaxyPerformance.systemPaperFocusState)} / ${Math.round(galaxyPerformance.systemPaperFocusProgress * 100)}% / ${galaxyPerformance.systemPaperFocusTransitionMs > 0 ? formatPerformanceMs(galaxyPerformance.systemPaperFocusTransitionMs) : "未执行"}`} />
+                <GalaxyDiagnosticMetric label="论文旅程 / 进度 / 路径" value={`${galaxyPerformance.systemPaperJourneyState} / ${Math.round(galaxyPerformance.systemPaperJourneyProgress * 100)}% / ${galaxyPerformance.systemPaperJourneyPathMode}`} />
+                <GalaxyDiagnosticMetric label="兼容飞行状态 / 补间" value={`${galaxyPaperFocusStateLabel(galaxyPerformance.systemPaperFocusState)} / ${galaxyPerformance.systemPaperFocusTransitionMs > 0 ? formatPerformanceMs(galaxyPerformance.systemPaperFocusTransitionMs) : "未执行"}`} />
                 <GalaxyDiagnosticMetric label="起始 / 目标距离 / 目标尺寸" value={`${galaxyPerformance.systemPaperFocusStartDistance > 0 ? galaxyPerformance.systemPaperFocusStartDistance.toFixed(2) : "-"} / ${galaxyPerformance.systemPaperFocusTargetDistance > 0 ? galaxyPerformance.systemPaperFocusTargetDistance.toFixed(2) : "-"} / ${galaxyPerformance.systemPaperFocusTargetScreenSize > 0 ? `${galaxyPerformance.systemPaperFocusTargetScreenSize.toFixed(1)} px` : "-"}`} />
+                <GalaxyDiagnosticMetric label="相机真实位移 / 到目标 / 投影直径" value={`${galaxyPerformance.systemPaperCameraTravelDistance.toFixed(3)} / ${galaxyPerformance.systemPaperCameraDistanceToTarget.toFixed(3)} / ${galaxyPerformance.systemPaperProjectedTargetDiameter.toFixed(2)} px`} />
+                <GalaxyDiagnosticMetric label="目标坐标漂移 / 平滑延长" value={`${galaxyPerformance.systemPaperTargetWorldPositionDrift.toExponential(2)} / ${formatPerformanceMs(galaxyPerformance.systemPaperSmoothnessExtensionMs)}`} />
+                <GalaxyDiagnosticMetric label="返回位置 / 角度误差" value={`${galaxyPerformance.systemPaperReturnPositionError.toExponential(2)} / ${galaxyPerformance.systemPaperReturnAngleErrorDegrees.toFixed(4)}°`} />
+                <GalaxyDiagnosticMetric label="主星最小净空 / 视锥 / 绘制" value={`${galaxyPerformance.systemPaperMinimumStarClearance.toFixed(3)} / ${galaxyPerformance.systemPaperStarInFrustum ? "视锥内" : "视锥外"} / ${galaxyPerformance.systemPaperStarDrawCalls}`} />
+                <GalaxyDiagnosticMetric label="主体目标 / 实际直径" value={`${galaxyPerformance.systemPaperTargetBodyDiameterPx.toFixed(1)} px / ${galaxyPerformance.systemPaperActualBodyDiameterPx.toFixed(1)} px`} />
+                <GalaxyDiagnosticMetric label="代表载体 / 主星退出边距" value={`${(galaxyPerformance.systemPaperRepresentativeCarrierRatio * 100).toFixed(1)}% / ${galaxyPerformance.systemPaperEndpointStarExitMarginPx.toFixed(1)} px`} />
+                <GalaxyDiagnosticMetric label="终点候选 / 方向偏转 / 拒绝" value={`${galaxyPerformance.systemPaperEndpointCandidateCount} / ${galaxyPerformance.systemPaperEndpointDirectionDeviationDegrees.toFixed(1)}° / ${galaxyPerformance.systemPaperEndpointCompositionRejected ? "是" : "否"}`} />
                 <GalaxyDiagnosticMetric label="邻域 / 远景亮度" value={`${Math.round(galaxyPerformance.systemPaperFocusNeighborBrightness * 100)}% / ${Math.round(galaxyPerformance.systemPaperFocusContextBrightness * 100)}%${galaxyPerformance.systemPaperFocusCanceled ? " · 已取消" : ""}`} />
                 <GalaxyDiagnosticMetric label="论文阅读空间" value={`${galaxyPaperInspectionModeLabel(galaxyPerformance.systemPaperInspectionMode)} / ${galaxyPerformance.systemPaperInspectionVisualType === "energy-core" ? "能量光核" : galaxyPerformance.systemPaperInspectionVisualType === "data-sphere" ? "数据球" : "未建立"} / ${Math.round(galaxyPerformance.systemPaperInspectionBlend * 100)}%`} />
                 <GalaxyDiagnosticMetric label="停靠 / 球面 / 批次" value={`${Math.round(galaxyPerformance.systemPaperInspectionDockBlend * 100)}% / ${galaxyPerformance.systemPaperInspectionDiameter > 0 ? `${galaxyPerformance.systemPaperInspectionDiameter.toFixed(1)} px` : "-"} / ${galaxyPerformance.systemPaperInspectionDrawCalls}`} />
@@ -3280,6 +3288,12 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="面板标题 / 正文" value={`${Math.round(galaxyPerformance.systemPaperPanelHeaderProgress * 100)}% / ${Math.round(galaxyPerformance.systemPaperPanelBodyProgress * 100)}%`} />
                 <GalaxyDiagnosticMetric label="阅读锚点 / 偏差" value={`${galaxyPerformance.systemPaperTargetAnchorX.toFixed(2)} / ${galaxyPerformance.systemPaperAnchorErrorPx.toFixed(1)} px`} />
                 <GalaxyDiagnosticMetric label="相机写入源 / 返回反转" value={`${galaxyPerformance.systemPaperCameraWriter} / ${galaxyPerformance.systemPaperReturnHorizontalReversals}`} />
+                <GalaxyDiagnosticMetric label="相机切换 / 四元数 / 锚点位移" value={`${galaxyPerformance.systemPaperCameraWriterChanges} / ${galaxyPerformance.systemPaperQuaternionDeltaDegrees.toFixed(3)}° / ${galaxyPerformance.systemPaperAnchorDeltaPx.toFixed(2)}px`} />
+                <GalaxyDiagnosticMetric label="论文视觉所有权 / 专用对象" value={`${galaxyPerformance.systemPaperVisualOwnerState} / ${Math.round(galaxyPerformance.systemPaperVisualOwnerOpacity * 100)}%`} />
+                <GalaxyDiagnosticMetric label="紧凑 / 近景 LOD / 可见能量" value={`${Math.round(galaxyPerformance.systemPaperVisualCompactLod * 100)}% / ${galaxyPerformance.systemPaperVisibleEnergyRatio.toFixed(2)}×`} />
+                <GalaxyDiagnosticMetric label="光学尺寸 Point / 专用对象" value={`${galaxyPerformance.systemPaperHandoffPointDiameter.toFixed(1)}px / ${galaxyPerformance.systemPaperHandoffCloseupDiameter.toFixed(1)}px`} />
+                <GalaxyDiagnosticMetric label="光学重心差" value={`${galaxyPerformance.systemPaperHandoffPositionDeltaPx.toFixed(2)}px`} />
+                <GalaxyDiagnosticMetric label="视觉所有权 Point / 专用对象 / 总和" value={`${galaxyPerformance.systemPaperHandoffPointAlpha.toFixed(3)} / ${galaxyPerformance.systemPaperHandoffCloseupAlpha.toFixed(3)} / ${galaxyPerformance.systemPaperHandoffAlphaSum.toFixed(3)}`} />
                 <GalaxyDiagnosticMetric label="代表能量核 / 近景辉光" value={`${galaxyPerformance.systemRepresentativeEnergyCoreDrawCalls} / ${galaxyPerformance.systemPaperInspectionBloomDrawCalls}`} />
                 <GalaxyDiagnosticMetric label="能量核细节 / Bloom / 能量丝" value={`${Math.round(galaxyPerformance.systemRepresentativeEnergyDetailBlend * 100)}% / ${Math.round(galaxyPerformance.systemRepresentativeEnergyBloomOpacity * 100)}% / ${galaxyPerformance.systemRepresentativeEnergyWispCount}`} />
                 <GalaxyDiagnosticMetric label="能量核承载范围" value={`${galaxyPerformance.systemRepresentativeEnergyCarrierScale.toFixed(2)}×`} />
@@ -3441,6 +3455,7 @@ function GalaxyView({
                 className="secondary-action h-8 gap-1.5 px-3"
                 data-galaxy-fullscreen-toggle
                 onClick={() => setGalaxyFullscreen((value) => !value)}
+                disabled={galaxyPaperFocusState === "entering" || galaxyPaperFocusState === "exiting"}
                 aria-pressed={galaxyFullscreen}
                 title={galaxyFullscreen ? "退出星图全屏" : "星图全屏"}
               >
@@ -3949,13 +3964,25 @@ function formatGalaxyPerformanceSummary(snapshot: GalaxyPerformanceSnapshot, evi
     `论文拾取当前/P95/候选: ${formatPerformanceMs(snapshot.systemPaperPickMs)} / ${formatPerformanceMs(snapshot.systemPaperPickP95Ms)} / ${snapshot.systemPaperPickCandidateCount}`,
     `当前论文/详情缓存: ${snapshot.systemSelectedPaperType} / ${galaxyPaperDetailCacheStateLabel(snapshot.systemPaperDetailCacheState)}`,
     `论文详情查询: ${snapshot.systemPaperDetailQueryMs > 0 ? formatPerformanceMs(snapshot.systemPaperDetailQueryMs) : "未查询"}`,
-    `论文飞行/进度/补间: ${galaxyPaperFocusStateLabel(snapshot.systemPaperFocusState)} / ${Math.round(snapshot.systemPaperFocusProgress * 100)}% / ${formatPerformanceMs(snapshot.systemPaperFocusTransitionMs)}`,
+    `论文旅程/进度/路径: ${snapshot.systemPaperJourneyState} / ${Math.round(snapshot.systemPaperJourneyProgress * 100)}% / ${snapshot.systemPaperJourneyPathMode}`,
+    `兼容飞行状态/补间: ${galaxyPaperFocusStateLabel(snapshot.systemPaperFocusState)} / ${formatPerformanceMs(snapshot.systemPaperFocusTransitionMs)}`,
     `论文飞行起始/目标距离/目标尺寸: ${snapshot.systemPaperFocusStartDistance.toFixed(2)} / ${snapshot.systemPaperFocusTargetDistance.toFixed(2)} / ${snapshot.systemPaperFocusTargetScreenSize.toFixed(1)}px`,
+    `论文相机真实位移/到目标距离/投影直径: ${snapshot.systemPaperCameraTravelDistance.toFixed(3)} / ${snapshot.systemPaperCameraDistanceToTarget.toFixed(3)} / ${snapshot.systemPaperProjectedTargetDiameter.toFixed(2)}px`,
+    `论文目标世界坐标漂移/平滑延长: ${snapshot.systemPaperTargetWorldPositionDrift.toExponential(2)} / ${formatPerformanceMs(snapshot.systemPaperSmoothnessExtensionMs)}`,
+    `论文返回位置/角度误差: ${snapshot.systemPaperReturnPositionError.toExponential(2)} / ${snapshot.systemPaperReturnAngleErrorDegrees.toFixed(4)}deg`,
+    `论文主星最小净空/视锥/绘制批次: ${snapshot.systemPaperMinimumStarClearance.toFixed(3)} / ${snapshot.systemPaperStarInFrustum ? "in" : "out"} / ${snapshot.systemPaperStarDrawCalls}`,
+    `论文主体目标/实际直径: ${snapshot.systemPaperTargetBodyDiameterPx.toFixed(1)}px / ${snapshot.systemPaperActualBodyDiameterPx.toFixed(1)}px`,
+    `论文代表载体/主星退出边距: ${(snapshot.systemPaperRepresentativeCarrierRatio * 100).toFixed(1)}% / ${snapshot.systemPaperEndpointStarExitMarginPx.toFixed(1)}px`,
+    `论文终点候选/方向偏转/构图拒绝: ${snapshot.systemPaperEndpointCandidateCount} / ${snapshot.systemPaperEndpointDirectionDeviationDegrees.toFixed(1)}deg / ${snapshot.systemPaperEndpointCompositionRejected ? "是" : "否"}`,
     `论文飞行邻域/远景亮度/取消: ${Math.round(snapshot.systemPaperFocusNeighborBrightness * 100)}% / ${Math.round(snapshot.systemPaperFocusContextBrightness * 100)}% / ${snapshot.systemPaperFocusCanceled ? "是" : "否"}`,
     `论文阅读空间/类型/实体化/停靠: ${galaxyPaperInspectionModeLabel(snapshot.systemPaperInspectionMode)} / ${snapshot.systemPaperInspectionVisualType} / ${Math.round(snapshot.systemPaperInspectionBlend * 100)}% / ${Math.round(snapshot.systemPaperInspectionDockBlend * 100)}%`,
     `论文近景直径/基础+辉光批次: ${snapshot.systemPaperInspectionDiameter.toFixed(1)}px / ${snapshot.systemPaperInspectionDrawCalls}+${snapshot.systemPaperInspectionBloomDrawCalls}`,
     `详情面板/外壳/标题/正文: ${snapshot.systemPaperPanelState} / ${Math.round(snapshot.systemPaperPanelProgress * 100)}% / ${Math.round(snapshot.systemPaperPanelHeaderProgress * 100)}% / ${Math.round(snapshot.systemPaperPanelBodyProgress * 100)}%`,
     `阅读锚点/偏差/相机写入源: ${snapshot.systemPaperTargetAnchorX.toFixed(2)} / ${snapshot.systemPaperAnchorErrorPx.toFixed(1)}px / ${snapshot.systemPaperCameraWriter}`,
+    `相机切换/四元数变化/锚点位移: ${snapshot.systemPaperCameraWriterChanges} / ${snapshot.systemPaperQuaternionDeltaDegrees.toFixed(3)}deg / ${snapshot.systemPaperAnchorDeltaPx.toFixed(2)}px`,
+    `论文视觉所有权/专用对象/紧凑LOD: ${snapshot.systemPaperVisualOwnerState} / ${Math.round(snapshot.systemPaperVisualOwnerOpacity * 100)}% / ${Math.round(snapshot.systemPaperVisualCompactLod * 100)}%`,
+    `论文光学尺寸 Point/专用对象/重心差: ${snapshot.systemPaperHandoffPointDiameter.toFixed(1)}px / ${snapshot.systemPaperHandoffCloseupDiameter.toFixed(1)}px / ${snapshot.systemPaperHandoffPositionDeltaPx.toFixed(2)}px`,
+    `论文视觉所有权 Point/专用对象/总和/能量: ${snapshot.systemPaperHandoffPointAlpha.toFixed(3)} / ${snapshot.systemPaperHandoffCloseupAlpha.toFixed(3)} / ${snapshot.systemPaperHandoffAlphaSum.toFixed(3)} / ${snapshot.systemPaperVisibleEnergyRatio.toFixed(2)}x`,
     `返回水平反转/代表能量核批次: ${snapshot.systemPaperReturnHorizontalReversals} / ${snapshot.systemRepresentativeEnergyCoreDrawCalls}`,
     `代表能量核细节/Bloom/能量丝/承载: ${Math.round(snapshot.systemRepresentativeEnergyDetailBlend * 100)}% / ${Math.round(snapshot.systemRepresentativeEnergyBloomOpacity * 100)}% / ${snapshot.systemRepresentativeEnergyWispCount} / ${snapshot.systemRepresentativeEnergyCarrierScale.toFixed(2)}x`,
     `代表能量核近景压缩/可见半径/轨道: ${Math.round(snapshot.systemRepresentativeEnergyCloseupCompactness * 100)}% / ${Math.round(snapshot.systemRepresentativeEnergyVisibleRadius * 100)}% / ${Math.round(snapshot.systemRepresentativeEnergyOrbitAttenuation * 100)}%`,
