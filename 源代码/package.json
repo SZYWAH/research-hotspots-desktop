@@ -8,6 +8,7 @@
     "visual:galaxy": "node scripts/app17_visual_review.mjs serve",
     "visual:galaxy:snapshot": "node scripts/app17_visual_review.mjs snapshot",
     "visual:galaxy:paper-audit": "node --experimental-strip-types scripts/app17_paper_endpoint_audit.mjs",
+    "audit:hotspot-library": "node --experimental-strip-types scripts/hotspot_library_evidence_audit.mjs",
     "ai:bridge-env": "node scripts/v20_ai_env_bridge.mjs",
     "ai:live-smoke": "node scripts/v20_ai_live_report_smoke.mjs",
     "build": "tsc -b && vite build",

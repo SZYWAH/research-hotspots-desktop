@@ -172,6 +172,52 @@ struct PaperImportTaskRegistry {
     controls: Arc<Mutex<HashMap<String, PaperImportTaskControl>>>,
 }
 
+const CLUSTER_ALREADY_RUNNING: &str = "CLUSTER_ALREADY_RUNNING";
+
+#[derive(Clone, Default)]
+struct ClusterTaskRegistry {
+    running: Arc<Mutex<HashSet<String>>>,
+}
+
+struct ClusterTaskPermit {
+    registry: ClusterTaskRegistry,
+    key: String,
+}
+
+impl ClusterTaskRegistry {
+    fn try_acquire(&self, key: String) -> Result<ClusterTaskPermit, String> {
+        let mut running = self
+            .running
+            .lock()
+            .map_err(|_| "Cannot lock cluster task registry.".to_string())?;
+        if !running.insert(key.clone()) {
+            return Err(CLUSTER_ALREADY_RUNNING.to_string());
+        }
+        Ok(ClusterTaskPermit {
+            registry: self.clone(),
+            key,
+        })
+    }
+
+    #[cfg(test)]
+    fn running_count(&self) -> usize {
+        self.running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+}
+
+impl Drop for ClusterTaskPermit {
+    fn drop(&mut self) {
+        self.registry
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
+}
+
 #[derive(Clone)]
 struct PaperImportTaskControl {
     paused: Arc<AtomicBool>,
@@ -1251,15 +1297,28 @@ fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<P
 }
 
 #[tauri::command]
-fn cluster_paper_library(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>) -> Result<LibraryClusterResult, String> {
-    let (conn, _, _) = open_library_database(&app, database_dir)?;
+async fn cluster_paper_library(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ClusterTaskRegistry>,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<LibraryClusterResult, String> {
+    let database_dir = resolve_database_dir(&app, database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
     let project_id = project_id.unwrap_or_else(default_project_id);
-    cluster_library_connection(&conn, &project_id)
+    let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        cluster_library_from_database_path(database_path, &project_id)
+    })
+    .await
+    .map_err(|error| format!("Hotspot cluster task failed: {error}"))?
 }
 
 #[tauri::command]
-fn export_hotspot_evidence(
+async fn export_hotspot_evidence(
     app: tauri::AppHandle,
+    state: tauri::State<'_, ClusterTaskRegistry>,
     database_dir: Option<String>,
     project_id: Option<String>,
     hotspot_id: Option<String>,
@@ -1267,7 +1326,40 @@ fn export_hotspot_evidence(
 ) -> Result<HotspotEvidenceExportResult, String> {
     let database_dir = resolve_database_dir(&app, database_dir)?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    export_hotspot_evidence_from_database_path(database_path, project_id, hotspot_id, max_papers.unwrap_or(12))
+    let project_id = project_id.unwrap_or_else(default_project_id);
+    let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        export_hotspot_evidence_from_database_path(database_path, Some(project_id), hotspot_id, max_papers.unwrap_or(12))
+    })
+    .await
+    .map_err(|error| format!("Hotspot evidence export task failed: {error}"))?
+}
+
+fn cluster_library_from_database_path(database_path: PathBuf, project_id: &str) -> Result<LibraryClusterResult, String> {
+    if let Some(database_dir) = database_path.parent() {
+        fs::create_dir_all(database_dir).map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    }
+    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    initialize_library_database(&conn)?;
+    cluster_library_connection(&conn, project_id)
+}
+
+fn cluster_task_key(database_path: &Path, project_id: &str) -> String {
+    let absolute_path = fs::canonicalize(database_path).unwrap_or_else(|_| {
+        if database_path.is_absolute() {
+            database_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|current_dir| current_dir.join(database_path))
+                .unwrap_or_else(|_| database_path.to_path_buf())
+        }
+    });
+    let mut normalized_path = absolute_path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        normalized_path.make_ascii_lowercase();
+    }
+    format!("{}::{}", normalized_path.trim_end_matches('/'), project_id.trim())
 }
 
 fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<LibraryClusterResult, String> {
@@ -4736,6 +4828,79 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn cluster_registry_rejects_same_project_and_allows_independent_keys() {
+        let registry = ClusterTaskRegistry::default();
+        let database_a = PathBuf::from("D:/library-a/research-hotspots-v7.sqlite");
+        let database_b = PathBuf::from("D:/library-b/research-hotspots-v7.sqlite");
+        let key_a_project_1 = cluster_task_key(&database_a, "project-1");
+        let key_a_project_2 = cluster_task_key(&database_a, "project-2");
+        let key_b_project_1 = cluster_task_key(&database_b, "project-1");
+
+        let _first = registry.try_acquire(key_a_project_1.clone()).expect("first task should acquire permit");
+        assert_eq!(registry.try_acquire(key_a_project_1).err().as_deref(), Some(CLUSTER_ALREADY_RUNNING));
+        let _different_project = registry.try_acquire(key_a_project_2).expect("different project should run independently");
+        let _different_database = registry.try_acquire(key_b_project_1).expect("different database should run independently");
+        assert_eq!(registry.running_count(), 3);
+    }
+
+    #[test]
+    fn cluster_registry_releases_permit_after_success_error_and_panic() {
+        let registry = ClusterTaskRegistry::default();
+        let key = "D:/library/research-hotspots-v7.sqlite::project-1".to_string();
+
+        {
+            let _permit = registry.try_acquire(key.clone()).expect("success path permit");
+        }
+        assert_eq!(registry.running_count(), 0);
+
+        let error_result: Result<(), String> = (|| {
+            let _permit = registry.try_acquire(key.clone())?;
+            Err("simulated cluster error".to_string())
+        })();
+        assert_eq!(error_result.unwrap_err(), "simulated cluster error");
+        assert_eq!(registry.running_count(), 0);
+
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _permit = registry.try_acquire(key.clone()).expect("panic path permit");
+            panic!("simulated cluster panic");
+        }));
+        assert!(panic_result.is_err());
+        assert_eq!(registry.running_count(), 0);
+        let _reacquired = registry.try_acquire(key).expect("permit should be reusable after panic");
+    }
+
+    #[test]
+    fn background_cluster_helper_matches_direct_cluster_result() {
+        let base_dir = std::env::temp_dir().join(format!("research-hotspots-background-cluster-{}", now_millis()));
+        fs::create_dir_all(&base_dir).expect("cluster test dir");
+        let database_path = base_dir.join("research-hotspots-v7.sqlite");
+        let project_id = "unit-background-cluster";
+        let direct_result = {
+            let mut conn = Connection::open(&database_path).expect("sqlite database");
+            initialize_library_database(&conn).expect("schema should initialize");
+            upsert_paper_rows(
+                &mut conn,
+                project_id,
+                vec![
+                    test_paper("background-1", "Retrieval Grounded Scientific Agents", "Retrieval evidence agents validate citations and synthesize research.", "Artificial Intelligence", 2026, Some("10.0000/background-1")),
+                    test_paper("background-2", "Graph Retrieval Evidence Systems", "Graph retrieval systems organize evidence and scientific citations.", "Artificial Intelligence", 2025, Some("10.0000/background-2")),
+                ],
+            )
+            .expect("insert papers");
+            cluster_library_connection(&conn, project_id).expect("direct cluster")
+        };
+
+        let background_result = cluster_library_from_database_path(database_path, project_id).expect("background helper cluster");
+        assert_eq!(background_result.before_count, direct_result.before_count);
+        assert_eq!(background_result.cluster_count, direct_result.cluster_count);
+        assert_eq!(
+            background_result.hotspots.iter().map(|hotspot| &hotspot.id).collect::<Vec<_>>(),
+            direct_result.hotspots.iter().map(|hotspot| &hotspot.id).collect::<Vec<_>>()
+        );
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
     fn import_normalization_accepts_chinese_json_aliases() {
         let value = serde_json::json!({
             "文献编号": "cn-sample-001",
@@ -5264,6 +5429,7 @@ ER  -
 pub fn run() {
     tauri::Builder::default()
         .manage(PaperImportTaskRegistry::default())
+        .manage(ClusterTaskRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

@@ -111,6 +111,11 @@ import {
 import { searchAcademicSources } from "./lib/searchSources";
 import { buildOfflineHotspotReport, formatHotspotEvidenceMarkdown, hotspotEvidenceToPapers } from "./lib/hotspotEvidenceReport";
 import {
+  loadPersistedHotspotEvidence,
+  type HotspotEvidenceDiagnostics,
+  type HotspotEvidenceLoadStatus,
+} from "./lib/hotspotEvidenceLoader";
+import {
   backupPaperLibrary,
   chooseChromeDriverFile,
   chooseExportDirectory,
@@ -118,7 +123,6 @@ import {
   chooseSqliteBackupFile,
   controlPaperFileImport,
   deletePapersFromLibrary,
-  exportHotspotEvidence,
   getApp17GalaxyPayload,
   getApp17HotspotEvidence,
   getPaperLibraryFacets,
@@ -641,7 +645,7 @@ export default function App() {
             />
           </div>
         )}
-        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={setNotice} />}
@@ -4122,7 +4126,7 @@ function hotspotSourceLabel(source: Hotspot["source"]) {
   return "来源待定";
 }
 
-function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, onNotice }: { hotspots: Hotspot[]; papers: Paper[]; settings: AiSettings; activeProject: Project; onRefresh: () => Promise<void>; onNotice: (value: string) => void }) {
+function HotspotLibrary({ hotspots, settings, activeProject, onRefresh, onNotice }: { hotspots: Hotspot[]; settings: AiSettings; activeProject: Project; onRefresh: () => Promise<void>; onNotice: (value: string) => void }) {
   const [selectedId, setSelectedId] = useState(hotspots[0]?.id ?? "");
   const [hotspotQuery, setHotspotQuery] = useState("");
   const [hotspotField, setHotspotField] = useState("all");
@@ -4143,30 +4147,35 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
   const [reportMode, setReportMode] = useState<HotspotReportMode>("offline");
   const [reportOptions, setReportOptions] = useState<ReportGenerationOptions>(defaultReportOptions);
   const [hotspotEvidence, setHotspotEvidence] = useState<HotspotEvidenceBundle | null>(null);
-  const [hotspotEvidenceStatus, setHotspotEvidenceStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [hotspotEvidenceStatus, setHotspotEvidenceStatus] = useState<"idle" | "loading" | HotspotEvidenceLoadStatus>("idle");
+  const [hotspotEvidenceDiagnostics, setHotspotEvidenceDiagnostics] = useState<HotspotEvidenceDiagnostics | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
-  const related = useMemo(() => relatedPapers(selected, papers), [papers, selected]);
+  const evidenceRequestSequenceRef = useRef(0);
+  const hotspotsRef = useRef(hotspots);
+  hotspotsRef.current = hotspots;
   const activeHotspotEvidence = hotspotEvidence?.selectedHotspotId === selected?.id ? hotspotEvidence : null;
   const evidencePapers = useMemo(() => hotspotEvidenceToPapers(activeHotspotEvidence), [activeHotspotEvidence]);
-  const reportPapers = evidencePapers.length > 0 ? evidencePapers : related;
+  const reportPapers = evidencePapers;
   const workload = useMemo(() => estimateReportWorkload(reportPapers.length, reportOptions), [reportOptions, reportPapers.length]);
   const displayEvolution = activeHotspotEvidence?.yearEvolution ?? selected?.evolution ?? [];
   const displaySources = activeHotspotEvidence?.sourceDistribution ?? selected?.sourceDistribution ?? [];
   const evolutionMax = Math.max(1, ...displayEvolution.map((item) => item.count));
   const sourceMax = Math.max(1, ...displaySources.map((item) => item.count));
-  const reportModeReady = reportMode === "offline" ? hotspotEvidenceStatus === "ready" && Boolean(activeHotspotEvidence) : reportPapers.length > 0;
+  const reportModeReady = hotspotEvidenceStatus === "ready" && Boolean(activeHotspotEvidence) && reportPapers.length > 0;
   const reportGenerationBusy = busy === "offline-report" || busy === "simple" || busy === "deep";
   const reportModeHint = reportMode === "offline"
     ? hotspotEvidenceStatus === "loading"
-      ? "正在加载 SQLite 证据包，加载完成后可生成离线报告。"
+      ? "正在按持久化代表论文 ID 读取 SQLite 证据，完成后可生成离线报告。"
       : hotspotEvidenceStatus === "ready" && activeHotspotEvidence
-        ? "使用 SQLite 代表论文生成，无需 AI API key。"
-        : "当前热点没有可用的 SQLite 证据包。"
-    : reportPapers.length > 0
-      ? `将使用 ${reportPapers.length} 篇证据文献生成 AI ${reportMode === "deep" ? "深版" : "简版"}报告。`
-      : "当前热点没有可用的代表文献。";
+        ? "使用 SQLite 中按代表 ID 精确读取的论文生成，无需 AI API key。"
+        : hotspotEvidenceStatus === "missing-evidence"
+          ? "当前热点没有持久化代表论文 ID，请先在流水线中重新运行热点聚类。"
+          : "当前热点的持久化 SQLite 证据不可用，请检查论文库或重新运行热点聚类。"
+    : hotspotEvidenceStatus === "ready" && reportPapers.length > 0
+      ? `将使用 ${reportPapers.length} 篇真实代表论文生成 AI ${reportMode === "deep" ? "深版" : "简版"}报告。`
+      : "当前热点没有可验证的代表论文，AI 报告已禁用。";
 
   useEffect(() => {
     setDraft(selected ? { ...selected, keywords: [...selected.keywords] } : null);
@@ -4203,41 +4212,50 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
   }, [editorOpen, moreMenuOpen]);
 
   useEffect(() => {
-    let mounted = true;
-    async function loadEvidenceBundle() {
-      if (!selected) {
-        setHotspotEvidence(null);
-        setHotspotEvidenceStatus("idle");
-        return;
-      }
+    const requestSequence = evidenceRequestSequenceRef.current + 1;
+    evidenceRequestSequenceRef.current = requestSequence;
+    const selectedHotspot = selected;
+    if (!selectedHotspot) {
       setHotspotEvidence(null);
-      setHotspotEvidenceStatus("loading");
-      try {
-        const bundle = await exportHotspotEvidence({
-          databaseDir: settings.databaseDir,
-          projectId: activeProject.id,
-          hotspotId: selected.id,
-          maxPapers: 18,
-        });
-        if (!mounted) return;
-        if (bundle && bundle.selectedHotspotId === selected.id && bundle.representativePapers.length > 0) {
-          setHotspotEvidence(bundle);
-          setHotspotEvidenceStatus("ready");
-        } else {
-          setHotspotEvidenceStatus("unavailable");
-        }
-      } catch {
-        if (mounted) {
-          setHotspotEvidence(null);
-          setHotspotEvidenceStatus("unavailable");
-        }
-      }
+      setHotspotEvidenceDiagnostics(null);
+      setHotspotEvidenceStatus("idle");
+      return;
     }
-    void loadEvidenceBundle();
+
+    let active = true;
+    setHotspotEvidence(null);
+    setHotspotEvidenceDiagnostics(null);
+    setHotspotEvidenceStatus("loading");
+    void loadPersistedHotspotEvidence({
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+      hotspot: selectedHotspot,
+      hotspots: hotspotsRef.current,
+      requestSequence,
+      maxPapers: 18,
+      fetchPapersByIds: (ids) => getPapersByIds(settings.databaseDir, activeProject.id, ids),
+    }).then((result) => {
+      if (!active || requestSequence !== evidenceRequestSequenceRef.current) return;
+      setHotspotEvidence(result.bundle);
+      setHotspotEvidenceDiagnostics(result.diagnostics);
+      setHotspotEvidenceStatus(result.status);
+      if (import.meta.env.DEV) {
+        console.info("[hotspot-evidence]", {
+          hotspotId: selectedHotspot.id,
+          cacheState: result.diagnostics.evidenceCacheState,
+          queryMs: Number(result.diagnostics.evidenceLoadMs.toFixed(2)),
+          requested: result.diagnostics.requestedRepresentativeCount,
+          found: result.diagnostics.foundRepresentativeCount,
+          missing: result.diagnostics.missingRepresentativeCount,
+          requestSequence,
+          fullReclusterTriggeredByNavigation: false,
+        });
+      }
+    });
     return () => {
-      mounted = false;
+      active = false;
     };
-  }, [activeProject.id, selected, settings.databaseDir]);
+  }, [activeProject.id, selected?.id, selected?.updatedAt, settings.databaseDir]);
 
   async function saveDraft() {
     if (!draft) return;
@@ -4254,7 +4272,7 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
       return;
     }
     const started = performance.now();
-    const evidenceSource = activeHotspotEvidence ? "sqlite-hotspot-evidence" : "frontend-related-papers";
+    const evidenceSource = "sqlite-persisted-hotspot-ids";
     const rawInput = JSON.stringify({ topic: selected.title, mode, discipline: selected.field, options: reportOptions, evidenceSource, paperIds: reportPapers.map((paper) => paper.id) }, null, 2);
     setBusy(mode);
     try {
@@ -4304,14 +4322,9 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
     setBusy("evidence-export");
     const started = performance.now();
     try {
-      const bundle = activeHotspotEvidence ?? await exportHotspotEvidence({
-        databaseDir: settings.databaseDir,
-        projectId: activeProject.id,
-        hotspotId: selected.id,
-        maxPapers: 18,
-      });
+      const bundle = activeHotspotEvidence;
       if (!bundle || bundle.representativePapers.length === 0) {
-        onNotice("当前热点还没有可导出的 SQLite 证据包。请先确认真实论文库已完成聚类。");
+        onNotice("当前热点没有可导出的持久化代表论文证据，请先在流水线中重新运行热点聚类。");
         return;
       }
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -4451,7 +4464,15 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
 
       <section className="detail-panel hotspot-detail-panel">
         {selected && draft ? (
-          <div className={`hotspot-detail-shell ${editorOpen ? "hotspot-editor-active" : ""}`}>
+          <div
+            className={`hotspot-detail-shell ${editorOpen ? "hotspot-editor-active" : ""}`}
+            data-evidence-cache-state={hotspotEvidenceDiagnostics?.evidenceCacheState ?? "none"}
+            data-evidence-request-sequence={hotspotEvidenceDiagnostics?.requestSequence ?? 0}
+            data-evidence-requested={hotspotEvidenceDiagnostics?.requestedRepresentativeCount ?? 0}
+            data-evidence-found={hotspotEvidenceDiagnostics?.foundRepresentativeCount ?? 0}
+            data-evidence-missing={hotspotEvidenceDiagnostics?.missingRepresentativeCount ?? 0}
+            data-evidence-full-recluster="false"
+          >
             <main className="hotspot-results-pane">
               <div className="hotspot-results-inner">
                 <div className="hotspot-result-header">
@@ -4489,7 +4510,13 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                   <span><strong>{selected.paperCount}</strong> 篇论文</span>
                   <span>置信度 <strong>{Math.round((selected.confidence ?? 0) * 100)}%</strong></span>
                   <span className={hotspotEvidenceStatus === "ready" && activeHotspotEvidence ? "text-cyan/80" : hotspotEvidenceStatus === "loading" ? "text-ink/55" : "text-amber/80"}>
-                    {hotspotEvidenceStatus === "loading" ? "SQLite 证据加载中" : hotspotEvidenceStatus === "ready" && activeHotspotEvidence ? `SQLite 证据已就绪 · ${activeHotspotEvidence.representativePapers.length} 篇` : "使用领域相关论文"}
+                    {hotspotEvidenceStatus === "loading"
+                      ? "正在按代表 ID 查询"
+                      : hotspotEvidenceStatus === "ready" && activeHotspotEvidence
+                        ? `代表 ID 证据就绪 · ${activeHotspotEvidence.representativePapers.length} 篇 · ${hotspotEvidenceDiagnostics?.evidenceCacheState ?? "miss"} ${Math.round(hotspotEvidenceDiagnostics?.evidenceLoadMs ?? 0)}ms`
+                        : hotspotEvidenceStatus === "missing-evidence"
+                          ? "缺少持久化代表 ID"
+                          : "持久化证据不可用"}
                   </span>
                 </div>
                 <div className="hotspot-keyword-line">
@@ -4498,8 +4525,10 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                   <small>{hotspotSourceLabel(selected.source)}</small>
                 </div>
 
-                {hotspotEvidenceStatus === "loading" && <div className="hotspot-evidence-notice">正在读取 SQLite 热点证据，代表论文区将在加载完成后更新。</div>}
-                {hotspotEvidenceStatus === "unavailable" && <div className="hotspot-evidence-notice hotspot-evidence-warning">SQLite 证据包不可用，当前展示前端领域相关论文，离线证据报告已禁用。</div>}
+                {hotspotEvidenceStatus === "loading" && <div className="hotspot-evidence-notice">正在按持久化代表论文 ID 精确读取 SQLite，页面导航不会触发全库聚类。</div>}
+                {hotspotEvidenceStatus === "missing-evidence" && <div className="hotspot-evidence-notice hotspot-evidence-warning">当前热点没有持久化代表论文 ID。请前往流水线重新运行热点聚类；报告和证据导出已禁用。</div>}
+                {hotspotEvidenceStatus === "unavailable" && <div className="hotspot-evidence-notice hotspot-evidence-warning">持久化代表论文在 SQLite 中不可用。请检查论文库或重新运行热点聚类；不会使用同领域论文替代。</div>}
+                {hotspotEvidenceStatus === "ready" && (hotspotEvidenceDiagnostics?.missingRepresentativeCount ?? 0) > 0 && <div className="hotspot-evidence-notice hotspot-evidence-warning">已按 ID 找到 {hotspotEvidenceDiagnostics?.foundRepresentativeCount} 篇代表论文，另有 {hotspotEvidenceDiagnostics?.missingRepresentativeCount} 个持久化 ID 在当前 SQLite 中缺失。</div>}
 
                 <div className="hotspot-result-grid">
                   <section className="hotspot-result-block">
@@ -4562,7 +4591,7 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                           </div>
                         </article>
                       ))}
-                      {reportPapers.length === 0 && <div className="hotspot-result-empty">暂无可用于报告的代表论文，请先运行热点聚类或检查热点关键词。</div>}
+                      {reportPapers.length === 0 && <div className="hotspot-result-empty">暂无可验证的持久化代表论文，请先在流水线中重新运行热点聚类。</div>}
                     </div>
                   )}
                 </section>
@@ -6497,6 +6526,11 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
     await onRefresh();
   } catch (error) {
     const message = error instanceof Error ? error.message : `${stage} worker 执行失败。`;
+    if (stage === "cluster" && message.includes("CLUSTER_ALREADY_RUNNING")) {
+      await onRefresh();
+      onNotice("该项目正在后台聚类，请等待当前任务完成。");
+      return;
+    }
     await updatePipelineJob(stage, { status: "failed", progress: 100, detail: message });
     await saveTaskLog({ stage, title: stage === "clean" ? (activeProject ? "SQLite 大库清洗去重" : "清洗去重 worker") : (activeProject ? "SQLite 大库热点聚类" : "热点聚类 worker"), status: "failed", inputSummary, outputSummary: "", rawInput: rawInputForLog, error: message, durationMs: Math.round(performance.now() - started) });
     await onRefresh();
@@ -6762,13 +6796,6 @@ function formatPercent(value: number) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function relatedPapers(selected: Hotspot | undefined, papers: Paper[]) {
-  if (!selected) return [];
-  const ids = new Set(selected.evolution.flatMap((item) => item.representativeIds));
-  const byIds = papers.filter((paper) => ids.has(paper.id));
-  return (byIds.length > 0 ? byIds : papers.filter((paper) => paper.field === selected.field)).slice(0, 40);
 }
 
 function buildFilterIndex(papers: Paper[]) {
