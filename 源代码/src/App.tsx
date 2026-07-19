@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Activity,
   AlertTriangle,
@@ -1340,6 +1349,10 @@ function SearchWorkspace({
   const [pageJump, setPageJump] = useState("1");
   const [pageSize, setPageSize] = useState(20);
   const [selectedPaperId, setSelectedPaperId] = useState("");
+  const [libraryDiagnosticsOpen, setLibraryDiagnosticsOpen] = useState(false);
+  const [paperDetailDirty, setPaperDetailDirty] = useState(false);
+  const [pendingPaperSelectionId, setPendingPaperSelectionId] = useState("");
+  const [pendingPaperSave, setPendingPaperSave] = useState(false);
   const [pendingFocusPaperId, setPendingFocusPaperId] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedPapers, setSelectedPapers] = useState<Paper[]>([]);
@@ -1359,6 +1372,8 @@ function SearchWorkspace({
   const literaturePageRef = useRef<HTMLDivElement | null>(null);
   const paperListScrollRef = useRef<HTMLDivElement | null>(null);
   const paperDetailScrollRef = useRef<HTMLElement | null>(null);
+  const paperDetailEditorRef = useRef<PaperDetailEditorHandle | null>(null);
+  const unsavedPaperDialogRef = useRef<HTMLDialogElement | null>(null);
   const importControlRef = useRef({ paused: false, cancelled: false });
   const desktopImportTaskIdRef = useRef("");
 
@@ -1379,6 +1394,8 @@ function SearchWorkspace({
   const pageStart = libraryPage.total === 0 ? 0 : libraryPage.offset + 1;
   const pageEnd = Math.min(libraryPage.offset + visibleLibraryPapers.length, libraryPage.total);
   const selectedOnPageCount = visibleLibraryPapers.filter((paper) => selectedIds.includes(paper.id)).length;
+  const allVisiblePapersSelected = visibleLibraryPapers.length > 0
+    && selectedOnPageCount === visibleLibraryPapers.length;
   const activeFilterLabels = useMemo(
     () =>
       [
@@ -1511,6 +1528,16 @@ function SearchWorkspace({
     if (activeWorkspaceTab !== "library") return;
     literaturePageRef.current?.parentElement?.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [activeWorkspaceTab]);
+
+  useEffect(() => {
+    const dialog = unsavedPaperDialogRef.current;
+    if (!dialog) return;
+    if (pendingPaperSelectionId) {
+      if (!dialog.open) dialog.showModal();
+      return;
+    }
+    if (dialog.open) dialog.close();
+  }, [pendingPaperSelectionId]);
 
   useEffect(() => {
     let mounted = true;
@@ -1943,6 +1970,44 @@ function SearchWorkspace({
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
 
+  function requestPaperSelection(id: string) {
+    if (!id || id === selectedPaper?.id) return;
+    if (paperDetailDirty) {
+      setPendingPaperSelectionId(id);
+      return;
+    }
+    setSelectedPaperId(id);
+  }
+
+  function cancelPendingPaperSelection() {
+    if (pendingPaperSave) return;
+    setPendingPaperSelectionId("");
+  }
+
+  async function saveAndSelectPendingPaper() {
+    const nextPaperId = pendingPaperSelectionId;
+    if (!nextPaperId || pendingPaperSave) return;
+    setPendingPaperSave(true);
+    try {
+      const saved = await paperDetailEditorRef.current?.save();
+      if (!saved) return;
+      setPaperDetailDirty(false);
+      setPendingPaperSelectionId("");
+      setSelectedPaperId(nextPaperId);
+    } finally {
+      setPendingPaperSave(false);
+    }
+  }
+
+  function discardAndSelectPendingPaper() {
+    const nextPaperId = pendingPaperSelectionId;
+    if (!nextPaperId || pendingPaperSave) return;
+    paperDetailEditorRef.current?.discard();
+    setPaperDetailDirty(false);
+    setPendingPaperSelectionId("");
+    setSelectedPaperId(nextPaperId);
+  }
+
   function selectCurrentPage() {
     setSelectedIds((current) => Array.from(new Set([...current, ...visibleLibraryPapers.map((paper) => paper.id)])));
   }
@@ -2120,12 +2185,33 @@ function SearchWorkspace({
                   <BookOpen size={17} />
                   本地文献库
                 </div>
-                <label className="flex items-center gap-2 text-xs text-ink/45">
-                  每页
-                  <div className="w-20">
-                    <SelectControl className="h-8 text-xs" value={String(pageSize)} options={[12, 20, 40, 80].map((count) => ({ value: String(count), label: String(count) }))} onChange={(value) => setPageSize(Number(value))} />
-                  </div>
-                </label>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="secondary-action h-8 gap-2 px-3"
+                    aria-expanded={libraryDiagnosticsOpen}
+                    aria-controls="library-diagnostics-panel"
+                    onClick={() => setLibraryDiagnosticsOpen((current) => !current)}
+                  >
+                    库诊断
+                    <ChevronDown className={`transition-transform ${libraryDiagnosticsOpen ? "rotate-180" : ""}`} size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action h-8 gap-2 px-3"
+                    onClick={allVisiblePapersSelected ? deselectCurrentPage : selectCurrentPage}
+                    disabled={visibleLibraryPapers.length === 0}
+                  >
+                    {allVisiblePapersSelected ? <Square size={14} /> : <CheckSquare size={14} />}
+                    {allVisiblePapersSelected ? "取消本页" : "选中本页"}
+                  </button>
+                  <label className="flex items-center gap-2 text-xs text-ink/45">
+                    每页
+                    <div className="w-20">
+                      <SelectControl className="h-8 text-xs" value={String(pageSize)} options={[12, 20, 40, 80].map((count) => ({ value: String(count), label: String(count) }))} onChange={(value) => setPageSize(Number(value))} />
+                    </div>
+                  </label>
+                </div>
               </div>
 
               <div className="library-toolbar-sticky">
@@ -2143,7 +2229,7 @@ function SearchWorkspace({
                 </div>
               </div>
 
-              <FoldSection title="库诊断" compact>
+              {libraryDiagnosticsOpen && <div id="library-diagnostics-panel" className="library-diagnostics-panel">
                 <div className="library-diagnostics">
                   <span>查询耗时：{libraryLoading ? "查询中" : `${libraryPage.queryMs} ms`}</span>
                   <span>来源索引：{filterIndex.sources}</span>
@@ -2152,30 +2238,31 @@ function SearchWorkspace({
                   <span>关键词估算：{filterIndex.keywords}</span>
                 </div>
                 <DataQualityPanel hints={qualityHints} />
-              </FoldSection>
+              </div>}
 
-              {selectedIds.length === 0 && (
-                <div className="mt-3">
-                  <button className="secondary-action h-9 gap-2" onClick={selectCurrentPage} disabled={visibleLibraryPapers.length === 0}>
-                    <CheckSquare size={15} />
-                    选中本页
-                  </button>
-                </div>
-              )}
-
-              <div ref={paperListScrollRef} className="library-paper-scroll space-y-3">
+              <div ref={paperListScrollRef} className="library-paper-scroll space-y-2">
                 {visibleLibraryPapers.map((paper, index) => (
-                  <article key={paper.id} className="paper-row">
-                    <button className={`paper-index ${selectedIds.includes(paper.id) ? "paper-index-active" : ""}`} onClick={() => toggleSelected(paper.id)}>
+                  <article key={paper.id} className={`paper-row ${selectedPaper?.id === paper.id ? "paper-row-active" : ""}`}>
+                    <button
+                      type="button"
+                      className={`paper-index ${selectedIds.includes(paper.id) ? "paper-index-active" : ""}`}
+                      aria-label={selectedIds.includes(paper.id) ? `取消批量选择：${paper.title}` : `加入批量选择：${paper.title}`}
+                      aria-pressed={selectedIds.includes(paper.id)}
+                      onClick={() => toggleSelected(paper.id)}
+                    >
                       {selectedIds.includes(paper.id) ? <CheckSquare size={14} /> : (page - 1) * pageSize + index + 1}
                     </button>
-                    <div className="min-w-0">
-                      <button className="text-left text-sm font-medium text-ink hover:text-cyan" onClick={() => setSelectedPaperId(paper.id)}>
-                        {paper.title}
-                      </button>
-                      <div className="mt-1 text-xs text-ink/40">{paper.source} | {paper.year ?? "未知年份"} | {paper.field}</div>
-                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/55">{paper.abstract}</p>
-                    </div>
+                    <button
+                      type="button"
+                      className="paper-row-main"
+                      aria-controls="paper-detail-panel"
+                      aria-pressed={selectedPaper?.id === paper.id}
+                      onClick={() => requestPaperSelection(paper.id)}
+                    >
+                      <span className="paper-row-title">{paper.title}</span>
+                      <span className="mt-1 block text-xs text-ink/40">{paper.source} | {paper.year ?? "未知年份"} | {paper.field}</span>
+                      <span className="paper-row-abstract">{paper.abstract}</span>
+                    </button>
                   </article>
                 ))}
                 {!libraryLoading && visibleLibraryPapers.length === 0 && <EmptyState title="没有匹配文献" description="调整筛选条件，或前往“检索与导入”添加文献。" />}
@@ -2184,10 +2271,6 @@ function SearchWorkspace({
               {selectedIds.length > 0 && (
                 <div className="library-bulk-bar">
                   <strong>已选 {selectedIds.length} 篇</strong>
-                  <button className="secondary-action h-8 gap-2 px-3" onClick={deselectCurrentPage} disabled={selectedOnPageCount === 0}>
-                    <Square size={14} />
-                    取消本页
-                  </button>
                   <button className="secondary-action h-8 gap-2 px-3" onClick={() => setSelectedIds([])}>
                     <X size={14} />
                     清空选择
@@ -2221,17 +2304,57 @@ function SearchWorkspace({
               </div>
             </section>
 
-            <section ref={paperDetailScrollRef} className="panel-card literature-detail-panel">
-              <PaperDetailEditor paper={selectedPaper} qualityHints={qualityHints.filter((hint) => !hint.paperId || hint.paperId === selectedPaper?.id)} onSave={async (paper) => {
-                await upsertPaperLibrary(settings.databaseDir, activeProject.id, [paper]);
-                await loadLibraryPage();
-                await onRefresh();
-                onNotice("文献详情已保存。");
-              }} />
+            <section id="paper-detail-panel" ref={paperDetailScrollRef} className="panel-card literature-detail-panel">
+              <PaperDetailEditor
+                ref={paperDetailEditorRef}
+                paper={selectedPaper}
+                qualityHints={qualityHints.filter((hint) => !hint.paperId || hint.paperId === selectedPaper?.id)}
+                onDirtyChange={setPaperDetailDirty}
+                onSave={async (paper) => {
+                  try {
+                    await upsertPaperLibrary(settings.databaseDir, activeProject.id, [paper]);
+                    await loadLibraryPage();
+                    await onRefresh();
+                    onNotice("文献详情已保存。");
+                  } catch (error) {
+                    onNotice(error instanceof Error ? error.message : "文献保存失败。");
+                    throw error;
+                  }
+                }}
+              />
             </section>
           </div>
         </>
       )}
+
+      <dialog
+        ref={unsavedPaperDialogRef}
+        className="unsaved-paper-dialog"
+        aria-labelledby="unsaved-paper-dialog-title"
+        aria-describedby="unsaved-paper-dialog-description"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelPendingPaperSelection();
+        }}
+        onClose={() => {
+          if (!pendingPaperSave) setPendingPaperSelectionId("");
+        }}
+      >
+        <div className="unsaved-paper-dialog-body">
+          <div>
+            <h2 id="unsaved-paper-dialog-title">当前修改尚未保存</h2>
+            <p id="unsaved-paper-dialog-description">切换论文前，请选择保存当前修改、放弃修改，或继续编辑。</p>
+          </div>
+          <div className="unsaved-paper-dialog-actions">
+            <button type="button" className="secondary-action h-9 px-3" onClick={cancelPendingPaperSelection} disabled={pendingPaperSave}>继续编辑</button>
+            <button type="button" className="danger-action h-9 px-3" onClick={discardAndSelectPendingPaper} disabled={pendingPaperSave}>放弃修改</button>
+            <button type="button" className="primary-action h-9 gap-2 px-3" onClick={() => void saveAndSelectPendingPaper()} disabled={pendingPaperSave}>
+              {pendingPaperSave && <Loader2 className="animate-spin" size={14} />}
+              {pendingPaperSave ? "正在保存" : "保存并切换"}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       {activeWorkspaceTab === "analysis" && (
         <section className="panel-card literature-analysis">
@@ -6795,30 +6918,79 @@ function DataQualityPanel({ hints }: { hints: PaperQualityHint[] }) {
   );
 }
 
-function PaperDetailEditor({ paper, qualityHints, onSave }: { paper?: Paper; qualityHints: PaperQualityHint[]; onSave: (paper: Paper) => Promise<void> }) {
+type PaperDetailEditorHandle = {
+  save: () => Promise<boolean>;
+  discard: () => void;
+};
+
+function comparablePaperDetails(paper: Paper | null | undefined) {
+  return {
+    title: paper?.title ?? "",
+    abstract: paper?.abstract ?? "",
+    authors: paper?.authors ?? "",
+    year: paper?.year ?? null,
+    field: paper?.field ?? "",
+    source: paper?.source ?? "",
+    doi: paper?.doi ?? "",
+    url: paper?.url ?? "",
+  };
+}
+
+const PaperDetailEditor = forwardRef<PaperDetailEditorHandle, {
+  paper?: Paper;
+  qualityHints: PaperQualityHint[];
+  onDirtyChange: (dirty: boolean) => void;
+  onSave: (paper: Paper) => Promise<void>;
+}>(function PaperDetailEditor({ paper, qualityHints, onDirtyChange, onSave }, ref) {
+  const [baseline, setBaseline] = useState<Paper | null>(paper ? { ...paper } : null);
   const [draft, setDraft] = useState<Paper | null>(paper ? { ...paper } : null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    setBaseline(paper ? { ...paper } : null);
     setDraft(paper ? { ...paper } : null);
   }, [paper]);
 
-  if (!draft) return <EmptyState title="未选择文献" description="点击左侧文献标题后，可在这里编辑详情和查看数据质量提示。" />;
+  const dirty = useMemo(
+    () => JSON.stringify(comparablePaperDetails(draft)) !== JSON.stringify(comparablePaperDetails(baseline)),
+    [baseline, draft],
+  );
 
-  async function save() {
-    if (!draft) return;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+
+  async function saveDraft() {
+    if (!draft || saving) return false;
+    const normalizedDraft: Paper = {
+      ...draft,
+      title: draft.title.trim() || "未命名文献",
+      abstract: draft.abstract.trim(),
+      year: draft.year ? Number(draft.year) : undefined,
+    };
     setSaving(true);
     try {
-      await onSave({
-        ...draft,
-        title: draft.title.trim() || "未命名文献",
-        abstract: draft.abstract.trim(),
-        year: draft.year ? Number(draft.year) : undefined,
-      });
+      await onSave(normalizedDraft);
+      setBaseline({ ...normalizedDraft });
+      setDraft({ ...normalizedDraft });
+      return true;
+    } catch {
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  function discardDraft() {
+    setDraft(baseline ? { ...baseline } : null);
+  }
+
+  useImperativeHandle(ref, () => ({
+    save: saveDraft,
+    discard: discardDraft,
+  }));
+
+  if (!draft) return <EmptyState title="未选择文献" description="点击左侧论文卡片后，可在这里编辑详情和查看数据质量提示。" />;
 
   return (
     <>
@@ -6842,7 +7014,7 @@ function PaperDetailEditor({ paper, qualityHints, onSave }: { paper?: Paper; qua
         <label className="field-label">URL<input className="field-control h-10 px-3" value={draft.url ?? ""} onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label>
         {qualityHints.length > 0 && <DataQualityPanel hints={qualityHints} />}
         <div className="flex flex-wrap gap-2">
-          <button className="primary-action h-10 gap-2" onClick={() => void save()} disabled={saving}>
+          <button className="primary-action h-10 gap-2" onClick={() => void saveDraft()} disabled={saving || !dirty}>
             {saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
             保存文献
           </button>
@@ -6854,7 +7026,7 @@ function PaperDetailEditor({ paper, qualityHints, onSave }: { paper?: Paper; qua
       </div>
     </>
   );
-}
+});
 
 function ReportOptionsPanel({ options, onChange }: { options: ReportGenerationOptions; onChange: (options: ReportGenerationOptions) => void }) {
   const [userTemplates, setUserTemplates] = useState<AiParameterTemplate[]>([]);

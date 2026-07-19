@@ -835,12 +835,24 @@ button:focus-visible {
   .library-paper-scroll {
     min-height: 0;
     flex: 1;
-    margin-top: 12px;
+    margin-top: 8px;
     margin-right: -4px;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 4px;
     scrollbar-gutter: stable;
+  }
+
+  .library-diagnostics-panel {
+    flex-shrink: 0;
+    max-height: 260px;
+    margin-top: 8px;
+    overflow-y: auto;
+    border: 1px solid rgb(var(--color-line) / 0.3);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    background: rgb(var(--color-surface) / 0.56);
+    overscroll-behavior: contain;
   }
 
   .library-pagination {
@@ -1004,7 +1016,8 @@ button:focus-visible {
   }
 
   .paper-row {
-    @apply grid grid-cols-[34px_1fr] gap-3 border p-3 transition;
+    @apply grid grid-cols-[34px_1fr] gap-2.5 border p-2 transition;
+    position: relative;
     border-color: rgb(var(--color-line) / 0.32);
     background: rgba(255,255,255,0.022);
     border-radius: var(--radius-md);
@@ -1015,6 +1028,68 @@ button:focus-visible {
     background: rgba(255,255,255,0.044);
   }
 
+  .paper-row-active {
+    border-color: rgb(var(--color-cyan) / 0.38);
+    background: rgb(var(--color-cyan) / 0.075);
+    box-shadow: inset 3px 0 0 rgb(var(--color-cyan) / 0.72);
+  }
+
+  .paper-row-active:hover {
+    border-color: rgb(var(--color-cyan) / 0.48);
+    background: rgb(var(--color-cyan) / 0.09);
+  }
+
+  .paper-row-main {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    border-radius: 6px;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+    transition: transform 120ms ease;
+  }
+
+  .paper-row-main:active {
+    transform: translateY(1px);
+  }
+
+  .paper-row-main:focus-visible {
+    outline: 2px solid rgb(var(--color-cyan) / 0.72);
+    outline-offset: 4px;
+  }
+
+  .paper-row-title {
+    @apply block text-sm font-medium text-ink transition-colors;
+  }
+
+  .paper-row-abstract {
+    @apply mt-1.5 text-sm leading-5 text-ink/55;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    overflow: hidden;
+  }
+
+  @media (max-width: 1279px) {
+    .paper-row {
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .paper-row-abstract {
+      margin-top: 8px;
+      line-height: 24px;
+      -webkit-line-clamp: 2;
+    }
+  }
+
+  .paper-row-main:hover .paper-row-title,
+  .paper-row-active .paper-row-title {
+    color: rgb(var(--color-cyan) / 0.94);
+  }
+
   .paper-index {
     @apply grid h-7 w-7 place-items-center border bg-transparent text-xs text-ink/45;
     border-color: rgb(var(--color-line) / 0.42);
@@ -1023,6 +1098,42 @@ button:focus-visible {
 
   .paper-index-active {
     @apply border-cyan/50 bg-cyan/10 text-cyan;
+  }
+
+  .unsaved-paper-dialog {
+    width: min(460px, calc(100vw - 32px));
+    max-width: none;
+    margin: auto;
+    overflow: hidden;
+    border: 1px solid rgb(var(--color-line) / 0.5);
+    border-radius: var(--radius-lg);
+    padding: 0;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012)),
+      rgb(var(--color-panel));
+    color: rgb(var(--color-ink));
+    box-shadow: var(--shadow-float);
+  }
+
+  .unsaved-paper-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.64);
+    backdrop-filter: blur(3px);
+  }
+
+  .unsaved-paper-dialog-body {
+    @apply grid gap-5 p-5;
+  }
+
+  .unsaved-paper-dialog h2 {
+    @apply m-0 text-lg font-semibold text-ink;
+  }
+
+  .unsaved-paper-dialog p {
+    @apply m-0 mt-2 text-sm leading-6 text-ink/55;
+  }
+
+  .unsaved-paper-dialog-actions {
+    @apply flex flex-wrap items-center justify-end gap-2;
   }
 
   .library-filter-strip {
