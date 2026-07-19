@@ -1,7 +1,7 @@
 {
   "name": "research-hotspots-desktop",
   "private": true,
-  "version": "0.20.0",
+  "version": "0.21.0-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -11,6 +11,7 @@
     "audit:hotspot-library": "node --experimental-strip-types scripts/hotspot_library_evidence_audit.mjs",
     "audit:v20-cache": "node scripts/v20_snapshot_cache_audit.mjs",
     "audit:backup-restore": "node scripts/v20_backup_restore_audit.mjs",
+    "audit:windows-release": "node scripts/windows_release_audit.mjs",
     "ai:bridge-env": "node scripts/v20_ai_env_bridge.mjs",
     "ai:live-smoke": "node scripts/v20_ai_live_report_smoke.mjs",
     "build": "tsc -b && vite build",
@@ -41,13 +42,16 @@
     "acceptance:final": "node scripts/v20_final_acceptance_gate_runner.mjs",
     "acceptance:terminal": "node scripts/v20_final_acceptance_gate_runner.mjs --codex-terminal-ready",
     "acceptance:terminal-config": "node scripts/v20_acceptance_from_config.mjs",
-    "import:library": "cargo run --manifest-path src-tauri/Cargo.toml --bin import_library --",
+    "import:library": "cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin import_library --",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "export:star-map": "cargo run --manifest-path src-tauri/Cargo.toml --bin export_star_map --",
-    "export:hotspot-evidence": "cargo run --manifest-path src-tauri/Cargo.toml --bin export_hotspot_evidence --",
+    "release:windows:full": "node scripts/windows_release.mjs full",
+    "release:windows:lite": "node scripts/windows_release.mjs lite",
+    "release:windows": "node scripts/windows_release.mjs all",
+    "export:star-map": "cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin export_star_map --",
+    "export:hotspot-evidence": "cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin export_hotspot_evidence --",
     "export:hotspot-report": "node scripts/v20_hotspot_report_export.mjs"
   },
   "dependencies": {

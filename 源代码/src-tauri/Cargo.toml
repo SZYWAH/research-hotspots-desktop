@@ -1,10 +1,49 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.20.0"
-description = "Research hotspots desktop workstation"
-authors = ["local"]
+version = "0.21.0-beta.1"
+description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
+authors = ["Research Hotspots Desktop"]
 edition = "2021"
 default-run = "research-hotspots-desktop"
+autobins = false
+
+[features]
+default = []
+dev-tools = []
+
+[[bin]]
+name = "research-hotspots-desktop"
+path = "src/main.rs"
+
+[[bin]]
+name = "audit_library"
+path = "src/bin/audit_library.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "export_app17_visual_review"
+path = "src/bin/export_app17_visual_review.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "export_hotspot_evidence"
+path = "src/bin/export_hotspot_evidence.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "export_star_map"
+path = "src/bin/export_star_map.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "import_library"
+path = "src/bin/import_library.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "prepare_default_library"
+path = "src/bin/prepare_default_library.rs"
+required-features = ["dev-tools"]
 
 [lib]
 name = "research_hotspots_desktop_lib"

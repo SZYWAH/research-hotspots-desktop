@@ -10,6 +10,22 @@ const snapshotDir = join(reviewRoot, "app17");
 const manifestPath = join(snapshotDir, "manifest.json");
 const configPath = join(reviewRoot, "config.json");
 
+function resolveBuildRevision() {
+  const revision = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    shell: false,
+  });
+  if (revision.status !== 0) return "unknown";
+  const dirty = spawnSync("git", ["status", "--porcelain"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    shell: false,
+  });
+  const shortHash = revision.stdout.trim();
+  return `${shortHash}${dirty.status === 0 && dirty.stdout.trim() ? "-dirty" : ""}`;
+}
+
 function parseArgs(argv) {
   const args = { command: "serve", projectId: "project-default", force: false, open: true };
   let index = 0;
@@ -109,6 +125,8 @@ function exportSnapshot(database, force) {
     "--quiet",
     "--manifest-path",
     "src-tauri/Cargo.toml",
+    "--features",
+    "dev-tools",
     "--bin",
     "export_app17_visual_review",
     "--",
@@ -170,6 +188,10 @@ async function serve(args) {
     cwd: rootDir,
     stdio: "inherit",
     shell: false,
+    env: {
+      ...process.env,
+      VITE_BUILD_REVISION: resolveBuildRevision(),
+    },
   });
   const stop = () => {
     if (!child.killed) child.kill();

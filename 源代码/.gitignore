@@ -9,3 +9,6 @@ src-tauri/gen/
 vite.config.js
 vite.config.d.ts
 .visual-review/
+release/
+release-assets/
+data/library/
