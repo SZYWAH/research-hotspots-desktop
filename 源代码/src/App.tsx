@@ -140,14 +140,16 @@ import {
   getApp17GalaxyPayload,
   getV20GalaxyPayload,
   getV20HotspotSnapshot,
+  getLibrarySetupState,
   getPaperLibraryFacets,
   getPaperLibraryStatus,
-  inspectPaperLibraryBackup,
   getAppCredentialStatus,
   getPapersByIds,
-  isDesktopRuntime,
   getDemoPaperSamplePath,
   isGalaxyVisualReviewMode,
+  isDesktopRuntime,
+  initializeLibrary,
+  inspectPaperLibraryBackup,
   loadApp17Galaxy,
   openExternalUrl,
   queryPaperLibrary,
@@ -162,10 +164,14 @@ import {
   startPaperFileImport,
   startMysqlPaperImport,
   restorePaperLibrary,
+  validateLibraryLocation,
   upsertPaperLibrary,
   writeTextFile,
   type DesktopHealthResult,
   type LibraryPressureTestResult,
+  type LibrarySetupMode,
+  type LibrarySetupState,
+  type InitializeLibraryResult,
   type PaperFileImportProgress,
 } from "./lib/desktop";
 import { formatDateTime, nowIso } from "./lib/dates";
@@ -329,11 +335,6 @@ function galaxySessionCacheKey(databaseDir: string, projectId: string) {
   return `${databaseDir.trim().toLowerCase()}::${projectId}`;
 }
 
-function galaxyPasswordCacheKey(settings: AiSettings) {
-  const mysql = settings.mysql;
-  return `${mysql.host.trim().toLowerCase()}:${mysql.port}:${mysql.user.trim().toLowerCase()}:${mysql.database.trim().toLowerCase()}`;
-}
-
 export default function App() {
   const galaxyVisualReview = isGalaxyVisualReviewMode();
   const galaxyVisualReviewIntent = useMemo(readGalaxyVisualReviewIntent, []);
@@ -344,6 +345,8 @@ export default function App() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [libraryStatus, setLibraryStatus] = useState<PaperLibraryStatus | null>(null);
+  const [librarySetupState, setLibrarySetupState] = useState<LibrarySetupState | null>(null);
+  const [librarySetupRequired, setLibrarySetupRequired] = useState(false);
   const [libraryFacets, setLibraryFacets] = useState<PaperLibraryFacets | null>(null);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [reports, setReports] = useState<ResearchReport[]>([]);
@@ -356,9 +359,8 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const galaxySessionsRef = useRef(new Map<string, GalaxySessionState>());
-  const refreshRequestSequenceRef = useRef(0);
   const galaxyRequestsRef = useRef(new Map<string, Promise<void>>());
-  const galaxyPasswordsRef = useRef(new Map<string, string>());
+  const refreshRequestSequenceRef = useRef(0);
   const [, refreshGalaxySessions] = useState(0);
 
   function updateGalaxySession(key: string, next: GalaxySessionState) {
@@ -490,6 +492,8 @@ export default function App() {
     let status = await getPaperLibraryStatus(nextSettings.databaseDir, nextProject.id);
     if (status.paperCount > 0) return status;
 
+    if (nextSettings.librarySetupCompleted) return status;
+
     const legacyCount = await countIndexedDbPapers();
     if (legacyCount === 0) return status;
 
@@ -532,6 +536,24 @@ export default function App() {
             nextSettings = await saveAiSettings({ ...nextSettings, manualApiKey: "", apiCredentialConfigured, mysql: { ...nextSettings.mysql, password: "", credentialConfigured: mysqlCredentialConfigured } });
           }
         }
+        if (isDesktopRuntime() && !galaxyVisualReview) {
+          const nextSetupState = await getLibrarySetupState(nextSettings.databaseDir);
+          if (!nextSetupState.configured || (!import.meta.env.DEV && !nextSettings.librarySetupCompleted && !nextSettings.databaseDir.trim())) {
+            if (mounted) {
+              setSettings(nextSettings);
+              setLibrarySetupState(nextSetupState);
+              setLibrarySetupRequired(true);
+            }
+            return;
+          }
+          if (!nextSettings.librarySetupCompleted && nextSettings.databaseDir.trim()) {
+            await saveAiSettings({
+              ...nextSettings,
+              librarySetupCompleted: true,
+              librarySetupMode: "existing",
+            });
+          }
+        }
         if (mounted) await refreshAll();
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "桌面端初始化失败。");
@@ -554,6 +576,32 @@ export default function App() {
   useEffect(() => {
     if (activeView === "galaxy") setGalaxyVisited(true);
   }, [activeView]);
+
+  if (librarySetupRequired && settings && librarySetupState) {
+    return (
+      <LibrarySetupView
+        state={librarySetupState}
+        onComplete={async (result) => {
+          await saveAiSettings({
+            ...settings,
+            databaseDir: result.databaseDir,
+            dataDir: result.databaseDir,
+            librarySetupCompleted: true,
+            librarySetupMode: result.mode,
+          });
+          setLoading(true);
+          try {
+            await refreshAll();
+            setLibrarySetupRequired(false);
+            setLibrarySetupState(null);
+            setNotice(result.summary);
+          } finally {
+            setLoading(false);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -679,6 +727,35 @@ export default function App() {
         mysql: { ...next.mysql, password: "", credentialConfigured: mysqlCredentialConfigured },
       };
     }
+    if (settings && next.databaseDir.trim() !== settings.databaseDir.trim()) {
+      const nextDir = next.databaseDir.trim();
+      if (!nextDir) throw new Error("SQLite 论文库目录不能为空。");
+      const useExisting = await validateLibraryLocation(nextDir, "existing");
+      if (!useExisting.valid) {
+        const canMigrate = await validateLibraryLocation(nextDir, "empty");
+        if (!canMigrate.valid) throw new Error(canMigrate.message);
+        if (!window.confirm("新目录中没有现有论文库。是否将当前 SQLite 论文库复制到新目录？原目录数据会保留。")) {
+          throw new Error("已取消论文库目录迁移。");
+        }
+        const backup = await backupPaperLibrary({
+          databaseDir: settings.databaseDir,
+          backupDir: nextDir,
+          projectId: settings.projectId,
+        });
+        await restorePaperLibrary({
+          databaseDir: nextDir,
+          backupPath: backup.backupPath,
+          projectId: settings.projectId,
+        });
+      }
+      effectiveSettings = {
+        ...effectiveSettings,
+        dataDir: nextDir,
+        databaseDir: nextDir,
+        librarySetupCompleted: true,
+        librarySetupMode: "existing",
+      };
+    }
     await saveAiSettings(effectiveSettings);
     await refreshAll();
     setNotice("设置已保存。");
@@ -718,6 +795,125 @@ export default function App() {
       setNotice(error instanceof Error ? error.message : "项目删除失败。");
     }
   }
+}
+
+function LibrarySetupView({
+  state,
+  onComplete,
+}: {
+  state: LibrarySetupState;
+  onComplete: (result: InitializeLibraryResult) => Promise<void>;
+}) {
+  const [databaseDir, setDatabaseDir] = useState(state.databaseDir ?? "");
+  const [mode, setMode] = useState<LibrarySetupMode>(state.seedAvailable ? "seed" : "empty");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(state.message);
+  const [error, setError] = useState("");
+
+  const options: Array<{ id: LibrarySetupMode; title: string; description: string; disabled?: boolean }> = [
+    {
+      id: "seed",
+      title: "安装默认论文数据",
+      description: state.seedAvailable
+        ? `V20 快照包含 ${state.seedPaperCount?.toLocaleString("zh-CN") ?? "-"} 篇论文、${state.seedHotspotCount?.toLocaleString("zh-CN") ?? "-"} 个热点与 ${state.seedMembershipCount?.toLocaleString("zh-CN") ?? "-"} 条归属，约 ${formatBytes(state.seedSizeBytes ?? 0)}。`
+        : "当前 Lite 安装包未包含默认数据。",
+      disabled: !state.seedAvailable,
+    },
+    { id: "empty", title: "空白开始", description: "创建完整但不含论文的本地 SQLite 库，稍后自行导入数据。" },
+    { id: "existing", title: "使用现有 SQLite 论文库", description: "所选目录必须包含 research-hotspots-v7.sqlite。合法旧库可接入，但没有 V20 快照时需稍后显式运行热点建模。" },
+  ];
+
+  async function chooseDirectory() {
+    const selected = await chooseExportDirectory("选择论文数据库目录");
+    if (!selected) return;
+    setDatabaseDir(selected);
+    setError("");
+    setMessage("目录已选择，开始前会检查写入权限、剩余空间与现有数据库。 ");
+  }
+
+  async function submit() {
+    if (!databaseDir.trim()) {
+      setError("请先选择数据库目录。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("正在检查目录与论文库状态...");
+    try {
+      const validation = await validateLibraryLocation(databaseDir, mode);
+      if (!validation.valid) throw new Error(validation.message);
+      setMessage(mode === "seed" ? "正在复制并校验默认论文库，请勿关闭应用..." : mode === "empty" ? "正在创建空白论文库..." : "正在验证并接入现有论文库...");
+      const result = await initializeLibrary(databaseDir, mode);
+      setMessage(result.summary);
+      await onComplete(result);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setMessage("初始化未完成。数据目录中的已有论文库不会被覆盖。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="library-setup-shell">
+      <section className="library-setup-workspace" aria-labelledby="library-setup-title">
+        <header className="library-setup-header">
+          <div className="brand-mark"><BrainCircuit size={24} /></div>
+          <div>
+            <div className="text-xs font-semibold uppercase text-cyan/80">Research Hotspots Desktop</div>
+            <h1 id="library-setup-title">配置本地论文库</h1>
+            <p>论文数据存放在您选择的目录中。升级或卸载应用不会删除该目录。</p>
+          </div>
+          <span className="library-setup-edition">{state.seedAvailable ? "Full" : "Lite"} · v{__APP_VERSION__}</span>
+        </header>
+
+        <div className="library-setup-section">
+          <div className="library-setup-section-title">
+            <span>1</span>
+            <div><strong>选择数据库目录</strong><small>建议选择空间充足、长期保留且当前用户可写的目录。</small></div>
+          </div>
+          <div className="library-setup-path-row">
+            <div className="library-setup-path" title={databaseDir}>{databaseDir || "尚未选择目录"}</div>
+            <button className="icon-text-button" type="button" onClick={chooseDirectory} disabled={busy}>
+              <FolderKanban size={16} /> 选择目录
+            </button>
+          </div>
+        </div>
+
+        <div className="library-setup-section">
+          <div className="library-setup-section-title">
+            <span>2</span>
+            <div><strong>选择初始化方式</strong><small>已有同名数据库时，应用始终拒绝覆盖。</small></div>
+          </div>
+          <div className="library-setup-options">
+            {options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                disabled={busy || option.disabled}
+                className={`library-setup-option ${mode === option.id ? "library-setup-option-active" : ""}`}
+                onClick={() => { setMode(option.id); setError(""); }}
+              >
+                <span className="library-setup-radio">{mode === option.id ? <Check size={14} /> : null}</span>
+                <span><strong>{option.title}</strong><small>{option.description}</small></span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <footer className="library-setup-footer">
+          <div className={`library-setup-message ${error ? "library-setup-error" : ""}`}>
+            {error ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />}
+            <span>{error || message}</span>
+          </div>
+          <button className="primary-button" type="button" disabled={busy || !databaseDir.trim()} onClick={submit}>
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Database size={16} />}
+            {busy ? "正在初始化" : "完成配置并进入应用"}
+          </button>
+        </footer>
+      </section>
+    </main>
+  );
 }
 
 function buildDashboardFromLibrary(status: PaperLibraryStatus, facets: PaperLibraryFacets, hotspots: Hotspot[], reports: ResearchReport[], jobs: PipelineJob[]): DashboardData {
@@ -3311,7 +3507,7 @@ function GalaxyView({
           {visualReview && (
             <div className="mb-3 mt-2 inline-flex items-center gap-2 rounded-[6px] border border-cyan/20 bg-cyan/[0.06] px-3 py-2 text-xs text-cyan/80">
               <Database size={13} />
-              浏览器视觉快照 · 生成于 {formatVisualReviewTimestamp(app17Payload?.generatedAt)}
+              浏览器视觉快照 · 数据 {formatVisualReviewTimestamp(app17Payload?.generatedAt)} · 构建 {formatVisualReviewTimestamp(__BUILD_TIME__)} · {__BUILD_REVISION__}
             </div>
           )}
           <h1>科研星图</h1>

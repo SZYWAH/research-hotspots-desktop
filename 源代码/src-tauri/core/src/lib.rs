@@ -73,7 +73,11 @@ pub struct UnifiedHotspotRows {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidatedLibraryCandidate {
+    pub schema_version: i64,
+    pub project_id: String,
     pub paper_count: i64,
+    pub hotspot_count: i64,
+    pub membership_count: i64,
     pub snapshot_id: Option<String>,
 }
 
@@ -117,7 +121,6 @@ pub fn write_snapshot_transaction(conn: &Connection, input: &SnapshotWriteInput)
 }
 
 pub fn read_analysis_state(conn: &Connection, project_id: &str) -> Result<Option<AnalysisState>, String> {
-    ensure_v20_schema(conn)?;
     conn.query_row(
         "SELECT s.project_id, s.id, s.algorithm_version, s.paper_count, s.hotspot_count, s.membership_count, s.created_at FROM v20_analysis_state a JOIN v20_analysis_snapshots s ON s.id = a.active_snapshot_id AND s.status = 'ready' WHERE a.project_id = ?1",
         params![project_id],
@@ -135,7 +138,6 @@ pub fn read_unified_galaxy_rows(conn: &Connection, project_id: &str) -> Result<O
 }
 
 pub fn read_unified_hotspot_rows(conn: &Connection, project_id: &str) -> Result<Option<UnifiedHotspotRows>, String> {
-    ensure_v20_schema(conn)?;
     let Some(state) = read_analysis_state(conn, project_id)? else { return Ok(None); };
     let mut stmt = conn.prepare("SELECT hotspot_id, payload_json, x, y, z, paper_count, updated_at FROM v20_hotspots WHERE project_id = ?1 AND snapshot_id = ?2 ORDER BY paper_count DESC, hotspot_id ASC").map_err(|error| error.to_string())?;
     let hotspots = stmt.query_map(params![project_id, state.active_snapshot_id], |row| Ok(SnapshotHotspot { hotspot_id: row.get(0)?, payload_json: row.get(1)?, x: row.get(2)?, y: row.get(3)?, z: row.get(4)?, paper_count: row.get(5)?, updated_at: row.get(6)? })).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
@@ -143,7 +145,6 @@ pub fn read_unified_hotspot_rows(conn: &Connection, project_id: &str) -> Result<
 }
 
 pub fn validate_active_snapshot(conn: &Connection, project_id: &str) -> Result<Option<AnalysisState>, String> {
-    ensure_v20_schema(conn)?;
     let Some(state) = read_analysis_state(conn, project_id)? else { return Ok(None); };
     let hotspot_count: i64 = conn.query_row("SELECT COUNT(*) FROM v20_hotspots WHERE project_id = ?1 AND snapshot_id = ?2", params![project_id, state.active_snapshot_id], |row| row.get(0)).map_err(|error| error.to_string())?;
     let membership_count: i64 = conn.query_row("SELECT COUNT(*) FROM v20_paper_memberships WHERE project_id = ?1 AND snapshot_id = ?2", params![project_id, state.active_snapshot_id], |row| row.get(0)).map_err(|error| error.to_string())?;
@@ -160,6 +161,22 @@ pub fn validate_active_snapshot(conn: &Connection, project_id: &str) -> Result<O
     }
     if orphan_memberships != 0 {
         return Err(format!("V20 snapshot contains {orphan_memberships} orphan memberships."));
+    }
+    let orphan_papers: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM v20_paper_memberships m LEFT JOIN papers p ON p.project_id = m.project_id AND p.id = m.paper_id WHERE m.project_id = ?1 AND m.snapshot_id = ?2 AND p.id IS NULL",
+        params![project_id, state.active_snapshot_id],
+        |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if orphan_papers != 0 {
+        return Err(format!("V20 snapshot contains {orphan_papers} memberships without papers."));
+    }
+    let paper_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+        params![project_id],
+        |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if paper_count != state.paper_count || membership_count != paper_count {
+        return Err(format!("V20 paper membership mismatch: papers={paper_count}, state={}, memberships={membership_count}.", state.paper_count));
     }
     Ok(Some(state))
 }
@@ -205,7 +222,9 @@ pub fn validate_library_candidate_connection(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         for project in projects {
-            validate_active_snapshot(conn, &project)?;
+            if validate_active_snapshot(conn, &project)?.is_none() {
+                return Err(format!("V20 active snapshot reference is invalid for project {project}."));
+            }
         }
     }
 
@@ -234,10 +253,46 @@ pub fn validate_library_candidate_connection(
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
+    let schema_version = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|error| error.to_string())?;
     Ok(ValidatedLibraryCandidate {
+        schema_version,
+        project_id: project_id.to_string(),
         paper_count,
+        hotspot_count: state.as_ref().map_or(0, |value| value.hotspot_count),
+        membership_count: state.as_ref().map_or(0, |value| value.membership_count),
         snapshot_id: state.map(|value| value.active_snapshot_id),
     })
+}
+
+pub fn validate_library_candidate_file(database_path: &Path, project_id: &str) -> Result<ValidatedLibraryCandidate, String> {
+    if !database_path.is_file() {
+        return Err(format!("SQLite library does not exist: {:?}", database_path));
+    }
+    let conn = Connection::open_with_flags(database_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    validate_library_candidate_connection(&conn, project_id)
+}
+
+pub fn copy_file_atomically_without_overwrite<T, F>(source: &Path, target: &Path, validate: F) -> Result<T, String>
+where
+    F: FnOnce(&Path) -> Result<T, String>,
+{
+    if target.exists() {
+        return Err("TARGET_ALREADY_EXISTS".to_string());
+    }
+    let file_name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| "INVALID_TARGET_NAME".to_string())?;
+    let partial = target.with_file_name(format!("{file_name}.partial"));
+    let _ = fs::remove_file(&partial);
+    let result = (|| {
+        fs::copy(source, &partial).map_err(|error| format!("COPY_FAILED: {error}"))?;
+        let value = validate(&partial)?;
+        fs::rename(&partial, target).map_err(|error| format!("ATOMIC_SWITCH_FAILED: {error}"))?;
+        Ok(value)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    result
 }
 
 pub fn atomic_replace_file_with_rollback<T, F>(active: &Path, staged: &Path, safety: &Path, validate: F) -> Result<(bool, T), String>
@@ -318,6 +373,7 @@ mod tests {
     #[test]
     fn hotspot_only_read_and_validation_match_snapshot() {
         let conn = Connection::open_in_memory().unwrap();
+        add_papers_table(&conn, &[("a", "p")]);
         write_snapshot_transaction(&conn, &input("s1", "a")).unwrap();
         let rows = read_unified_hotspot_rows(&conn, "p").unwrap().unwrap();
         assert_eq!(rows.state.active_snapshot_id, "s1");
@@ -425,6 +481,35 @@ mod tests {
         fs::write(&active, b"old").unwrap();
         assert!(atomic_replace_file_with_rollback::<(), _>(&active, &staged, &safety, |_| Ok(())).is_err());
         assert_eq!(fs::read(&active).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_run_copy_is_atomic_and_refuses_overwrite() {
+        let root = std::env::temp_dir().join(format!("research-hotspots-core-first-run-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("seed.sqlite");
+        let target = root.join("library.sqlite");
+        fs::write(&source, b"seed").unwrap();
+        let size = copy_file_atomically_without_overwrite(&source, &target, |path| fs::metadata(path).map(|value| value.len()).map_err(|error| error.to_string())).unwrap();
+        assert_eq!(size, 4);
+        assert_eq!(fs::read(&target).unwrap(), b"seed");
+        assert_eq!(copy_file_atomically_without_overwrite::<(), _>(&source, &target, |_| Ok(())).unwrap_err(), "TARGET_ALREADY_EXISTS");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_run_copy_cleans_partial_after_validation_failure() {
+        let root = std::env::temp_dir().join(format!("research-hotspots-core-first-run-fail-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("seed.sqlite");
+        let target = root.join("library.sqlite");
+        fs::write(&source, b"seed").unwrap();
+        assert!(copy_file_atomically_without_overwrite::<(), _>(&source, &target, |_| Err("injected".to_string())).is_err());
+        assert!(!target.exists());
+        assert!(!root.join("library.sqlite.partial").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

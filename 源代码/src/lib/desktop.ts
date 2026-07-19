@@ -127,6 +127,64 @@ export type PaperLibraryBackupInspection = {
   hotspotCount: number;
   membershipCount: number;
   validationStatus: string;
+};
+
+export type LibrarySetupMode = "seed" | "empty" | "existing";
+
+export type LibrarySetupState = {
+  configured: boolean;
+  databaseDir?: string;
+  databasePath?: string;
+  databaseExists: boolean;
+  databaseValid: boolean;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  snapshotId?: string;
+  databaseSchemaVersion?: number;
+  requiresModeling: boolean;
+  seedAvailable: boolean;
+  seedSizeBytes?: number;
+  seedPaperCount?: number;
+  seedHotspotCount?: number;
+  seedMembershipCount?: number;
+  seedSnapshotId?: string;
+  seedDatabaseSchemaVersion?: number;
+  seedVersion?: string;
+  message: string;
+};
+
+export type LibraryLocationValidation = {
+  valid: boolean;
+  databaseDir: string;
+  databasePath: string;
+  writable: boolean;
+  availableSpaceBytes: number;
+  requiredSpaceBytes: number;
+  existingDatabase: boolean;
+  existingDatabaseValid: boolean;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  snapshotId?: string;
+  databaseSchemaVersion?: number;
+  requiresModeling: boolean;
+  message: string;
+};
+
+export type InitializeLibraryResult = {
+  mode: LibrarySetupMode;
+  databaseDir: string;
+  databasePath: string;
+  sizeBytes: number;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  snapshotId?: string;
+  databaseSchemaVersion: number;
+  requiresModeling: boolean;
+  sha256: string;
+  integrityCheck: string;
   summary: string;
 };
 
@@ -266,6 +324,50 @@ export async function getPaperLibraryStatus(databaseDir?: string, projectId?: st
     } satisfies PaperLibraryStatus;
   }
   return invoke<PaperLibraryStatus>("paper_library_status", { databaseDir, projectId });
+}
+
+export async function getLibrarySetupState(databaseDir?: string) {
+  if (!isDesktopRuntime()) {
+    return {
+      configured: true,
+      databaseDir: databaseDir || "browser-preview",
+      databasePath: "IndexedDB preview",
+      databaseExists: true,
+      databaseValid: true,
+      paperCount: 0,
+      hotspotCount: 0,
+      membershipCount: 0,
+      requiresModeling: true,
+      seedAvailable: false,
+      message: "Browser preview",
+    } satisfies LibrarySetupState;
+  }
+  return invoke<LibrarySetupState>("get_library_setup_state", { databaseDir });
+}
+
+export async function validateLibraryLocation(databaseDir: string, mode: LibrarySetupMode) {
+  if (!isDesktopRuntime()) {
+    return {
+      valid: true,
+      databaseDir,
+      databasePath: `${databaseDir}/research-hotspots-v7.sqlite`,
+      writable: true,
+      availableSpaceBytes: 0,
+      requiredSpaceBytes: 0,
+      existingDatabase: mode === "existing",
+      existingDatabaseValid: mode === "existing",
+      paperCount: 0,
+      hotspotCount: 0,
+      membershipCount: 0,
+      requiresModeling: mode !== "existing",
+      message: "Browser preview",
+    } satisfies LibraryLocationValidation;
+  }
+  return invoke<LibraryLocationValidation>("validate_library_location", { input: { databaseDir, mode } });
+}
+
+export async function initializeLibrary(databaseDir: string, mode: LibrarySetupMode) {
+  return invoke<InitializeLibraryResult>("initialize_library", { input: { databaseDir, mode } });
 }
 
 export async function queryPaperLibrary(input: PaperQueryInput) {

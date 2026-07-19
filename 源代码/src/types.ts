@@ -237,6 +237,8 @@ export type AiSettings = {
   streamOutput: boolean;
   dataDir: string;
   databaseDir: string;
+  librarySetupCompleted: boolean;
+  librarySetupMode: "" | "seed" | "empty" | "existing";
   exportDir: string;
   workerTempDir: string;
   backupDir: string;
