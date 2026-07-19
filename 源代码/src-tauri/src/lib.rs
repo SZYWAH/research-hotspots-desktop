@@ -13,6 +13,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
+use research_hotspots_core::{
+    atomic_replace_file_with_rollback, read_analysis_state, read_unified_galaxy_rows,
+    read_unified_hotspot_rows, validate_library_candidate_connection,
+    write_snapshot_transaction,
+    AnalysisState, SnapshotHotspot, SnapshotMembership, SnapshotWriteInput,
+    ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,10 +115,26 @@ struct PaperLibraryRestoreResult {
     previous_backup_path: Option<String>,
     size_bytes: u64,
     paper_count: i64,
+    restored_snapshot_id: Option<String>,
+    validation_status: String,
+    rollback_performed: bool,
     summary: String,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PaperLibraryBackupInspection {
+    backup_path: String,
+    schema_version: i64,
+    paper_count: i64,
+    project_count: i64,
+    snapshot_id: Option<String>,
+    hotspot_count: i64,
+    membership_count: i64,
+    validation_status: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct CountFacet {
     value: String,
@@ -182,6 +205,33 @@ struct ClusterTaskRegistry {
 struct ClusterTaskPermit {
     registry: ClusterTaskRegistry,
     key: String,
+}
+
+const LIBRARY_BUSY: &str = "LIBRARY_BUSY";
+
+#[derive(Clone, Default)]
+struct LibraryMutationRegistry {
+    running: Arc<Mutex<HashSet<String>>>,
+}
+
+struct LibraryMutationPermit {
+    registry: LibraryMutationRegistry,
+    key: String,
+}
+
+impl LibraryMutationRegistry {
+    fn try_acquire(&self, database_path: &Path) -> Result<LibraryMutationPermit, String> {
+        let key = normalized_database_key(database_path);
+        let mut running = self.running.lock().map_err(|_| "Cannot lock library mutation registry.".to_string())?;
+        if !running.insert(key.clone()) { return Err(LIBRARY_BUSY.to_string()); }
+        Ok(LibraryMutationPermit { registry: self.clone(), key })
+    }
+}
+
+impl Drop for LibraryMutationPermit {
+    fn drop(&mut self) {
+        self.registry.running.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&self.key);
+    }
 }
 
 impl ClusterTaskRegistry {
@@ -363,6 +413,39 @@ struct App17GalaxyPayload {
     fields: Vec<String>,
     papers: Vec<App17GalaxyPaperPoint>,
     hotspots: Vec<App17GalaxyHotspotPoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct V20GalaxyPayload {
+    ready: bool,
+    message: String,
+    source: String,
+    mode: String,
+    generated_at: String,
+    snapshot_id: Option<String>,
+    paper_count: usize,
+    hotspot_count: usize,
+    topic_count: usize,
+    fields: Vec<String>,
+    papers: Vec<App17GalaxyPaperPoint>,
+    hotspots: Vec<App17GalaxyHotspotPoint>,
+    hotspot_records: Vec<HotspotRecord>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct V20HotspotSnapshot {
+    database_key: String,
+    project_id: String,
+    active_snapshot_id: String,
+    snapshot_id: Option<String>,
+    algorithm_version: String,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    generated_at: String,
+    hotspots: Vec<HotspotRecord>,
 }
 
 #[derive(Clone, Serialize)]
@@ -653,21 +736,21 @@ struct PaperLibraryCleanResult {
     summary: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct KeywordWeight {
     keyword: String,
     weight: f64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SimilarHotspotRelation {
     hotspot_id: String,
     score: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotCoordinates {
     x: i64,
@@ -675,7 +758,7 @@ struct HotspotCoordinates {
     z: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotEvolution {
     year: i64,
@@ -684,7 +767,7 @@ struct HotspotEvolution {
     representative_ids: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotAnalysis {
     keyword_focus: f64,
@@ -695,7 +778,7 @@ struct HotspotAnalysis {
     warnings: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotRecord {
     id: String,
@@ -724,6 +807,8 @@ struct HotspotRecord {
 struct LibraryClusterResult {
     before_count: i64,
     cluster_count: i64,
+    snapshot_id: String,
+    membership_count: i64,
     hotspots: Vec<HotspotRecord>,
     summary: String,
 }
@@ -746,7 +831,7 @@ struct LibraryPressureTestResult {
     summary: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ClusterGroup {
     field: String,
     keyword: String,
@@ -819,14 +904,35 @@ fn backup_library_database_path(database_dir: &Path, backup_dir: Option<PathBuf>
 }
 
 #[tauri::command]
-fn restore_paper_library(app: tauri::AppHandle, database_dir: Option<String>, backup_path: String, project_id: Option<String>) -> Result<PaperLibraryRestoreResult, String> {
+fn inspect_paper_library_backup(backup_path: String, project_id: Option<String>) -> Result<PaperLibraryBackupInspection, String> {
+    let source_path = PathBuf::from(&backup_path);
+    if !source_path.exists() || !source_path.is_file() {
+        return Err(format!("SQLite backup file does not exist: {:?}", source_path));
+    }
+    inspect_library_backup_path(&source_path, &project_id.unwrap_or_else(default_project_id))
+}
+
+#[tauri::command]
+async fn restore_paper_library(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LibraryMutationRegistry>,
+    database_dir: Option<String>,
+    backup_path: String,
+    project_id: Option<String>,
+) -> Result<PaperLibraryRestoreResult, String> {
     let source_path = PathBuf::from(&backup_path);
     if !source_path.exists() || !source_path.is_file() {
         return Err(format!("SQLite backup file does not exist: {:?}", source_path));
     }
     let database_dir = resolve_database_dir(&app, database_dir)?;
+    let permit = state.try_acquire(&database_dir.join("research-hotspots-v7.sqlite"))?;
     let project_id = project_id.unwrap_or_else(default_project_id);
-    restore_library_database_path(&database_dir, &source_path, &project_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        restore_library_database_path(&database_dir, &source_path, &project_id)
+    })
+    .await
+    .map_err(|error| format!("SQLite restore task failed: {error}"))?
 }
 
 fn restore_library_database_path(database_dir: &Path, source_path: &Path, project_id: &str) -> Result<PaperLibraryRestoreResult, String> {
@@ -835,36 +941,132 @@ fn restore_library_database_path(database_dir: &Path, source_path: &Path, projec
     }
     fs::create_dir_all(&database_dir).map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    if source_path == database_path {
+    if fs::canonicalize(source_path).ok() == fs::canonicalize(&database_path).ok() && database_path.exists() {
         return Err("Cannot restore from the active SQLite database file.".to_string());
     }
-
-    let previous_backup_path = if database_path.exists() {
-        let safety_path = database_dir.join(format!("research-hotspots-v7-before-restore-{}.sqlite", now_millis()));
-        fs::copy(&database_path, &safety_path).map_err(|error| format!("Cannot create safety copy before restore: {error}"))?;
-        Some(safety_path)
-    } else {
-        None
+    let restore_id = now_millis();
+    let staging_path = database_dir.join(format!(".research-hotspots-v7-restore-{restore_id}.sqlite"));
+    let marker_path = database_dir.join("research-hotspots-v7.restore.json");
+    let safety_path = database_dir.join(format!("research-hotspots-v7-before-restore-{restore_id}.sqlite"));
+    fs::copy(source_path, &staging_path).map_err(|error| format!("Cannot stage SQLite backup {:?}: {error}", source_path))?;
+    match validate_library_candidate(&staging_path, project_id) {
+        Ok(value) => value,
+        Err(error) => {
+            remove_sqlite_sidecars(&staging_path);
+            let _ = fs::remove_file(&staging_path);
+            return Err(format!("SQLite backup validation failed: {error}"));
+        }
     };
-    let _ = fs::remove_file(database_dir.join("research-hotspots-v7.sqlite-wal"));
-    let _ = fs::remove_file(database_dir.join("research-hotspots-v7.sqlite-shm"));
-    fs::copy(&source_path, &database_path).map_err(|error| format!("Cannot restore SQLite database from {:?}: {error}", source_path))?;
+    fs::write(
+        &marker_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "restoreId": restore_id,
+            "source": source_path,
+            "staging": staging_path,
+            "active": database_path,
+            "safety": safety_path,
+            "phase": "validated"
+        })).map_err(|error| error.to_string())?,
+    ).map_err(|error| format!("Cannot write restore marker: {error}"))?;
 
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open restored SQLite library {:?}: {error}", database_path))?;
-    initialize_library_database(&conn)?;
-    let paper_count = conn
-        .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
-        .unwrap_or_default();
+    if database_path.exists() {
+        let conn = Connection::open(&database_path).map_err(|error| format!("Cannot checkpoint active SQLite library: {error}"))?;
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        drop(conn);
+        remove_sqlite_sidecars(&database_path);
+    }
+    let (had_active, validated) = match atomic_replace_file_with_rollback(
+        &database_path,
+        &staging_path,
+        &safety_path,
+        |path| validate_library_candidate(path, project_id),
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = fs::remove_file(&marker_path);
+            return Err(error);
+        }
+    };
+    let _ = fs::remove_file(&marker_path);
     let size_bytes = fs::metadata(&database_path).map(|metadata| metadata.len()).unwrap_or_default();
 
     Ok(PaperLibraryRestoreResult {
         database_path: database_path.to_string_lossy().to_string(),
         restored_from: source_path.to_string_lossy().to_string(),
-        previous_backup_path: previous_backup_path.map(|path| path.to_string_lossy().to_string()),
+        previous_backup_path: had_active.then(|| safety_path.to_string_lossy().to_string()),
         size_bytes,
-        paper_count,
-        summary: format!("SQLite 论文库已恢复：{paper_count} 篇，{} bytes。", size_bytes),
+        paper_count: validated.paper_count,
+        restored_snapshot_id: validated.snapshot_id.clone(),
+        validation_status: "passed".to_string(),
+        rollback_performed: false,
+        summary: format!("SQLite 论文库已原子恢复：{} 篇，快照 {}，{} bytes。", validated.paper_count, validated.snapshot_id.as_deref().unwrap_or("未生成"), size_bytes),
     })
+}
+
+fn inspect_library_backup_path(path: &Path, project_id: &str) -> Result<PaperLibraryBackupInspection, String> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|error| format!("Cannot open SQLite backup {:?}: {error}", path))?;
+    let quick_check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+    if quick_check.to_lowercase() != "ok" { return Err(format!("SQLite quick_check failed: {quick_check}")); }
+    if !sqlite_table_exists(&conn, "papers")? { return Err("SQLite backup has no papers table.".to_string()); }
+    let schema_version = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap_or_default();
+    let paper_count = conn.query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0)).unwrap_or_default();
+    let project_count = conn.query_row("SELECT COUNT(DISTINCT project_id) FROM papers", [], |row| row.get(0)).unwrap_or_default();
+    let snapshot_id = if sqlite_table_exists(&conn, "v20_analysis_state")? {
+        conn.query_row("SELECT active_snapshot_id FROM v20_analysis_state WHERE project_id = ?1", params![project_id], |row| row.get::<_, String>(0)).optional().map_err(|error| error.to_string())?
+    } else { None };
+    let (hotspot_count, membership_count) = if let Some(snapshot_id) = snapshot_id.as_ref() {
+        let hotspots = conn.query_row("SELECT COUNT(*) FROM v20_hotspots WHERE project_id = ?1 AND snapshot_id = ?2", params![project_id, snapshot_id], |row| row.get(0)).unwrap_or_default();
+        let memberships = conn.query_row("SELECT COUNT(*) FROM v20_paper_memberships WHERE project_id = ?1 AND snapshot_id = ?2", params![project_id, snapshot_id], |row| row.get(0)).unwrap_or_default();
+        (hotspots, memberships)
+    } else { (0, 0) };
+    Ok(PaperLibraryBackupInspection {
+        backup_path: path.to_string_lossy().to_string(), schema_version, paper_count, project_count,
+        snapshot_id, hotspot_count, membership_count, validation_status: "passed".to_string(),
+    })
+}
+
+fn validate_library_candidate(path: &Path, project_id: &str) -> Result<ValidatedLibraryCandidate, String> {
+    let conn = Connection::open(path).map_err(|error| format!("Cannot open staged SQLite library {:?}: {error}", path))?;
+    initialize_library_database(&conn)?;
+    let validated = validate_library_candidate_connection(&conn, project_id)?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|error| error.to_string())?;
+    Ok(validated)
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", params![table], |row| row.get::<_, i64>(0))
+        .map(|value| value != 0).map_err(|error| error.to_string())
+}
+
+fn remove_sqlite_sidecars(database_path: &Path) {
+    let path = database_path.to_string_lossy();
+    let _ = fs::remove_file(format!("{path}-wal"));
+    let _ = fs::remove_file(format!("{path}-shm"));
+}
+
+fn recover_interrupted_restore(database_dir: &Path) -> Result<(), String> {
+    let marker_path = database_dir.join("research-hotspots-v7.restore.json");
+    if !marker_path.exists() { return Ok(()); }
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&marker_path).map_err(|error| format!("Cannot read restore marker: {error}"))?)
+        .map_err(|error| format!("Cannot parse restore marker: {error}"))?;
+    let path_value = |key: &str| value.get(key).and_then(|item| item.as_str()).map(PathBuf::from);
+    let active = path_value("active").unwrap_or_else(|| database_dir.join("research-hotspots-v7.sqlite"));
+    let safety = path_value("safety");
+    let staging = path_value("staging");
+    if let Some(safety) = safety.filter(|path| path.exists()) {
+        if active.exists() {
+            remove_sqlite_sidecars(&active);
+            let failed = database_dir.join(format!("research-hotspots-v7-interrupted-restore-{}.sqlite", now_millis()));
+            fs::rename(&active, &failed).map_err(|error| format!("Cannot quarantine interrupted restored database: {error}"))?;
+        }
+        fs::rename(&safety, &active).map_err(|error| format!("Cannot recover pre-restore SQLite library: {error}"))?;
+    }
+    if let Some(staging) = staging {
+        remove_sqlite_sidecars(&staging);
+        let _ = fs::remove_file(staging);
+    }
+    let _ = fs::remove_file(marker_path);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1045,7 +1247,12 @@ fn delete_papers_from_library(app: tauri::AppHandle, database_dir: Option<String
 }
 
 #[tauri::command]
-fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperImportTaskRegistry>, input: PaperFileImportInput) -> Result<PaperFileImportStart, String> {
+fn start_paper_file_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PaperImportTaskRegistry>,
+    mutation_state: tauri::State<'_, LibraryMutationRegistry>,
+    input: PaperFileImportInput,
+) -> Result<PaperFileImportStart, String> {
     let file_path = PathBuf::from(&input.file_path);
     if !file_path.exists() {
         return Err(format!("Import file does not exist: {:?}", file_path));
@@ -1053,6 +1260,8 @@ fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperI
     if !file_path.is_file() {
         return Err(format!("Import path is not a file: {:?}", file_path));
     }
+    let target_dir = resolve_database_dir(&app, input.database_dir.clone())?;
+    let mutation_permit = mutation_state.try_acquire(&target_dir.join("research-hotspots-v7.sqlite"))?;
 
     let task_id = format!("paper-import-{}-{}", std::process::id(), now_millis());
     let file_name = file_path
@@ -1072,6 +1281,7 @@ fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperI
     let return_task_id = task_id.clone();
     let return_file_name = file_name.clone();
     thread::spawn(move || {
+        let _mutation_permit = mutation_permit;
         let result = run_paper_file_import_task(app_handle.clone(), task_id.clone(), file_name.clone(), input.database_dir, input.project_id, file_path, control);
         if let Err(error) = result {
             if !error.starts_with(IMPORT_TASK_ERROR_EMITTED_PREFIX) {
@@ -1105,10 +1315,17 @@ fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperI
 }
 
 #[tauri::command]
-fn start_mysql_paper_import(app: tauri::AppHandle, state: tauri::State<'_, PaperImportTaskRegistry>, input: MysqlPaperImportInput) -> Result<PaperFileImportStart, String> {
+fn start_mysql_paper_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PaperImportTaskRegistry>,
+    mutation_state: tauri::State<'_, LibraryMutationRegistry>,
+    input: MysqlPaperImportInput,
+) -> Result<PaperFileImportStart, String> {
     let task_id = format!("mysql-paper-import-{}-{}", std::process::id(), now_millis());
     let database = input.database.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or("research_hotspots");
     let file_name = format!("MySQL {database}.papers");
+    let target_dir = resolve_database_dir(&app, input.database_dir.clone())?;
+    let mutation_permit = mutation_state.try_acquire(&target_dir.join("research-hotspots-v7.sqlite"))?;
     let control = PaperImportTaskControl::default();
     state
         .controls
@@ -1121,6 +1338,7 @@ fn start_mysql_paper_import(app: tauri::AppHandle, state: tauri::State<'_, Paper
     let return_task_id = task_id.clone();
     let return_file_name = file_name.clone();
     thread::spawn(move || {
+        let _mutation_permit = mutation_permit;
         let result = run_mysql_paper_import_task(app_handle.clone(), task_id.clone(), file_name.clone(), input, control);
         if let Err(error) = result {
             if !error.starts_with(IMPORT_TASK_ERROR_EMITTED_PREFIX) {
@@ -1183,8 +1401,17 @@ fn control_paper_file_import(state: tauri::State<'_, PaperImportTaskRegistry>, t
 }
 
 #[tauri::command]
-fn clean_paper_library(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>) -> Result<PaperLibraryCleanResult, String> {
-    let (mut conn, _, _) = open_library_database(&app, database_dir)?;
+fn clean_paper_library(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LibraryMutationRegistry>,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<PaperLibraryCleanResult, String> {
+    let target_dir = resolve_database_dir(&app, database_dir)?;
+    let database_path = target_dir.join("research-hotspots-v7.sqlite");
+    let _permit = state.try_acquire(&database_path)?;
+    let mut conn = Connection::open(&database_path).map_err(|error| error.to_string())?;
+    initialize_library_database(&conn)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     clean_library_connection(&mut conn, &project_id)
 }
@@ -1300,6 +1527,7 @@ fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<P
 async fn cluster_paper_library(
     app: tauri::AppHandle,
     state: tauri::State<'_, ClusterTaskRegistry>,
+    mutation_state: tauri::State<'_, LibraryMutationRegistry>,
     database_dir: Option<String>,
     project_id: Option<String>,
 ) -> Result<LibraryClusterResult, String> {
@@ -1307,8 +1535,10 @@ async fn cluster_paper_library(
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
     let project_id = project_id.unwrap_or_else(default_project_id);
     let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
+    let mutation_permit = mutation_state.try_acquire(&database_path)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
+        let _mutation_permit = mutation_permit;
         cluster_library_from_database_path(database_path, &project_id)
     })
     .await
@@ -1360,6 +1590,14 @@ fn cluster_task_key(database_path: &Path, project_id: &str) -> String {
         normalized_path.make_ascii_lowercase();
     }
     format!("{}::{}", normalized_path.trim_end_matches('/'), project_id.trim())
+}
+
+fn normalized_database_key(database_path: &Path) -> String {
+    fs::canonicalize(database_path)
+        .unwrap_or_else(|_| database_path.to_path_buf())
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase()
 }
 
 fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<LibraryClusterResult, String> {
@@ -1416,26 +1654,100 @@ fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<Lib
     }
 
     let mut sorted_groups = groups.into_values().collect::<Vec<_>>();
-    sorted_groups.sort_by(|a, b| b.paper_count.cmp(&a.paper_count).then_with(|| a.field.cmp(&b.field)));
+    sorted_groups.sort_by(|a, b| b.paper_count.cmp(&a.paper_count).then_with(|| a.field.cmp(&b.field)).then_with(|| a.keyword.cmp(&b.keyword)));
 
     let timestamp = now_millis_string();
-    let mut hotspots = sorted_groups
-        .into_iter()
-        .take(160)
+    let retained_groups = sorted_groups.iter().take(160).cloned().collect::<Vec<_>>();
+    let mut hotspots = retained_groups
+        .iter()
+        .cloned()
         .enumerate()
         .map(|(index, group)| cluster_group_to_hotspot(project_id, group, index, &timestamp))
         .collect::<Vec<_>>();
     assign_similar_hotspots(&mut hotspots);
 
+    let retained_index = retained_groups.iter().enumerate()
+        .map(|(index, group)| (format!("{}::{}", group.field, group.keyword), index))
+        .collect::<HashMap<_, _>>();
+    let mut memberships = Vec::with_capacity(before_count as usize);
+    for group in &sorted_groups {
+        let group_key = format!("{}::{}", group.field, group.keyword);
+        let target_index = retained_index.get(&group_key).copied().unwrap_or_else(|| {
+            hotspots.iter().enumerate()
+                .filter(|(_, hotspot)| hotspot.field == group.field)
+                .max_by(|(_, left), (_, right)| hotspot_group_overlap(left, group)
+                    .partial_cmp(&hotspot_group_overlap(right, group)).unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.paper_count.cmp(&right.paper_count)))
+                .map(|(index, _)| index)
+                .unwrap_or_else(|| hotspots.iter().enumerate().max_by_key(|(_, hotspot)| hotspot.paper_count).map(|(index, _)| index).unwrap_or(0))
+        });
+        let hotspot = &hotspots[target_index];
+        let group_score = hotspot_group_overlap(hotspot, group);
+        for candidate in &group.representative_candidates {
+            memberships.push(v20_membership_for_candidate(hotspot, candidate, group_score));
+        }
+    }
+
+    let snapshot_id = format!("{}:v20:{}", project_id, timestamp);
+    let snapshot_hotspots = hotspots.iter().map(|hotspot| {
+        Ok(SnapshotHotspot {
+            hotspot_id: hotspot.id.clone(),
+            payload_json: serde_json::to_string(hotspot).map_err(|error| error.to_string())?,
+            x: hotspot.coordinates.x as f64,
+            y: hotspot.coordinates.y as f64,
+            z: hotspot.coordinates.z as f64,
+            paper_count: hotspot.paper_count,
+            updated_at: hotspot.updated_at.clone(),
+        })
+    }).collect::<Result<Vec<_>, String>>()?;
+    write_snapshot_transaction(conn, &SnapshotWriteInput {
+        snapshot_id: snapshot_id.clone(),
+        project_id: project_id.to_string(),
+        algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+        paper_count: before_count,
+        created_at: timestamp.clone(),
+        hotspots: snapshot_hotspots,
+        memberships: memberships.clone(),
+    })?;
+
     Ok(LibraryClusterResult {
         before_count,
         cluster_count: hotspots.len() as i64,
+        snapshot_id,
+        membership_count: memberships.len() as i64,
         summary: format!(
-            "已从 SQLite 论文库 {before_count} 篇文献生成 {} 个 V20 热点；已写入关键词集中度、代表论文覆盖、近期动量和来源多样性。",
-            hotspots.len()
+            "已生成统一 V20 快照：{before_count} 篇论文、{} 个热点、{} 条论文归属。",
+            hotspots.len(), memberships.len()
         ),
         hotspots,
     })
+}
+
+fn hotspot_group_overlap(hotspot: &HotspotRecord, group: &ClusterGroup) -> f64 {
+    let total = group.keyword_counts.values().copied().sum::<i64>().max(1) as f64;
+    hotspot.keywords.iter().take(10)
+        .map(|keyword| *group.keyword_counts.get(keyword).unwrap_or(&0) as f64)
+        .sum::<f64>() / total
+}
+
+fn v20_membership_for_candidate(hotspot: &HotspotRecord, candidate: &RepresentativeCandidate, group_score: f64) -> SnapshotMembership {
+    let hash_a = stable_hash(&format!("{}::x", candidate.id)) as f64 / u32::MAX as f64;
+    let hash_b = stable_hash(&format!("{}::y", candidate.id)) as f64 / u32::MAX as f64;
+    let hash_c = stable_hash(&format!("{}::z", candidate.id)) as f64 / u32::MAX as f64;
+    let radius = 1.6 + 8.4 * hash_a.sqrt();
+    let theta = hash_b * std::f64::consts::TAU;
+    let vertical = (hash_c * 2.0 - 1.0) * radius * 0.72;
+    let radial = (radius * radius - vertical * vertical).max(0.0).sqrt();
+    let representative_rank = hotspot.analysis.evidence_paper_ids.iter()
+        .position(|id| id == &candidate.id).map(|index| index as i64 + 1);
+    SnapshotMembership {
+        paper_id: candidate.id.clone(), hotspot_id: hotspot.id.clone(),
+        x: hotspot.coordinates.x as f64 + theta.cos() * radial,
+        y: hotspot.coordinates.y as f64 + theta.sin() * radial,
+        z: hotspot.coordinates.z as f64 + vertical,
+        representative_rank,
+        score: round_metric((0.45 + group_score * 0.45 + candidate.evidence_score.min(4.0) * 0.025).min(1.0)),
+    }
 }
 
 pub fn export_star_map_from_database_path(database_path: PathBuf, project_id: Option<String>) -> Result<StarMapExportResult, String> {
@@ -2039,6 +2351,104 @@ fn get_app17_galaxy_payload(app: tauri::AppHandle, input: App17GalaxyPayloadInpu
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
     build_app17_galaxy_payload(&conn, &project_id, &mode)
+}
+
+#[tauri::command]
+fn get_v20_analysis_state(app: tauri::AppHandle, input: App17GalaxyPayloadInput) -> Result<Option<AnalysisState>, String> {
+    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    read_analysis_state(&conn, &project_id)
+}
+
+#[tauri::command]
+fn get_v20_hotspot_snapshot(app: tauri::AppHandle, input: App17GalaxyPayloadInput) -> Result<V20HotspotSnapshot, String> {
+    let (conn, _, database_path) = open_library_database(&app, input.database_dir)?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let database_key = normalized_database_key(&database_path);
+    let Some(rows) = read_unified_hotspot_rows(&conn, &project_id)? else {
+        return Ok(V20HotspotSnapshot {
+            database_key,
+            project_id,
+            active_snapshot_id: String::new(),
+            snapshot_id: None,
+            algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+            paper_count: 0,
+            hotspot_count: 0,
+            membership_count: 0,
+            generated_at: now_millis_string(),
+            hotspots: Vec::new(),
+        });
+    };
+    let hotspots = rows.hotspots.iter()
+        .map(|row| serde_json::from_str::<HotspotRecord>(&row.payload_json).map_err(|error| format!("Invalid V20 hotspot payload {}: {error}", row.hotspot_id)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(V20HotspotSnapshot {
+        database_key,
+        project_id,
+        active_snapshot_id: rows.state.active_snapshot_id.clone(),
+        snapshot_id: Some(rows.state.active_snapshot_id),
+        algorithm_version: rows.state.algorithm_version,
+        paper_count: rows.state.paper_count,
+        hotspot_count: rows.state.hotspot_count,
+        membership_count: rows.state.membership_count,
+        generated_at: rows.state.generated_at,
+        hotspots,
+    })
+}
+
+#[tauri::command]
+fn get_v20_galaxy_payload(app: tauri::AppHandle, input: App17GalaxyPayloadInput) -> Result<V20GalaxyPayload, String> {
+    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
+    build_v20_galaxy_payload(&conn, &project_id, &mode)
+}
+
+fn build_v20_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -> Result<V20GalaxyPayload, String> {
+    let Some(rows) = read_unified_galaxy_rows(conn, project_id)? else {
+        return Ok(V20GalaxyPayload {
+            ready: false,
+            message: "需要生成统一星图快照。请前往分析流水线显式运行热点建模。".to_string(),
+            source: "none".to_string(), mode: mode.to_string(), generated_at: now_millis_string(), snapshot_id: None,
+            paper_count: 0, hotspot_count: 0, topic_count: 0, fields: Vec::new(), papers: Vec::new(), hotspots: Vec::new(), hotspot_records: Vec::new(),
+        });
+    };
+    let hotspot_records = rows.hotspots.iter()
+        .map(|row| serde_json::from_str::<HotspotRecord>(&row.payload_json).map_err(|error| format!("Invalid V20 hotspot payload {}: {error}", row.hotspot_id)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let hotspot_by_id = hotspot_records.iter().map(|hotspot| (hotspot.id.as_str(), hotspot)).collect::<HashMap<_, _>>();
+    let mut years = HashMap::new();
+    let mut year_stmt = conn.prepare("SELECT id, year FROM papers WHERE project_id = ?1").map_err(|error| error.to_string())?;
+    for row in year_stmt.query_map(params![project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))).map_err(|error| error.to_string())? {
+        let (id, year) = row.map_err(|error| error.to_string())?;
+        years.insert(id, year);
+    }
+    let papers = rows.memberships.iter().filter_map(|membership| {
+        let hotspot = hotspot_by_id.get(membership.hotspot_id.as_str())?;
+        Some(App17GalaxyPaperPoint {
+            raw_paper_id: membership.paper_id.clone(), scoped_paper_id: scoped_id(project_id, &membership.paper_id),
+            field: hotspot.field.clone(), topic_id: hotspot.topic_id,
+            x: membership.x, y: membership.y, z: membership.z,
+            year: years.get(&membership.paper_id).copied().flatten(),
+            color: app17_topic_color(&hotspot.field, hotspot.topic_id),
+            size: if membership.representative_rank.is_some_and(|rank| rank <= 10) { 3.6 } else { 2.5 },
+        })
+    }).collect::<Vec<_>>();
+    let hotspots = hotspot_records.iter().enumerate().map(|(index, hotspot)| App17GalaxyHotspotPoint {
+        id: hotspot.id.clone(), field: hotspot.field.clone(), topic_id: hotspot.topic_id,
+        title: hotspot.title.clone(), label: hotspot.label.clone(), summary: hotspot.summary.clone(), trend: hotspot.trend.clone(),
+        paper_count: hotspot.paper_count, x: hotspot.coordinates.x as f64, y: hotspot.coordinates.y as f64, z: hotspot.coordinates.z as f64,
+        color: app17_palette_color(index), size: (10.0 + (hotspot.paper_count as f64).sqrt() * 0.7).clamp(10.0, 26.0),
+        keywords: hotspot.keywords.clone(), review: None,
+    }).collect::<Vec<_>>();
+    let mut fields = hotspot_records.iter().map(|hotspot| hotspot.field.clone()).collect::<Vec<_>>();
+    fields.sort(); fields.dedup();
+    Ok(V20GalaxyPayload {
+        ready: !papers.is_empty() && !hotspots.is_empty(),
+        message: format!("已加载统一 V20 快照：{} 篇论文、{} 个热点。", papers.len(), hotspots.len()),
+        source: "v20-sqlite".to_string(), mode: mode.to_string(), generated_at: rows.state.generated_at.clone(), snapshot_id: Some(rows.state.active_snapshot_id),
+        paper_count: papers.len(), hotspot_count: hotspots.len(), topic_count: hotspots.len(), fields, papers, hotspots, hotspot_records,
+    })
 }
 
 #[tauri::command]
@@ -4129,6 +4539,7 @@ fn check_writable_dir(path: &PathBuf, label: &str, errors: &mut Vec<String>) -> 
 fn open_library_database(app: &tauri::AppHandle, database_dir: Option<String>) -> Result<(Connection, PathBuf, PathBuf), String> {
     let database_dir = resolve_database_dir(app, database_dir)?;
     fs::create_dir_all(&database_dir).map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    recover_interrupted_restore(&database_dir)?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
     let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     initialize_library_database(&conn)?;
@@ -4232,6 +4643,7 @@ fn initialize_library_database(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     let _ = conn.execute("ALTER TABLE papers ADD COLUMN search_blob TEXT NOT NULL DEFAULT ''", []);
+    research_hotspots_core::ensure_v20_schema(conn)?;
     Ok(())
 }
 
@@ -5430,11 +5842,13 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PaperImportTaskRegistry::default())
         .manage(ClusterTaskRegistry::default())
+        .manage(LibraryMutationRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             paper_library_status,
             backup_paper_library,
+            inspect_paper_library_backup,
             restore_paper_library,
             query_paper_library,
             paper_library_facets,
@@ -5454,6 +5868,9 @@ pub fn run() {
             load_app17_galaxy,
             get_app17_galaxy_payload,
             get_app17_hotspot_evidence,
+            get_v20_analysis_state,
+            get_v20_hotspot_snapshot,
+            get_v20_galaxy_payload,
             write_text_file,
             read_markdown_exports,
             run_cleaner_worker,

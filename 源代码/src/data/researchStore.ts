@@ -14,6 +14,8 @@ import type {
   ResearchReport,
   SourceKind,
   TaskLog,
+  V20CacheState,
+  V20HotspotSnapshot,
 } from "../types";
 import { nowIso } from "../lib/dates";
 
@@ -147,17 +149,11 @@ export async function seedResearchDataIfEmpty() {
     await Promise.all(seedPapers(projectId).map((paper) => db.put(PAPER_STORE, paper)));
   }
 
-  const [paperSample, hotspots, jobs, settings, logs] = await Promise.all([
-    getPaperSeedSample(db, projectId, 200),
-    getHotspots(),
+  const [jobs, settings, logs] = await Promise.all([
     getPipelineJobs(),
     getAiSettings(),
     getTaskLogs(),
   ]);
-
-  if (hotspots.length === 0 || hotspots.every((hotspot) => ["Artificial Intelligence:1", "Computational Biology:2", "Algebraic Geometry:3"].includes(hotspot.id))) {
-    await replaceHotspots(seedHotspotsFromPapers(projectId, paperSample));
-  }
 
   if (jobs.length === 0 || !jobs.some((job) => job.stage === "name")) {
     await replacePipelineJobs(seedJobs(projectId));
@@ -194,7 +190,8 @@ export async function setActiveProject(projectId: string) {
   const db = await getDb();
   const project = await db.get(PROJECT_STORE, projectId);
   if (!project) throw new Error("项目不存在。");
-  await db.put(META_STORE, { id: "main", activeProjectId: projectId, updatedAt: nowIso() });
+  const meta = await db.get(META_STORE, "main");
+  await db.put(META_STORE, { ...meta, id: "main", activeProjectId: projectId, updatedAt: nowIso() });
   await db.put(PROJECT_STORE, { ...project, updatedAt: nowIso() });
   return project;
 }
@@ -210,7 +207,8 @@ export async function createProject(name: string, description = "") {
     updatedAt: timestamp,
   };
   await db.put(PROJECT_STORE, project);
-  await db.put(META_STORE, { id: "main", activeProjectId: project.id, updatedAt: timestamp });
+  const meta = await db.get(META_STORE, "main");
+  await db.put(META_STORE, { ...meta, id: "main", activeProjectId: project.id, updatedAt: timestamp });
   await Promise.all(seedJobs(project.id).map((job) => db.put(JOB_STORE, job)));
   await db.put(SETTINGS_STORE, defaultSettings(project.id));
   return project;
@@ -239,7 +237,10 @@ export async function deleteProject(projectId: string) {
     db.delete(SETTINGS_STORE, settingsKey(projectId)),
     db.delete(PROJECT_STORE, projectId),
   ]);
-  await db.put(META_STORE, { id: "main", activeProjectId: DEFAULT_PROJECT_ID, updatedAt: nowIso() });
+  const meta = await db.get(META_STORE, "main");
+  const v20CacheStates = { ...(meta?.v20CacheStates ?? {}) };
+  delete v20CacheStates[projectId];
+  await db.put(META_STORE, { ...meta, id: "main", activeProjectId: DEFAULT_PROJECT_ID, v20CacheStates, updatedAt: nowIso() });
 }
 
 export async function getPapers() {
@@ -337,7 +338,60 @@ export async function deletePapers(ids: string[]) {
 export async function getHotspots() {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
-  return filterProject(await db.getAll(HOTSPOT_STORE), projectId).sort((a, b) => b.paperCount - a.paperCount);
+  const state = (await db.get(META_STORE, "main"))?.v20CacheStates?.[projectId];
+  if (!state?.snapshotId) return [];
+  return filterProject(await db.getAll(HOTSPOT_STORE), projectId)
+    .filter((hotspot) => hotspot.databaseKey === state.databaseKey && hotspot.snapshotId === state.snapshotId)
+    .sort((a, b) => b.paperCount - a.paperCount);
+}
+
+export async function getV20CacheState(projectId?: string) {
+  const db = await getDb();
+  const activeProjectId = projectId ?? await ensureProjectState(db);
+  return (await db.get(META_STORE, "main"))?.v20CacheStates?.[activeProjectId];
+}
+
+export async function replaceV20HotspotCache(snapshot: V20HotspotSnapshot) {
+  const db = await getDb();
+  const timestamp = nowIso();
+  const tx = db.transaction([HOTSPOT_STORE, META_STORE], "readwrite");
+  const hotspotStore = tx.objectStore(HOTSPOT_STORE);
+  let cursor = await hotspotStore.openCursor();
+  while (cursor) {
+    const hotspot = cursor.value;
+    if ((hotspot.projectId ?? DEFAULT_PROJECT_ID) === snapshot.projectId) await cursor.delete();
+    cursor = await cursor.continue();
+  }
+  if (snapshot.snapshotId) {
+    for (const hotspot of snapshot.hotspots) {
+      await hotspotStore.put({
+        ...hotspot,
+        id: scopedId(snapshot.projectId, hotspot.id),
+        projectId: snapshot.projectId,
+        databaseKey: snapshot.databaseKey,
+        snapshotId: snapshot.snapshotId,
+        updatedAt: hotspot.updatedAt || timestamp,
+      });
+    }
+  }
+  const metaStore = tx.objectStore(META_STORE);
+  const meta = await metaStore.get("main") ?? { id: "main" as const, activeProjectId: snapshot.projectId, updatedAt: timestamp };
+  const cacheState: V20CacheState = {
+    databaseKey: snapshot.databaseKey,
+    projectId: snapshot.projectId,
+    snapshotId: snapshot.snapshotId,
+    paperCount: snapshot.paperCount,
+    hotspotCount: snapshot.hotspotCount,
+    membershipCount: snapshot.membershipCount,
+    generatedAt: snapshot.generatedAt,
+  };
+  await metaStore.put({
+    ...meta,
+    v20CacheStates: { ...(meta.v20CacheStates ?? {}), [snapshot.projectId]: cacheState },
+    updatedAt: timestamp,
+  });
+  await tx.done;
+  return cacheState;
 }
 
 export async function saveHotspot(hotspot: Hotspot) {
@@ -351,9 +405,17 @@ export async function saveHotspot(hotspot: Hotspot) {
 export async function replaceHotspots(hotspots: Hotspot[]) {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
-  await deleteRowsByProject(db, HOTSPOT_STORE, projectId);
   const timestamp = nowIso();
-  await Promise.all(hotspots.map((hotspot) => db.put(HOTSPOT_STORE, { ...hotspot, id: scopedId(projectId, hotspot.id), projectId, updatedAt: timestamp })));
+  const tx = db.transaction(HOTSPOT_STORE, "readwrite");
+  const store = tx.objectStore(HOTSPOT_STORE);
+  const existing = await store.getAll();
+  for (const hotspot of existing) {
+    if (hotspot.projectId === projectId || (!hotspot.projectId && projectId === DEFAULT_PROJECT_ID)) await store.delete(hotspot.id);
+  }
+  for (const hotspot of hotspots) {
+    await store.put({ ...hotspot, id: scopedId(projectId, hotspot.id), projectId, updatedAt: timestamp });
+  }
+  await tx.done;
 }
 
 export async function getReports() {
@@ -365,9 +427,11 @@ export async function getReports() {
 export async function saveReport(report: Omit<ResearchReport, "id" | "createdAt" | "updatedAt">) {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
+  const snapshotId = report.snapshotId ?? (await db.get(META_STORE, "main"))?.v20CacheStates?.[projectId]?.snapshotId;
   const timestamp = nowIso();
   const saved: ResearchReport = {
     ...report,
+    snapshotId,
     id: scopedId(projectId, crypto.randomUUID()),
     projectId,
     createdAt: timestamp,
@@ -486,22 +550,22 @@ export async function saveAiSettings(settings: AiSettings) {
 export async function exportBackupData(): Promise<DataBackup> {
   const db = await getDb();
   const activeProjectId = await ensureProjectState(db);
-  const [projects, papers, hotspots, reports, jobs, taskLogs, settings] = await Promise.all([
+  const [projects, papers, reports, jobs, taskLogs, settings] = await Promise.all([
     db.getAll(PROJECT_STORE),
     db.getAll(PAPER_STORE),
-    db.getAll(HOTSPOT_STORE),
     db.getAll(REPORT_STORE),
     db.getAll(JOB_STORE),
     db.getAll(TASK_LOG_STORE),
     getAiSettings(),
   ]);
   return {
+    schemaVersion: 2,
     version: __APP_VERSION__,
     exportedAt: nowIso(),
     projects,
     activeProjectId,
     papers,
-    hotspots,
+    hotspots: [],
     reports,
     jobs,
     settings,
@@ -512,32 +576,94 @@ export async function exportBackupData(): Promise<DataBackup> {
 export async function restoreBackupData(backup: DataBackup) {
   const db = await getDb();
   const timestamp = nowIso();
-  await Promise.all([
-    db.clear(PROJECT_STORE),
-    db.clear(PAPER_STORE),
-    db.clear(HOTSPOT_STORE),
-    db.clear(REPORT_STORE),
-    db.clear(JOB_STORE),
-    db.clear(TASK_LOG_STORE),
-  ]);
-
-  const projects = backup.projects?.length ? backup.projects : [defaultProject()];
-  await Promise.all(projects.map((project) => db.put(PROJECT_STORE, { ...project, updatedAt: project.updatedAt ?? timestamp })));
-  await Promise.all((backup.papers ?? []).map((paper) => db.put(PAPER_STORE, { ...paper, projectId: paper.projectId ?? backup.activeProjectId ?? DEFAULT_PROJECT_ID, updatedAt: paper.updatedAt ?? timestamp })));
-  await Promise.all((backup.hotspots ?? []).map((hotspot) => db.put(HOTSPOT_STORE, { ...hotspot, projectId: hotspot.projectId ?? backup.activeProjectId ?? DEFAULT_PROJECT_ID, updatedAt: hotspot.updatedAt ?? timestamp })));
-  await Promise.all((backup.reports ?? []).map((report) => db.put(REPORT_STORE, { ...report, projectId: report.projectId ?? backup.activeProjectId ?? DEFAULT_PROJECT_ID, updatedAt: report.updatedAt ?? timestamp })));
-  await Promise.all((backup.jobs ?? []).map((job) => db.put(JOB_STORE, { ...job, projectId: job.projectId ?? backup.activeProjectId ?? DEFAULT_PROJECT_ID, updatedAt: job.updatedAt ?? timestamp })));
-  await Promise.all((backup.taskLogs ?? []).map((log) => db.put(TASK_LOG_STORE, { ...log, projectId: log.projectId ?? backup.activeProjectId ?? DEFAULT_PROJECT_ID })));
-  const activeProjectId = backup.activeProjectId ?? projects[0].id;
-  await db.put(META_STORE, { id: "main", activeProjectId, updatedAt: timestamp });
-  await db.put(SETTINGS_STORE, normalizeSettings(backup.settings ?? defaultSettings(activeProjectId), activeProjectId));
+  const normalized = normalizeBackupForRestore(backup, timestamp);
+  const tx = db.transaction(
+    [PROJECT_STORE, META_STORE, PAPER_STORE, HOTSPOT_STORE, REPORT_STORE, JOB_STORE, SETTINGS_STORE, TASK_LOG_STORE],
+    "readwrite",
+  );
+  try {
+    await Promise.all([
+      tx.objectStore(PROJECT_STORE).clear(),
+      tx.objectStore(META_STORE).clear(),
+      tx.objectStore(PAPER_STORE).clear(),
+      tx.objectStore(HOTSPOT_STORE).clear(),
+      tx.objectStore(REPORT_STORE).clear(),
+      tx.objectStore(JOB_STORE).clear(),
+      tx.objectStore(SETTINGS_STORE).clear(),
+      tx.objectStore(TASK_LOG_STORE).clear(),
+    ]);
+    for (const project of normalized.projects) await tx.objectStore(PROJECT_STORE).put(project);
+    for (const paper of normalized.papers) await tx.objectStore(PAPER_STORE).put(paper);
+    for (const report of normalized.reports) await tx.objectStore(REPORT_STORE).put(report);
+    for (const job of normalized.jobs) await tx.objectStore(JOB_STORE).put(job);
+    for (const log of normalized.taskLogs) await tx.objectStore(TASK_LOG_STORE).put(log);
+    await tx.objectStore(META_STORE).put({ id: "main", activeProjectId: normalized.activeProjectId, v20CacheStates: {}, updatedAt: timestamp });
+    await tx.objectStore(SETTINGS_STORE).put(normalized.settings);
+    await tx.done;
+  } catch (error) {
+    try { tx.abort(); } catch { /* the browser may already have aborted the transaction */ }
+    throw error;
+  }
 
   return {
-    paperCount: backup.papers?.length ?? 0,
-    hotspotCount: backup.hotspots?.length ?? 0,
-    reportCount: backup.reports?.length ?? 0,
-    taskLogCount: backup.taskLogs?.length ?? 0,
+    paperCount: normalized.papers.length,
+    hotspotCount: 0,
+    reportCount: normalized.reports.length,
+    taskLogCount: normalized.taskLogs.length,
   };
+}
+
+function normalizeBackupForRestore(backup: DataBackup, timestamp: string) {
+  if (!backup || typeof backup !== "object") throw new Error("备份文件格式无效。");
+  for (const key of ["papers", "reports", "jobs", "taskLogs"] as const) {
+    if (!Array.isArray(backup[key])) throw new Error(`备份字段 ${key} 必须是数组。`);
+  }
+  if (backup.projects !== undefined && !Array.isArray(backup.projects)) throw new Error("备份字段 projects 必须是数组。");
+  if (backup.schemaVersion !== undefined && backup.schemaVersion !== 1 && backup.schemaVersion !== 2) {
+    throw new Error(`不支持的备份 schemaVersion：${backup.schemaVersion}。`);
+  }
+  const projects = backup.projects?.length
+    ? backup.projects.map((project) => ({ ...project, updatedAt: project.updatedAt ?? timestamp }))
+    : [defaultProject(timestamp)];
+  assertUniqueIds(projects, "项目");
+  const projectIds = new Set(projects.map((project) => project.id));
+  if (backup.activeProjectId && !projectIds.has(backup.activeProjectId)) throw new Error(`活动项目不存在：${backup.activeProjectId}。`);
+  const activeProjectId = backup.activeProjectId && projectIds.has(backup.activeProjectId) ? backup.activeProjectId : projects[0].id;
+  const normalizeProjectId = (projectId?: string) => {
+    const value = projectId ?? activeProjectId;
+    if (!projectIds.has(value)) throw new Error(`备份数据引用了不存在的项目：${value}。`);
+    return value;
+  };
+  const papers = backup.papers.map((paper) => ({ ...paper, projectId: normalizeProjectId(paper.projectId), updatedAt: paper.updatedAt ?? timestamp }));
+  const reports = backup.reports.map((report) => ({
+    ...report,
+    projectId: normalizeProjectId(report.projectId),
+    reviewStatus: report.reviewStatus ?? "needs-review" as const,
+    updatedAt: report.updatedAt ?? timestamp,
+  }));
+  const jobs = backup.jobs.map((job) => ({ ...job, projectId: normalizeProjectId(job.projectId), updatedAt: job.updatedAt ?? timestamp }));
+  const taskLogs = backup.taskLogs.map((log) => ({ ...log, projectId: normalizeProjectId(log.projectId) }));
+  assertUniqueIds(papers, "论文");
+  assertUniqueIds(reports, "报告");
+  assertUniqueIds(jobs, "流水线任务");
+  assertUniqueIds(taskLogs, "任务日志");
+  const restoredSettings = backup.settings ?? defaultSettings(activeProjectId);
+  const settings = normalizeSettings({
+    ...restoredSettings,
+    manualApiKey: "",
+    apiCredentialConfigured: false,
+    mysql: { ...restoredSettings.mysql, password: "", credentialConfigured: false },
+  }, activeProjectId);
+  return { projects, activeProjectId, papers, reports, jobs, taskLogs, settings };
+}
+
+function assertUniqueIds(rows: Array<{ id: string }>, label: string) {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (!row?.id || typeof row.id !== "string") throw new Error(`${label}记录缺少有效 ID。`);
+    if (ids.has(row.id)) throw new Error(`${label}记录存在重复 ID：${row.id}。`);
+    ids.add(row.id);
+  }
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
@@ -566,7 +692,7 @@ async function ensureProjectState(db: IDBPDatabase<ResearchDb>) {
   const meta = await db.get(META_STORE, "main");
   const activeProjectId = meta?.activeProjectId ?? DEFAULT_PROJECT_ID;
   if (!meta || !(await db.get(PROJECT_STORE, activeProjectId))) {
-    await db.put(META_STORE, { id: "main", activeProjectId: DEFAULT_PROJECT_ID, updatedAt: timestamp });
+    await db.put(META_STORE, { ...meta, id: "main", activeProjectId: DEFAULT_PROJECT_ID, updatedAt: timestamp });
     return DEFAULT_PROJECT_ID;
   }
   const activeProject = await db.get(PROJECT_STORE, activeProjectId);

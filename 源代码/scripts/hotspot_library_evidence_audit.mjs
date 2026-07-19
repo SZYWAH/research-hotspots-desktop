@@ -181,8 +181,22 @@ const hotspotLibraryEnd = appSource.indexOf("function EvidenceMini(", hotspotLib
 assert.ok(hotspotLibraryStart >= 0 && hotspotLibraryEnd > hotspotLibraryStart);
 const hotspotLibrarySource = appSource.slice(hotspotLibraryStart, hotspotLibraryEnd);
 assert.match(hotspotLibrarySource, /loadPersistedHotspotEvidence\s*\(/);
+assert.match(hotspotLibrarySource, /hotspot\.source === "seed"/);
+assert.match(hotspotLibrarySource, /当前展示的是内置样例热点/);
+assert.match(hotspotLibrarySource, /data-hotspot-source=/);
+assert.match(hotspotLibrarySource, /前往热点建模/);
+assert.match(hotspotLibrarySource, /onNavigate\("pipeline"\)/);
 assert.doesNotMatch(hotspotLibrarySource, /exportHotspotEvidence\s*\(/);
 assert.doesNotMatch(hotspotLibrarySource, /cluster_paper_library|cluster_library_connection/);
+
+const pipelineViewStart = appSource.indexOf("function PipelineView(");
+const pipelineViewEnd = appSource.indexOf("function LogsView(", pipelineViewStart);
+assert.ok(pipelineViewStart >= 0 && pipelineViewEnd > pipelineViewStart);
+const pipelineViewSource = appSource.slice(pipelineViewStart, pipelineViewEnd);
+assert.match(pipelineViewSource, /hotspot\.source === "worker"/);
+assert.match(pipelineViewSource, /hotspot\.source !== "seed"/);
+assert.match(pipelineViewSource, /hotspot\.analysis\?\.evidencePaperIds\.length/);
+assert.match(pipelineViewSource, /当前仅有样例热点，请先运行热点建模/);
 
 console.log(JSON.stringify({
   status: "passed",
@@ -198,6 +212,8 @@ console.log(JSON.stringify({
     "failure-not-cached",
     "lru-bound",
     "pending-single-flight-beyond-lru",
+    "seed-hotspot-ui-disclosure",
+    "seed-hotspot-pipeline-state",
     "navigation-source-never-reclusters",
   ],
 }, null, 2));

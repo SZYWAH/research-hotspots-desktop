@@ -9,6 +9,11 @@ default-run = "research-hotspots-desktop"
 [lib]
 name = "research_hotspots_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+test = false
+
+[workspace]
+members = ["core"]
+resolver = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -21,3 +26,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 csv = "1"
+sha2 = "0.10"
+fs2 = "0.4"
+research-hotspots-core = { path = "core" }
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["sync", "time", "macros"] }
