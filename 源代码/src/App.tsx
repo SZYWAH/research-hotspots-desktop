@@ -75,6 +75,7 @@ threeConsole?.((type, message, ...args) => {
 
 import {
   clearTaskLogs,
+  approveReport,
   countIndexedDbPapers,
   createProject,
   deleteProject,
@@ -1873,28 +1874,20 @@ function SearchWorkspace({
     setBusy(mode === "deep" ? "正在生成深版综述..." : "正在生成简版综述...");
     try {
       const generated = await generateResearchReport({ topic: query, papers: reportPapers, mode, discipline, settings, options: reportOptions });
-      const saved = await saveReport({
-        topic: query,
-        mode,
-        discipline,
-        content: generated.content,
-        paperIds: reportPapers.map((paper) => paper.id),
-        metrics: generated.metrics,
-        evidenceProfile: generated.evidenceProfile,
-      });
-      await saveTaskLog({
-        stage: "review",
-        title: "AI 综述生成",
-        status: "done",
+      const reviewGate = reportReviewGate(generated.content, reportPapers);
+      const { report: saved } = await saveReportWithTaskLog({
+        topic: query, mode, discipline, content: generated.content,
+        paperIds: reportPapers.map((paper) => paper.id), metrics: generated.metrics,
+        evidenceProfile: generated.evidenceProfile, ...reviewGate,
+      }, {
+        stage: "review", title: "AI 综述生成", status: "done",
         inputSummary: `${query} / ${mode} / ${reportPapers.length} 篇文献`,
-        outputSummary: `已生成并保存报告：${saved.topic}`,
-        rawInput,
-        rawOutput: generated.content,
-        durationMs: Math.round(performance.now() - started),
+        outputSummary: reviewGate.reviewStatus === "needs-review" ? "报告已保存为待复核草稿。" : `已生成并保存报告：${query}`,
+        rawInput, rawOutput: generated.content, durationMs: Math.round(performance.now() - started),
       });
       setCurrentReport(saved);
       await onRefresh();
-      onNotice("综述已保存到报告库。");
+      onNotice(reviewGate.reviewStatus === "needs-review" ? "综述风险较高，已保存为待复核草稿并禁止正式导出。" : "综述已保存到报告库。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "报告生成失败。";
       await saveTaskLog({
@@ -1934,6 +1927,7 @@ function SearchWorkspace({
         paperIds: reportPapers.map((paper) => paper.id),
         metrics: generated.metrics,
         evidenceProfile: generated.evidenceProfile,
+        ...reportReviewGate(generated.content, reportPapers),
       });
       setCurrentReport(saved);
       await onRefresh();
@@ -4459,6 +4453,7 @@ function HotspotLibrary({
         paperIds: papersFromEvidence.map((paper) => paper.id),
         metrics: evaluateReportQuality(content, papersFromEvidence),
         evidenceProfile,
+        ...reportReviewGate(content, papersFromEvidence),
       });
       await saveTaskLog({
         stage: "review",
@@ -4816,7 +4811,8 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
   }, [mode, query, reports, sort]);
   const selected = filteredReports.find((report) => report.id === selectedId) ?? filteredReports[0] ?? reports[0];
   const canUseEvidence = Boolean(selected && !bindingLoading && selectedPapers.length > 0 && missingPaperIds.length === 0);
-  const audit = useMemo<ReportAudit | null>(() => (selected ? auditReport(selected.content, selectedPapers) : null), [selected, selectedPapers]);
+  const audit = useMemo<ReportAudit | null>(() => (selected ? selected.auditSnapshot ?? auditReport(selected.content, selectedPapers) : null), [selected, selectedPapers]);
+  const formalExportAllowed = selected?.reviewStatus === "approved";
   const evidenceProfile = useMemo(() => (selected ? selected.evidenceProfile ?? buildReportEvidenceProfile(selectedPapers) : null), [selected, selectedPapers]);
   const selectedModeLabel = selected ? ({ simple: "简版", deep: "深版", revised: "修订版" } as Record<ResearchReport["mode"], string>)[selected.mode] : "";
   const boundPaperIdCount = selected ? new Set(selected.paperIds ?? []).size : 0;
@@ -4893,6 +4889,10 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
 
   async function exportSelected(format: "md" | "html") {
     if (!selected) return;
+    if (!formalExportAllowed) {
+      onNotice("该报告仍是待复核草稿，人工确认或修订后才能正式导出。");
+      return;
+    }
     if (format === "html" && !canUseEvidence) {
       onNotice("HTML 证据导出需要完整绑定文献；可先导出 Markdown 原文。");
       return;
@@ -4903,6 +4903,13 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
     const content = format === "html" ? reportToHtml(selected, selectedPapers) : selected.content;
     await writeTextFile(dir ? `${dir}\\${fileName}` : fileName, content);
     onNotice(format === "html" ? "HTML 报告已导出。" : "Markdown 报告已导出。");
+  }
+
+  async function approveSelectedReport() {
+    if (!selected) return;
+    await approveReport(selected.id, "local-user");
+    await onRefresh();
+    onNotice("已人工确认报告，可进行正式导出。");
   }
 
   async function regenerateSection() {
@@ -4933,6 +4940,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
         paperIds: selectedPapers.map((paper) => paper.id),
         metrics: generated.metrics,
         evidenceProfile: generated.evidenceProfile,
+        ...reportReviewGate(generated.content, selectedPapers),
       });
       await onRefresh();
       onNotice("指定章节重写版已保存为修订报告。");
@@ -4984,7 +4992,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
           {filteredReports.map((report) => (
             <button key={report.id} className={`hotspot-row ${selected?.id === report.id ? "hotspot-row-active" : ""}`} onClick={() => setSelectedId(report.id)}>
               <span>{report.topic}</span>
-              <small>{report.mode === "simple" ? "简版" : report.mode === "deep" ? "深版" : "修订版"} | {formatDateTime(report.createdAt)}</small>
+              <small>{report.mode === "simple" ? "简版" : report.mode === "deep" ? "深版" : "修订版"} | {report.reviewStatus === "approved" ? "已批准" : "待复核"} | {formatDateTime(report.createdAt)}</small>
             </button>
           ))}
           {filteredReports.length === 0 && <div className="px-2 py-8 text-center text-sm text-ink/45">没有匹配的报告。</div>}
@@ -5007,7 +5015,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
                       报告工具
                     </button>
                     <div className="report-export-control" ref={exportMenuRef}>
-                      <button className="primary-action h-10 gap-2" onClick={() => setExportMenuOpen((value) => !value)} aria-expanded={exportMenuOpen} aria-haspopup="menu">
+                      <button className="primary-action h-10 gap-2" disabled={!formalExportAllowed} onClick={() => setExportMenuOpen((value) => !value)} aria-expanded={exportMenuOpen} aria-haspopup="menu" title={formalExportAllowed ? "导出正式报告" : "待复核草稿禁止正式导出"}>
                         <Download size={15} />
                         导出报告
                         <ChevronDown className={exportMenuOpen ? "rotate-180 transition" : "transition"} size={14} />
@@ -5102,8 +5110,10 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
                         </div>
                         <p className="mt-3 text-sm leading-6 text-ink/55">{audit.coverageExplanation}</p>
                         <div className="report-audit-line">证据概览：{audit.evidenceProfilePresent ? "已写入" : "缺失"} · 缺失章节 {audit.missingRequiredSections.length}</div>
+                        <div className="report-audit-line">复核状态：{selected.reviewStatus === "approved" ? `已批准${selected.reviewedBy ? ` · ${selected.reviewedBy}` : ""}` : "待人工复核，正式导出已锁定"}</div>
                         {audit.missingRequiredSections.length > 0 && <div className="report-tool-warning">缺少核心章节：{audit.missingRequiredSections.join("、")}。</div>}
                         {audit.unreferencedParagraphs.length > 0 && <div className="report-tool-warning">有 {audit.unreferencedParagraphs.length} 段可能缺少引用或证据支撑，建议人工确认。</div>}
+                        {selected.reviewStatus !== "approved" && <button type="button" className="secondary-action mt-3 h-9 w-full" onClick={() => void approveSelectedReport()}>人工确认并允许导出</button>}
                       </>
                     )}
                   </FoldSection>
@@ -5623,6 +5633,7 @@ function LogsView({
           paperIds: reviewPapers.map((paper) => paper.id),
           metrics: generated.metrics,
           evidenceProfile: generated.evidenceProfile,
+          ...reportReviewGate(generated.content, reviewPapers),
         });
         await saveTaskLog({
           stage: "review",

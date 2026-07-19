@@ -111,7 +111,7 @@ export type ResearchReport = {
     consistencyScore: number;
   };
   evidenceProfile?: ReportEvidenceProfile;
-  reviewStatus?: "approved" | "needs-review";
+  reviewStatus: "approved" | "needs-review";
   auditSnapshot?: ReportAudit;
   reviewedAt?: string;
   reviewedBy?: string;

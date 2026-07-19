@@ -494,6 +494,7 @@ export async function importMarkdownReports(rows: MarkdownExport[]) {
       content: row.content,
       paperIds: [],
       metrics: { citationCoverage: 0, citationAccuracy: 0, consistencyScore: 0 },
+      reviewStatus: "needs-review",
       createdAt: parsed.createdAt ?? timestamp,
       updatedAt: timestamp,
     });
