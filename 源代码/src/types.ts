@@ -189,7 +189,8 @@ export type TaskLog = {
   projectId?: string;
   stage: PipelineStage | "backup" | "restore" | "health";
   title: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "cancelled" | "done" | "failed";
+  taskKey?: string;
   inputSummary: string;
   outputSummary: string;
   rawInput?: string;
@@ -244,6 +245,10 @@ export type AiSettings = {
   updatedAt: string;
 };
 
+export type BackupAiSettings = Omit<AiSettings, "manualApiKey" | "apiCredentialConfigured" | "mysql"> & {
+  mysql: Omit<MysqlImportSettings, "password" | "credentialConfigured">;
+};
+
 export type ReportGenerationOptions = {
   structure: "standard" | "problem-method" | "timeline" | "comparison";
   targetLength: "short" | "medium" | "long";
@@ -281,7 +286,7 @@ export type DataBackup = {
   hotspots: Hotspot[];
   reports: ResearchReport[];
   jobs: PipelineJob[];
-  settings: AiSettings;
+  settings: BackupAiSettings;
   taskLogs: TaskLog[];
 };
 

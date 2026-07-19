@@ -92,11 +92,13 @@ import {
   replaceHotspots,
   replaceV20HotspotCache,
   replacePaperLibrary,
+  reconcileInterruptedAiTaskLogs,
   renameProject,
   restoreBackupData,
   saveAiSettings,
   saveHotspot,
   saveReport,
+  saveReportWithTaskLog,
   saveTaskLog,
   seedResearchDataIfEmpty,
   setActiveProject as activateProject,
@@ -105,7 +107,6 @@ import {
 import {
   generateBilingualKeyword,
   generateResearchReport,
-  hasEnvApiKey,
   reviseResearchReport,
   testAiConnection,
 } from "./ai/deepseek";
@@ -118,6 +119,7 @@ import {
 } from "./lib/hotspotEvidenceLoader";
 import {
   backupPaperLibrary,
+  cancelAiTask,
   chooseChromeDriverFile,
   chooseExportDirectory,
   choosePaperImportFile,
@@ -131,6 +133,7 @@ import {
   getPaperLibraryFacets,
   getPaperLibraryStatus,
   inspectPaperLibraryBackup,
+  getAppCredentialStatus,
   getPapersByIds,
   isDesktopRuntime,
   getDemoPaperSamplePath,
@@ -144,6 +147,7 @@ import {
   runDesktopHealthCheck,
   runLibraryCleanerWorker,
   runLibraryClusterWorker,
+  setAppCredential,
   runLibraryPressureTest,
   startPaperFileImport,
   startMysqlPaperImport,
@@ -495,6 +499,29 @@ export default function App() {
     async function boot() {
       try {
         await seedResearchDataIfEmpty();
+        await reconcileInterruptedAiTaskLogs();
+        let nextSettings = await getAiSettings();
+        const nextProject = await getActiveProject();
+        if (isDesktopRuntime()) {
+          let migrated = false;
+          let apiCredentialConfigured = nextSettings.apiCredentialConfigured ?? false;
+          let mysqlCredentialConfigured = nextSettings.mysql.credentialConfigured ?? false;
+          if (nextSettings.manualApiKey.trim()) {
+            apiCredentialConfigured = (await setAppCredential(nextProject.id, `ai-${nextSettings.provider}`, nextSettings.manualApiKey)).configured;
+            migrated = true;
+          } else {
+            apiCredentialConfigured = (await getAppCredentialStatus(nextProject.id, `ai-${nextSettings.provider}`)).configured;
+          }
+          if (nextSettings.mysql.password.trim()) {
+            mysqlCredentialConfigured = (await setAppCredential(nextProject.id, "mysql", nextSettings.mysql.password)).configured;
+            migrated = true;
+          } else {
+            mysqlCredentialConfigured = (await getAppCredentialStatus(nextProject.id, "mysql")).configured;
+          }
+          if (migrated || apiCredentialConfigured !== nextSettings.apiCredentialConfigured || mysqlCredentialConfigured !== nextSettings.mysql.credentialConfigured) {
+            nextSettings = await saveAiSettings({ ...nextSettings, manualApiKey: "", apiCredentialConfigured, mysql: { ...nextSettings.mysql, password: "", credentialConfigured: mysqlCredentialConfigured } });
+          }
+        }
         if (mounted) await refreshAll();
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "桌面端初始化失败。");
@@ -627,7 +654,22 @@ export default function App() {
   );
 
   async function saveSettings(next: AiSettings) {
-    await saveAiSettings(next);
+    let effectiveSettings = next;
+    if (activeProject && isDesktopRuntime()) {
+      const apiCredentialConfigured = next.manualApiKey.trim()
+        ? (await setAppCredential(activeProject.id, `ai-${next.provider}`, next.manualApiKey)).configured
+        : (await getAppCredentialStatus(activeProject.id, `ai-${next.provider}`)).configured;
+      const mysqlCredentialConfigured = next.mysql.password.trim()
+        ? (await setAppCredential(activeProject.id, "mysql", next.mysql.password)).configured
+        : (await getAppCredentialStatus(activeProject.id, "mysql")).configured;
+      effectiveSettings = {
+        ...next,
+        manualApiKey: "",
+        apiCredentialConfigured,
+        mysql: { ...next.mysql, password: "", credentialConfigured: mysqlCredentialConfigured },
+      };
+    }
+    await saveAiSettings(effectiveSettings);
     await refreshAll();
     setNotice("设置已保存。");
   }
@@ -910,6 +952,17 @@ function dashboardSourceLabel(source: SourceKind) {
   if (source === "openalex") return "OpenAlex";
   if (source === "cnki") return "CNKI";
   return "本地导入";
+}
+
+function reportReviewGate(content: string, papers: Paper[]) {
+  const auditSnapshot = auditReport(content, papers);
+  const approved = auditSnapshot.riskLevel !== "high";
+  return {
+    reviewStatus: approved ? "approved" as const : "needs-review" as const,
+    auditSnapshot,
+    reviewedAt: approved ? nowIso() : undefined,
+    reviewedBy: approved ? "system-quality-gate" : undefined,
+  };
 }
 
 function dashboardReportModeLabel(mode: ResearchReport["mode"]) {
@@ -1568,7 +1621,7 @@ function SearchWorkspace({
     setBusy("正在检索文献...");
     try {
       let searchQuery = query.trim();
-      if (settings.manualApiKey || hasEnvApiKey()) {
+      if (settings.apiCredentialConfigured || settings.useEnvKey) {
         searchQuery = await generateBilingualKeyword(query, settings);
       }
       const options: SearchOptions = {
@@ -1675,7 +1728,6 @@ function SearchWorkspace({
 
   async function importMysqlPapers() {
     const configured = settings.mysql;
-    const password = configured.password.trim() || window.prompt("请输入本地 MySQL 密码；留空/取消则尝试 MYSQL_PASSWORD 或 DB_PASSWORD 环境变量。") || "";
     setBusy("正在从本地 MySQL 分批导入 SQLite...");
     setImportPreview(null);
     setImportProgress("正在启动 MySQL 后台导入任务...");
@@ -1687,7 +1739,7 @@ function SearchWorkspace({
         host: configured.host,
         port: configured.port,
         user: configured.user,
-        password,
+        password: undefined,
         database: configured.database,
         batchSize: configured.batchSize,
       });
@@ -4136,6 +4188,7 @@ function HotspotLibrary({
   const selected = filteredHotspots.find((hotspot) => hotspot.id === selectedId) ?? filteredHotspots[0];
   const [draft, setDraft] = useState<Hotspot | null>(selected ?? null);
   const [busy, setBusy] = useState("");
+  const [activeAiTaskKey, setActiveAiTaskKey] = useState("");
   const [reportMode, setReportMode] = useState<HotspotReportMode>("offline");
   const [reportOptions, setReportOptions] = useState<ReportGenerationOptions>(defaultReportOptions);
   const [hotspotEvidence, setHotspotEvidence] = useState<HotspotEvidenceBundle | null>(null);
@@ -4266,36 +4319,60 @@ function HotspotLibrary({
     const started = performance.now();
     const evidenceSource = "sqlite-persisted-hotspot-ids";
     const rawInput = JSON.stringify({ topic: selected.title, mode, discipline: selected.field, options: reportOptions, evidenceSource, paperIds: reportPapers.map((paper) => paper.id) }, null, 2);
+    const taskLogId = crypto.randomUUID();
+    let taskKey = "";
+    let runningLogPromise: Promise<unknown> | null = null;
     setBusy(mode);
     try {
-      const generated = await generateResearchReport({ topic: selected.title, papers: reportPapers, mode, discipline: selected.field, settings, options: reportOptions, hotspot: selected });
-      await saveReport({
+      const generated = await generateResearchReport({
         topic: selected.title,
+        papers: reportPapers,
         mode,
         discipline: selected.field,
-        content: generated.content,
-        paperIds: reportPapers.map((paper) => paper.id),
-        metrics: generated.metrics,
-        evidenceProfile: generated.evidenceProfile,
+        settings,
+        options: reportOptions,
+        hotspot: selected,
+        onTaskStarted: (startedTaskKey) => {
+          taskKey = startedTaskKey;
+          setActiveAiTaskKey(startedTaskKey);
+          runningLogPromise = saveTaskLog({
+            id: taskLogId,
+            stage: "review",
+            title: "热点 AI 综述生成",
+            status: "running",
+            taskKey: startedTaskKey,
+            inputSummary: `${selected.title} / ${mode} / ${reportPapers.length} 篇文献 / ${evidenceSource}`,
+            outputSummary: "AI 后台任务正在运行，可在任务日志中取消。",
+            rawInput,
+            durationMs: 0,
+          }).then(() => onRefresh());
+        },
       });
-      await saveTaskLog({
-        stage: "review",
-        title: "热点 AI 综述生成",
-        status: "done",
+      await runningLogPromise;
+      const reviewGate = reportReviewGate(generated.content, reportPapers);
+      await saveReportWithTaskLog({
+        topic: selected.title, mode, discipline: selected.field, content: generated.content,
+        paperIds: reportPapers.map((paper) => paper.id), metrics: generated.metrics,
+        evidenceProfile: generated.evidenceProfile, ...reviewGate,
+      }, {
+        id: taskLogId,
+        stage: "review", title: "热点 AI 综述生成", status: "done",
         inputSummary: `${selected.title} / ${mode} / ${reportPapers.length} 篇文献 / ${evidenceSource}`,
-        outputSummary: "热点综述已保存到报告库。",
-        rawInput,
-        rawOutput: generated.content,
-        durationMs: Math.round(performance.now() - started),
+        outputSummary: reviewGate.reviewStatus === "needs-review" ? "热点综述已保存为待复核草稿。" : "热点综述已保存到报告库。",
+        rawInput, rawOutput: generated.content, durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(`已按热点生成 ${mode === "deep" ? "深版" : "简版"}综述。`);
+      onNotice(reviewGate.reviewStatus === "needs-review" ? "报告风险较高，已保存为待复核草稿。" : `已按热点生成 ${mode === "deep" ? "深版" : "简版"}综述。`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "热点综述生成失败。";
+      await runningLogPromise;
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "热点综述生成失败。";
+      const cancelled = message.includes("AI_TASK_CANCELLED");
       await saveTaskLog({
+        id: taskLogId,
         stage: "review",
         title: "热点 AI 综述生成",
-        status: "failed",
+        status: cancelled ? "cancelled" : "failed",
+        taskKey: taskKey || undefined,
         inputSummary: `${selected.title} / ${mode} / ${reportPapers.length} 篇文献`,
         outputSummary: "",
         rawInput,
@@ -4303,10 +4380,17 @@ function HotspotLibrary({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(error instanceof Error ? error.message : "热点综述生成失败。");
+      onNotice(cancelled ? "AI 报告任务已取消。" : error instanceof Error ? error.message : "热点综述生成失败。");
     } finally {
+      setActiveAiTaskKey("");
       setBusy("");
     }
+  }
+
+  async function cancelActiveAiReport() {
+    if (!activeAiTaskKey) return;
+    const cancelled = await cancelAiTask(activeAiTaskKey);
+    onNotice(cancelled ? "已请求取消 AI 报告任务。" : "AI 任务已经结束或不再运行。");
   }
 
   async function exportSelectedEvidenceBundle() {
@@ -4657,10 +4741,17 @@ function HotspotLibrary({
                     </>
                   )}
 
-                  <button className="primary-action mt-4 h-10 gap-2" onClick={() => void generateSelectedHotspotReport()} disabled={Boolean(busy) || !reportModeReady}>
-                    {reportGenerationBusy ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
-                    生成报告
-                  </button>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button className="primary-action h-10 gap-2" onClick={() => void generateSelectedHotspotReport()} disabled={Boolean(busy) || !reportModeReady}>
+                      {reportGenerationBusy ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
+                      生成报告
+                    </button>
+                    {activeAiTaskKey && (
+                      <button className="secondary-action h-10 gap-2" onClick={() => void cancelActiveAiReport()}>
+                        <Square size={14} />取消 AI 任务
+                      </button>
+                    )}
+                  </div>
                 </section>
               </div>
             </main>
@@ -5069,6 +5160,7 @@ function taskStatusLabel(status: TaskLog["status"]) {
   const labels: Record<TaskLog["status"], string> = {
     queued: "等待中",
     running: "进行中",
+    cancelled: "已取消",
     done: "已完成",
     failed: "失败",
   };
@@ -5391,7 +5483,7 @@ function LogsView({
   const selectedProjectName = selected ? projectName(selected.projectId, projects) : "";
   const selectedBelongsToActiveProject = Boolean(selected && activeProject && selected.projectId === activeProject.id);
   const selectedSupportsRerun = Boolean(selected && (["clean", "cluster", "review", "export"] as TaskLog["stage"][]).includes(selected.stage));
-  const selectedCanRerun = Boolean(selected && selectedSupportsRerun && selectedBelongsToActiveProject && (selected.status === "done" || selected.status === "failed"));
+  const selectedCanRerun = Boolean(selected && selectedSupportsRerun && selectedBelongsToActiveProject && (selected.status === "done" || selected.status === "failed" || selected.status === "cancelled"));
   const showPrimaryRerun = Boolean(selectedCanRerun && selected?.status === "failed");
   const showSecondaryRerun = Boolean(selectedCanRerun && selected?.status === "done");
   const suggestions = selected?.status === "failed" ? buildLogFixSuggestions(selected.error || selected.outputSummary) : [];
@@ -5402,9 +5494,11 @@ function LogsView({
         ? selected.outputSummary || "任务正在运行，完成后会在这里显示结果。"
         : selected.status === "queued"
           ? "任务正在等待执行。"
+          : selected.status === "cancelled"
+            ? selected.outputSummary || "任务已由用户取消。"
           : selected.outputSummary || "任务已完成，但没有输出摘要。"
     : "";
-  const ResultIcon = selected?.status === "failed" ? AlertTriangle : selected?.status === "done" ? CheckCircle2 : selected?.status === "running" ? Loader2 : Square;
+  const ResultIcon = selected?.status === "failed" ? AlertTriangle : selected?.status === "done" ? CheckCircle2 : selected?.status === "running" ? Loader2 : selected?.status === "cancelled" ? X : Square;
 
   useEffect(() => {
     if (!filteredLogs.some((log) => log.id === selectedId)) setSelectedId(filteredLogs[0]?.id ?? "");
@@ -5449,6 +5543,19 @@ function LogsView({
     setSelectedId("");
     await onRefresh();
     onNotice("当前项目的任务日志已清空。");
+  }
+
+  async function cancelSelectedTask() {
+    if (!selected?.taskKey || selected.status !== "running" || busy) return;
+    setBusy(true);
+    try {
+      const cancelled = await cancelAiTask(selected.taskKey);
+      onNotice(cancelled ? "已请求取消 AI 任务。" : "AI 任务已经结束或不再运行。");
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      await onRefresh();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function rerunSelected() {
@@ -5581,7 +5688,7 @@ function LogsView({
           <SelectControl className="h-10 text-sm" value={projectFilter} options={[{ value: "current", label: `当前项目：${activeProject?.name ?? "未命名"}` }, { value: "all", label: "全部项目" }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} onChange={setProjectFilter} />
           <div className="grid grid-cols-2 gap-2">
             <SelectControl className="h-10 text-sm" value={stageFilter} options={[{ value: "all", label: "全部类型" }, ...(["crawl", "clean", "cluster", "name", "review", "export", "backup", "restore", "health"] as TaskLog["stage"][]).map((stage) => ({ value: stage, label: taskStageLabel(stage) }))]} onChange={(value) => setStageFilter(value as TaskLog["stage"] | "all")} />
-            <SelectControl className="h-10 text-sm" value={statusFilter} options={[{ value: "all", label: "全部状态" }, ...(["queued", "running", "done", "failed"] as TaskLog["status"][]).map((status) => ({ value: status, label: taskStatusLabel(status) }))]} onChange={(value) => setStatusFilter(value as TaskLog["status"] | "all")} />
+            <SelectControl className="h-10 text-sm" value={statusFilter} options={[{ value: "all", label: "全部状态" }, ...(["queued", "running", "cancelled", "done", "failed"] as TaskLog["status"][]).map((status) => ({ value: status, label: taskStatusLabel(status) }))]} onChange={(value) => setStatusFilter(value as TaskLog["status"] | "all")} />
           </div>
         </div>
         <div className="log-list-actions">
@@ -5635,6 +5742,12 @@ function LogsView({
                 <button className="primary-action h-10 shrink-0 gap-2" onClick={() => void rerunSelected()} disabled={busy}>
                   {busy ? <Loader2 className="animate-spin" size={15} /> : <RefreshCw size={15} />}
                   {busy ? "正在重新运行" : "重新运行"}
+                </button>
+              )}
+              {selected.status === "running" && selected.taskKey && (
+                <button className="secondary-action h-10 shrink-0 gap-2" onClick={() => void cancelSelectedTask()} disabled={busy}>
+                  {busy ? <Loader2 className="animate-spin" size={15} /> : <Square size={14} />}
+                  取消 AI 任务
                 </button>
               )}
             </div>
@@ -5747,7 +5860,7 @@ function HealthView({
   const [checkError, setCheckError] = useState("");
   const [pressureError, setPressureError] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState("");
-  const aiReady = hasEnvApiKey() || Boolean(settings.manualApiKey.trim());
+  const aiReady = Boolean(settings.apiCredentialConfigured || settings.useEnvKey);
   const libraryPaperCount = libraryStatus?.paperCount ?? papers.length;
 
   async function runCheck() {
@@ -6094,7 +6207,13 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     setTesting(true);
     setMessage("");
     try {
-      setMessage(await testAiConnection(draft));
+      let effective = draft;
+      if (draft.manualApiKey.trim() && draft.projectId && isDesktopRuntime()) {
+        const status = await setAppCredential(draft.projectId, `ai-${draft.provider}`, draft.manualApiKey);
+        effective = { ...draft, manualApiKey: "", apiCredentialConfigured: status.configured };
+        setDraft(effective);
+      }
+      setMessage(await testAiConnection(effective));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "连接失败。");
     } finally {
@@ -6226,6 +6345,19 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
         "确认恢复 JSON 备份",
       ))) return;
       const result = await restoreBackupData(backup);
+      if (isDesktopRuntime()) {
+        const restoredSettings = await getAiSettings();
+        const restoredProjectId = restoredSettings.projectId || draft.projectId || "project-default";
+        const [apiStatus, mysqlStatus] = await Promise.all([
+          getAppCredentialStatus(restoredProjectId, `ai-${restoredSettings.provider}`),
+          getAppCredentialStatus(restoredProjectId, "mysql"),
+        ]);
+        await saveAiSettings({
+          ...restoredSettings,
+          apiCredentialConfigured: apiStatus.configured,
+          mysql: { ...restoredSettings.mysql, credentialConfigured: mysqlStatus.configured, password: "" },
+        });
+      }
       await saveTaskLog({ stage: "restore", title: "IndexedDB JSON 恢复", status: "done", inputSummary: file.name, outputSummary: `文献=${result.paperCount}，热点=${result.hotspotCount}，报告=${result.reportCount}，日志=${result.taskLogCount}`, rawInput: file.name, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
       onNotice("JSON 备份已恢复。");
@@ -6239,7 +6371,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     }
   }
 
-  const aiReady = hasEnvApiKey() || Boolean(draft.manualApiKey.trim());
+  const aiReady = Boolean(draft.apiCredentialConfigured || draft.manualApiKey.trim() || draft.useEnvKey);
   const directoryCount = [draft.databaseDir, draft.exportDir, draft.workerTempDir, draft.backupDir].filter(Boolean).length;
   const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(settings);
 
@@ -6281,9 +6413,9 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
               </label>
               <label className="field-label">模型名称<input className="field-control h-11 px-3" value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label>
               <label className="field-label lg:col-span-2">服务地址（Base URL）<input className="field-control h-11 px-3" value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /></label>
-              <label className="field-label lg:col-span-2">API 密钥<input className="field-control h-11 px-3" type="password" value={draft.manualApiKey} onChange={(event) => setDraft({ ...draft, manualApiKey: event.target.value })} placeholder={hasEnvApiKey() ? "已检测到环境变量密钥" : "填入 API 密钥"} /></label>
+              <label className="field-label lg:col-span-2">API 密钥<input className="field-control h-11 px-3" type="password" value={draft.manualApiKey} onChange={(event) => setDraft({ ...draft, manualApiKey: event.target.value })} placeholder={draft.apiCredentialConfigured ? "已安全保存到 Windows 凭据管理器；输入新值可替换" : "输入后保存到 Windows 凭据管理器"} /></label>
               <label className="field-label">生成温度<input className="field-control h-11 px-3" type="number" step={0.05} min={0} max={1} value={draft.temperature} onChange={(event) => setDraft({ ...draft, temperature: Number(event.target.value) })} /></label>
-              <label className="settings-toggle-row"><input type="checkbox" checked={draft.useEnvKey} onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })} />优先使用环境变量 VITE_DEEPSEEK_API_KEY</label>
+              <label className="settings-toggle-row"><input type="checkbox" checked={draft.useEnvKey} onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })} />允许后端开发环境读取 DEEPSEEK_API_KEY</label>
             </div>
             {message && <div className="settings-connection-message" aria-live="polite">{message}</div>}
           </section>
@@ -6312,7 +6444,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
                 <label className="field-label">端口<input className="field-control h-11 px-3" type="number" min={1} max={65535} value={draft.mysql.port} onChange={(event) => updateMysql({ port: Number(event.target.value) || 3306 })} /></label>
                 <label className="field-label">用户名<input className="field-control h-11 px-3" value={draft.mysql.user} onChange={(event) => updateMysql({ user: event.target.value })} placeholder="root" /></label>
                 <label className="field-label">数据库<input className="field-control h-11 px-3" value={draft.mysql.database} onChange={(event) => updateMysql({ database: event.target.value })} placeholder="research_hotspots" /></label>
-                <label className="field-label">密码<input className="field-control h-11 px-3" type="password" value={draft.mysql.password} onChange={(event) => updateMysql({ password: event.target.value })} placeholder="可留空，导入时再输入" /></label>
+                <label className="field-label">密码<input className="field-control h-11 px-3" type="password" value={draft.mysql.password} onChange={(event) => updateMysql({ password: event.target.value })} placeholder={draft.mysql.credentialConfigured ? "已安全保存；输入新值可替换" : "输入后保存到 Windows 凭据管理器"} /></label>
                 <label className="field-label">每批数量<input className="field-control h-11 px-3" type="number" min={100} max={5000} step={100} value={draft.mysql.batchSize} onChange={(event) => updateMysql({ batchSize: Math.max(100, Math.min(5000, Number(event.target.value) || 1000)) })} /></label>
               </div>
             </section>
@@ -6428,7 +6560,7 @@ function AboutView({
     const profile = report.evidenceProfile;
     return Boolean(profile && profile.paperCount >= 3 && profile.representativePaperIds.length >= 3 && report.metrics.citationAccuracy >= 0.8);
   });
-  const aiConfigured = Boolean(settings && (hasEnvApiKey() || settings.manualApiKey.trim()));
+  const aiConfigured = Boolean(settings?.apiCredentialConfigured || settings?.useEnvKey);
   const runtimeSummary = [
     ["当前 SQLite 论文", paperCount.toLocaleString()],
     ["热点证据覆盖", `${evidenceHotspots.length}/${hotspots.length}`],
@@ -6957,7 +7089,7 @@ function buildLogFixSuggestions(text: string | undefined) {
   const value = text.toLowerCase();
   const suggestions: string[] = [];
   if (value.includes("python") || value.includes("worker")) suggestions.push("检查设置页的 worker 临时目录，并确认 Python worker 文件仍在 workers 目录。");
-  if (value.includes("api key") || value.includes("401") || value.includes("unauthorized")) suggestions.push("在设置页填写 API Key，或确认 VITE_DEEPSEEK_API_KEY 是否可用。");
+  if (value.includes("api key") || value.includes("401") || value.includes("unauthorized")) suggestions.push("请在设置页重新保存 API Key；开发环境也可检查后端 DEEPSEEK_API_KEY 是否可用。");
   if (value.includes("permission") || value.includes("access") || value.includes("denied") || value.includes("eacces")) suggestions.push("把导出、备份、临时目录改到 D 盘可写目录，避免系统目录权限限制。");
   if (value.includes("network") || value.includes("fetch") || value.includes("timeout")) suggestions.push("检查网络连接、Base URL 和模型服务是否可访问，必要时降低检索数量后重试。");
   if (value.includes("json") || value.includes("parse")) suggestions.push("检查导入文件或 worker 输出是否为合法 UTF-8 JSON。");

@@ -421,10 +421,14 @@ export async function replaceHotspots(hotspots: Hotspot[]) {
 export async function getReports() {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
-  return filterProject(await db.getAll(REPORT_STORE), projectId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return filterProject(await db.getAll(REPORT_STORE), projectId)
+    .map((report) => ({ ...report, reviewStatus: report.reviewStatus ?? "needs-review" as const }))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export async function saveReport(report: Omit<ResearchReport, "id" | "createdAt" | "updatedAt">) {
+type NewReportInput = Omit<ResearchReport, "id" | "createdAt" | "updatedAt" | "reviewStatus"> & Partial<Pick<ResearchReport, "reviewStatus">>;
+
+export async function saveReport(report: NewReportInput) {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
   const snapshotId = report.snapshotId ?? (await db.get(META_STORE, "main"))?.v20CacheStates?.[projectId]?.snapshotId;
@@ -432,6 +436,7 @@ export async function saveReport(report: Omit<ResearchReport, "id" | "createdAt"
   const saved: ResearchReport = {
     ...report,
     snapshotId,
+    reviewStatus: report.reviewStatus ?? "needs-review",
     id: scopedId(projectId, crypto.randomUUID()),
     projectId,
     createdAt: timestamp,
@@ -439,6 +444,32 @@ export async function saveReport(report: Omit<ResearchReport, "id" | "createdAt"
   };
   await db.put(REPORT_STORE, saved);
   return saved;
+}
+
+export async function saveReportWithTaskLog(
+  report: NewReportInput,
+  log: Omit<TaskLog, "id" | "createdAt"> & Partial<Pick<TaskLog, "id" | "createdAt">>,
+) {
+  const db = await getDb();
+  const projectId = await ensureProjectState(db);
+  const snapshotId = report.snapshotId ?? (await db.get(META_STORE, "main"))?.v20CacheStates?.[projectId]?.snapshotId;
+  const timestamp = nowIso();
+  const saved: ResearchReport = { ...report, snapshotId, reviewStatus: report.reviewStatus ?? "needs-review", id: scopedId(projectId, crypto.randomUUID()), projectId, createdAt: timestamp, updatedAt: timestamp };
+  const savedLog: TaskLog = { ...log, id: scopedId(projectId, log.id ?? crypto.randomUUID()), projectId, createdAt: log.createdAt ?? timestamp };
+  const tx = db.transaction([REPORT_STORE, TASK_LOG_STORE], "readwrite");
+  await tx.objectStore(REPORT_STORE).put(saved);
+  await tx.objectStore(TASK_LOG_STORE).put(savedLog);
+  await tx.done;
+  return { report: saved, taskLog: savedLog };
+}
+
+export async function approveReport(reportId: string, reviewedBy = "user") {
+  const db = await getDb();
+  const existing = await db.get(REPORT_STORE, reportId);
+  if (!existing) throw new Error("Report not found.");
+  const updated: ResearchReport = { ...existing, reviewStatus: "approved", reviewedAt: nowIso(), reviewedBy, updatedAt: nowIso() };
+  await db.put(REPORT_STORE, updated);
+  return updated;
 }
 
 export async function importMarkdownReports(rows: MarkdownExport[]) {
@@ -512,6 +543,22 @@ export async function getAllTaskLogs() {
   return (await db.getAll(TASK_LOG_STORE)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+export async function reconcileInterruptedAiTaskLogs() {
+  const db = await getDb();
+  await ensureProjectState(db);
+  const interrupted = (await db.getAll(TASK_LOG_STORE)).filter((log) => log.status === "running" && Boolean(log.taskKey));
+  if (interrupted.length === 0) return 0;
+  const tx = db.transaction(TASK_LOG_STORE, "readwrite");
+  await Promise.all(interrupted.map((log) => tx.store.put({
+    ...log,
+    status: "cancelled" as const,
+    outputSummary: "应用上次退出时 AI 后台任务仍在运行，现已标记为中断。",
+    error: undefined,
+  })));
+  await tx.done;
+  return interrupted.length;
+}
+
 export async function saveTaskLog(log: Omit<TaskLog, "id" | "createdAt"> & Partial<Pick<TaskLog, "id" | "createdAt">>) {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
@@ -535,14 +582,13 @@ export async function getAiSettings() {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
   const settings = normalizeSettings((await db.get(SETTINGS_STORE, settingsKey(projectId))) ?? defaultSettings(projectId), projectId);
-  await db.put(SETTINGS_STORE, settings);
   return settings;
 }
 
 export async function saveAiSettings(settings: AiSettings) {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
-  const saved = normalizeSettings({ ...settings, updatedAt: nowIso() }, projectId);
+  const saved = normalizeSettings({ ...settings, manualApiKey: "", mysql: { ...settings.mysql, password: "" }, updatedAt: nowIso() }, projectId);
   await db.put(SETTINGS_STORE, saved);
   return saved;
 }
@@ -558,6 +604,17 @@ export async function exportBackupData(): Promise<DataBackup> {
     db.getAll(TASK_LOG_STORE),
     getAiSettings(),
   ]);
+  const {
+    manualApiKey: _manualApiKey,
+    apiCredentialConfigured: _apiCredentialConfigured,
+    mysql,
+    ...backupSettings
+  } = settings;
+  const {
+    password: _mysqlPassword,
+    credentialConfigured: _mysqlCredentialConfigured,
+    ...backupMysql
+  } = mysql;
   return {
     schemaVersion: 2,
     version: __APP_VERSION__,
@@ -568,7 +625,7 @@ export async function exportBackupData(): Promise<DataBackup> {
     hotspots: [],
     reports,
     jobs,
-    settings,
+    settings: { ...backupSettings, mysql: backupMysql },
     taskLogs,
   };
 }
@@ -856,6 +913,7 @@ function defaultSettings(projectId = DEFAULT_PROJECT_ID): AiSettings {
     model: import.meta.env.VITE_DEEPSEEK_MODEL || "deepseek-chat",
     useEnvKey: true,
     manualApiKey: "",
+    apiCredentialConfigured: false,
     temperature: 0.2,
     streamOutput: true,
     dataDir: "",
@@ -902,6 +960,7 @@ function defaultMysqlSettings(): MysqlImportSettings {
     port: 3306,
     user: "root",
     password: "",
+    credentialConfigured: false,
     database: "research_hotspots",
     batchSize: 1000,
   };
@@ -914,6 +973,7 @@ function normalizeMysqlSettings(settings?: Partial<MysqlImportSettings>): MysqlI
     port: Math.max(1, Math.min(65535, Number(settings?.port ?? fallback.port) || fallback.port)),
     user: settings?.user?.trim() || fallback.user,
     password: settings?.password ?? fallback.password,
+    credentialConfigured: settings?.credentialConfigured ?? false,
     database: settings?.database?.trim() || fallback.database,
     batchSize: Math.max(100, Math.min(5000, Number(settings?.batchSize ?? fallback.batchSize) || fallback.batchSize)),
   };
@@ -928,6 +988,7 @@ function normalizeSettings(settings: Partial<AiSettings>, projectId = DEFAULT_PR
     projectId,
     customProviderName: settings.customProviderName ?? fallback.customProviderName,
     manualApiKey: settings.manualApiKey ?? "",
+    apiCredentialConfigured: settings.apiCredentialConfigured ?? false,
     dataDir: settings.dataDir ?? "",
     databaseDir: settings.databaseDir ?? settings.dataDir ?? "",
     exportDir: settings.exportDir ?? settings.dataDir ?? "",

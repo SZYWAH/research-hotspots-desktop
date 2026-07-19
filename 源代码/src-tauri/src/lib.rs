@@ -268,6 +268,66 @@ impl Drop for ClusterTaskPermit {
     }
 }
 
+const AI_ALREADY_RUNNING: &str = "AI_ALREADY_RUNNING";
+
+#[derive(Clone, Default)]
+struct AiTaskRegistry {
+    running: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+}
+
+struct AiTaskPermit {
+    registry: AiTaskRegistry,
+    key: String,
+    cancel_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+impl AiTaskRegistry {
+    fn try_acquire(&self, key: String) -> Result<AiTaskPermit, String> {
+        let mut running = self.running.lock().map_err(|_| "Cannot lock AI task registry.".to_string())?;
+        if running.contains_key(&key) { return Err(AI_ALREADY_RUNNING.to_string()); }
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        running.insert(key.clone(), cancel_tx);
+        Ok(AiTaskPermit { registry: self.clone(), key, cancel_rx })
+    }
+
+    fn cancel(&self, key: &str) -> Result<bool, String> {
+        let running = self.running.lock().map_err(|_| "Cannot lock AI task registry.".to_string())?;
+        Ok(running.get(key).map(|sender| sender.send(true).is_ok()).unwrap_or(false))
+    }
+}
+
+impl Drop for AiTaskPermit {
+    fn drop(&mut self) {
+        self.registry.running.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&self.key);
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatMessage { role: String, content: String }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatInput {
+    task_key: String,
+    project_id: String,
+    provider: String,
+    base_url: String,
+    model: String,
+    temperature: f64,
+    use_env_key: bool,
+    mode: String,
+    messages: Vec<AiChatMessage>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatResult { content: String, retry_count: usize, elapsed_ms: u128 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialStatus { configured: bool }
+
 #[derive(Clone)]
 struct PaperImportTaskControl {
     paused: Arc<AtomicBool>,
@@ -1319,8 +1379,12 @@ fn start_mysql_paper_import(
     app: tauri::AppHandle,
     state: tauri::State<'_, PaperImportTaskRegistry>,
     mutation_state: tauri::State<'_, LibraryMutationRegistry>,
-    input: MysqlPaperImportInput,
+    mut input: MysqlPaperImportInput,
 ) -> Result<PaperFileImportStart, String> {
+    let credential_project_id = input.project_id.clone().unwrap_or_else(default_project_id);
+    if input.password.as_deref().map(str::trim).unwrap_or_default().is_empty() {
+        input.password = read_app_credential(&credential_project_id, "mysql").or_else(|| std::env::var("MYSQL_PASSWORD").ok()).or_else(|| std::env::var("DB_PASSWORD").ok());
+    }
     let task_id = format!("mysql-paper-import-{}-{}", std::process::id(), now_millis());
     let database = input.database.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or("research_hotspots");
     let file_name = format!("MySQL {database}.papers");
@@ -2161,6 +2225,127 @@ fn write_text_file(path: String, content: String) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     fs::write(path, content).map_err(|error| error.to_string())
+}
+
+fn credential_service(project_id: &str, service: &str) -> String {
+    let safe_project = project_id.chars().map(|value| if value.is_ascii_alphanumeric() || matches!(value, '-' | '_') { value } else { '_' }).collect::<String>();
+    let safe_service = service.chars().map(|value| if value.is_ascii_alphanumeric() || matches!(value, '-' | '_') { value } else { '_' }).collect::<String>();
+    format!("research-hotspots-desktop:{safe_project}:{safe_service}")
+}
+
+fn credential_entry(project_id: &str, service: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(&credential_service(project_id, service), "credential").map_err(|error| format!("Cannot access Windows Credential Manager: {error}"))
+}
+
+fn read_app_credential(project_id: &str, service: &str) -> Option<String> {
+    credential_entry(project_id, service).ok()?.get_password().ok().filter(|value| !value.trim().is_empty())
+}
+
+#[tauri::command]
+fn set_app_credential(project_id: String, service: String, secret: String) -> Result<CredentialStatus, String> {
+    if project_id.trim().is_empty() || service.trim().is_empty() { return Err("Credential project and service are required.".to_string()); }
+    let entry = credential_entry(&project_id, &service)?;
+    if secret.trim().is_empty() {
+        let _ = entry.delete_credential();
+        return Ok(CredentialStatus { configured: false });
+    }
+    entry.set_password(secret.trim()).map_err(|error| format!("Cannot save credential: {error}"))?;
+    Ok(CredentialStatus { configured: true })
+}
+
+#[tauri::command]
+fn get_app_credential_status(project_id: String, service: String) -> CredentialStatus {
+    CredentialStatus { configured: read_app_credential(&project_id, &service).is_some() }
+}
+
+#[tauri::command]
+fn delete_app_credential(project_id: String, service: String) -> Result<CredentialStatus, String> {
+    let entry = credential_entry(&project_id, &service)?;
+    let _ = entry.delete_credential();
+    Ok(CredentialStatus { configured: false })
+}
+
+fn ai_chat_endpoint(base_url: &str) -> String {
+    let normalized = base_url.trim().trim_end_matches('/');
+    if normalized.ends_with("/chat/completions") { normalized.to_string() }
+    else if normalized.ends_with("/v1") { format!("{normalized}/chat/completions") }
+    else { format!("{normalized}/v1/chat/completions") }
+}
+
+#[tauri::command]
+async fn ai_chat(state: tauri::State<'_, AiTaskRegistry>, input: AiChatInput) -> Result<AiChatResult, String> {
+    if input.messages.is_empty() { return Err("AI messages are required.".to_string()); }
+    let permit = state.try_acquire(input.task_key.clone())?;
+    let mut cancel_rx = permit.cancel_rx.clone();
+    let _permit = permit;
+    let service = format!("ai-{}", input.provider.trim().to_lowercase());
+    let api_key = read_app_credential(&input.project_id, &service)
+        .or_else(|| if input.use_env_key && input.provider.eq_ignore_ascii_case("deepseek") { std::env::var("DEEPSEEK_API_KEY").ok() } else { None })
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "缺少安全凭据。请在设置页重新保存 API Key。".to_string())?;
+    let base_url = if input.provider.eq_ignore_ascii_case("deepseek") {
+        std::env::var("DEEPSEEK_BASE_URL").ok().filter(|value| !value.trim().is_empty()).unwrap_or(input.base_url)
+    } else { input.base_url };
+    let model = if input.provider.eq_ignore_ascii_case("deepseek") {
+        std::env::var("DEEPSEEK_MODEL").ok().filter(|value| !value.trim().is_empty()).unwrap_or(input.model)
+    } else { input.model };
+    let total_seconds = if input.mode == "deep" || input.mode == "revised" { 180 } else { 90 };
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .build().map_err(|error| format!("Cannot initialize AI client: {error}"))?;
+    let endpoint = ai_chat_endpoint(&base_url);
+    let started = Instant::now();
+    let request = async {
+        let mut last_error = String::new();
+        for attempt in 0..2usize {
+            let response = tokio::select! {
+                changed = cancel_rx.changed() => {
+                    if changed.is_ok() && *cancel_rx.borrow() { return Err("AI_TASK_CANCELLED".to_string()); }
+                    continue;
+                }
+                result = client.post(&endpoint)
+                    .bearer_auth(&api_key)
+                    .json(&serde_json::json!({ "model": model, "messages": input.messages, "temperature": input.temperature }))
+                    .send() => result,
+            };
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+                    let payload = tokio::select! {
+                        changed = cancel_rx.changed() => {
+                            if changed.is_ok() && *cancel_rx.borrow() {
+                                return Err("AI_TASK_CANCELLED".to_string());
+                            }
+                            return Err("AI_TASK_CANCELLED".to_string());
+                        }
+                        result = response.json::<serde_json::Value>() => result.unwrap_or_else(|_| serde_json::json!({})),
+                    };
+                    if !status.is_success() {
+                        last_error = payload.pointer("/error/message").and_then(|value| value.as_str()).unwrap_or("AI service returned an error.").to_string();
+                        if attempt == 0 && (status.as_u16() == 429 || status.is_server_error()) { continue; }
+                        return Err(format!("{last_error} (HTTP {})", status.as_u16()));
+                    }
+                    let content = payload.pointer("/choices/0/message/content").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()).ok_or_else(|| "AI 返回为空。".to_string())?;
+                    return Ok(AiChatResult { content: content.to_string(), retry_count: attempt, elapsed_ms: started.elapsed().as_millis() });
+                }
+                Err(error) => {
+                    last_error = if error.is_timeout() { "AI 请求超时。".to_string() } else { format!("AI 网络请求失败：{error}") };
+                    if attempt == 0 && (error.is_timeout() || error.is_connect() || error.is_request()) { continue; }
+                    return Err(last_error);
+                }
+            }
+        }
+        Err(last_error)
+    };
+    match tokio::time::timeout(Duration::from_secs(total_seconds), request).await {
+        Ok(result) => result,
+        Err(_) => Err(format!("AI 请求超过 {total_seconds} 秒总超时。")),
+    }
+}
+
+#[tauri::command]
+fn cancel_ai_task(state: tauri::State<'_, AiTaskRegistry>, task_key: String) -> Result<bool, String> {
+    state.cancel(&task_key)
 }
 
 #[tauri::command]
@@ -5843,6 +6028,7 @@ pub fn run() {
         .manage(PaperImportTaskRegistry::default())
         .manage(ClusterTaskRegistry::default())
         .manage(LibraryMutationRegistry::default())
+        .manage(AiTaskRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -5871,6 +6057,11 @@ pub fn run() {
             get_v20_analysis_state,
             get_v20_hotspot_snapshot,
             get_v20_galaxy_payload,
+            set_app_credential,
+            get_app_credential_status,
+            delete_app_credential,
+            ai_chat,
+            cancel_ai_task,
             write_text_file,
             read_markdown_exports,
             run_cleaner_worker,

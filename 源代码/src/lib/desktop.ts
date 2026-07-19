@@ -419,6 +419,41 @@ export async function getV20GalaxyPayload(input: { databaseDir?: string; project
   return invoke<App17GalaxyPayload>("get_v20_galaxy_payload", { input });
 }
 
+export async function setAppCredential(projectId: string, service: string, secret: string) {
+  if (!isDesktopRuntime()) return { configured: Boolean(secret.trim()) };
+  return invoke<{ configured: boolean }>("set_app_credential", { projectId, service, secret });
+}
+
+export async function getAppCredentialStatus(projectId: string, service: string) {
+  if (!isDesktopRuntime()) return { configured: false };
+  return invoke<{ configured: boolean }>("get_app_credential_status", { projectId, service });
+}
+
+export async function deleteAppCredential(projectId: string, service: string) {
+  if (!isDesktopRuntime()) return { configured: false };
+  return invoke<{ configured: boolean }>("delete_app_credential", { projectId, service });
+}
+
+export async function runAiChat(input: {
+  taskKey: string;
+  projectId: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  useEnvKey: boolean;
+  mode: "test" | "simple" | "deep" | "revised" | "keyword";
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+}) {
+  if (!isDesktopRuntime()) throw new Error("AI 请求仅在桌面应用中可用。");
+  return invoke<{ content: string; retryCount: number; elapsedMs: number }>("ai_chat", { input });
+}
+
+export async function cancelAiTask(taskKey: string) {
+  if (!isDesktopRuntime()) return false;
+  return invoke<boolean>("cancel_ai_task", { taskKey });
+}
+
 export async function getDemoPaperSamplePath() {
   if (!isDesktopRuntime()) {
     throw new Error("演示数据一键导入仅桌面端可用。");

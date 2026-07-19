@@ -19,6 +19,16 @@ function requireCheck(name, condition) {
 
 requireCheck("backup-schema-v2", types.includes("schemaVersion?: number") && store.includes("schemaVersion: 2"));
 requireCheck("derived-hotspots-excluded", store.includes("hotspots: []"));
+const exportBlock = store.slice(store.indexOf("export async function exportBackupData"), store.indexOf("export async function restoreBackupData"));
+requireCheck(
+  "sensitive-fields-omitted",
+  exportBlock.includes("manualApiKey: _manualApiKey")
+    && exportBlock.includes("apiCredentialConfigured: _apiCredentialConfigured")
+    && exportBlock.includes("password: _mysqlPassword")
+    && exportBlock.includes("credentialConfigured: _mysqlCredentialConfigured")
+    && exportBlock.includes("settings: { ...backupSettings, mysql: backupMysql }")
+    && types.includes('Omit<AiSettings, "manualApiKey" | "apiCredentialConfigured" | "mysql">'),
+);
 const restoreBlock = store.slice(store.indexOf("export async function restoreBackupData"), store.indexOf("function normalizeBackupForRestore"));
 requireCheck("restore-validates-before-write", restoreBlock.indexOf("normalizeBackupForRestore") < restoreBlock.indexOf("db.transaction("));
 requireCheck("indexeddb-single-transaction", store.includes("[PROJECT_STORE, META_STORE, PAPER_STORE, HOTSPOT_STORE, REPORT_STORE, JOB_STORE, SETTINGS_STORE, TASK_LOG_STORE]"));
