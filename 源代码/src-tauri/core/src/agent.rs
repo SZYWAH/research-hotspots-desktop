@@ -461,6 +461,18 @@ fn contains_sensitive_field(value: &Value) -> bool {
     }
 }
 
+pub fn validate_storable_json(value: &Value) -> Result<(), String> {
+    if contains_sensitive_field(value) {
+        return Err("AGENT_JSON_CONTAINS_CREDENTIAL".into());
+    }
+    Ok(())
+}
+
+pub fn canonical_value_sha256(value: &Value) -> Result<String, String> {
+    validate_storable_json(value)?;
+    canonical_json_sha256(value)
+}
+
 fn canonical_json_sha256<T: Serialize>(value: &T) -> Result<String, String> {
     let value = serde_json::to_value(value)
         .map_err(|error| format!("AGENT_HASH_SERIALIZE_FAILED:{error}"))?;

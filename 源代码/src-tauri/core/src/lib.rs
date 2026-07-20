@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_store;
 
 use std::collections::HashSet;
 use std::fs;
@@ -11,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const V20_SCHEMA_VERSION: i64 = 8;
+pub const LIBRARY_SCHEMA_VERSION: i64 = 9;
+pub const MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION: i64 = 8;
 pub const V20_ALGORITHM_VERSION: &str = "v20-unified-1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -346,7 +349,9 @@ where
 
 pub fn ensure_library_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(include_str!("library_schema.sql")).map_err(|error| error.to_string())?;
-    ensure_v20_schema(conn)
+    ensure_v20_schema(conn)?;
+    agent_store::ensure_agent_schema(conn)?;
+    conn.pragma_update(None, "user_version", LIBRARY_SCHEMA_VERSION).map_err(|error| error.to_string())
 }
 
 pub fn cleanup_sqlite_artifacts(database_path: &Path) {
@@ -460,15 +465,25 @@ pub fn install_seed_library_atomically(
     }
     copy_file_atomically_without_overwrite(seed, target, |partial| {
         if !sha256_file(partial)?.eq_ignore_ascii_case(&expectation.sha256) { return Err("COPIED_SEED_SHA256_MISMATCH".to_string()); }
-        let value = validate_library_candidate_file(partial, &expectation.project_id)?;
-        if value.schema_version != expectation.schema_version
-            || value.project_id != expectation.project_id
-            || value.snapshot_id.as_deref() != Some(expectation.snapshot_id.as_str())
-            || value.paper_count != expectation.paper_count
-            || value.hotspot_count != expectation.hotspot_count
-            || value.membership_count != expectation.membership_count
+        let seed_value = validate_library_candidate_file(partial, &expectation.project_id)?;
+        if seed_value.schema_version != expectation.schema_version
+            || seed_value.project_id != expectation.project_id
+            || seed_value.snapshot_id.as_deref() != Some(expectation.snapshot_id.as_str())
+            || seed_value.paper_count != expectation.paper_count
+            || seed_value.hotspot_count != expectation.hotspot_count
+            || seed_value.membership_count != expectation.membership_count
         {
             return Err("SEED_V20_MANIFEST_MISMATCH".to_string());
+        }
+        agent_store::migrate_library_file(partial, &expectation.project_id, 0, false)?;
+        let value = validate_library_candidate_file(partial, &expectation.project_id)?;
+        if value.schema_version != LIBRARY_SCHEMA_VERSION
+            || value.snapshot_id != seed_value.snapshot_id
+            || value.paper_count != seed_value.paper_count
+            || value.hotspot_count != seed_value.hotspot_count
+            || value.membership_count != seed_value.membership_count
+        {
+            return Err("SEED_SCHEMA_V9_MIGRATION_MISMATCH".to_string());
         }
         cleanup_sqlite_sidecars(partial);
         Ok(value)

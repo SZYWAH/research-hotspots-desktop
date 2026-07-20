@@ -21,4 +21,3 @@ CREATE TABLE IF NOT EXISTS v20_analysis_state (
   project_id TEXT PRIMARY KEY, active_snapshot_id TEXT NOT NULL, updated_at TEXT NOT NULL,
   FOREIGN KEY(active_snapshot_id) REFERENCES v20_analysis_snapshots(id)
 );
-PRAGMA user_version = 8;
