@@ -19,9 +19,9 @@ There is no fully autonomous mode in v0.22. Navigation never starts cleaning, cl
 
 ## Planner protocol
 
-Every planner turn returns one strict, schema-validated action:
+Planning uses two strict phases. `PlanBuilder` may only return the objective, assumptions, success criteria, and ordered tool-step drafts. Core injects the plan version, tool version, registry hash, and authoritative risk. After plan approval, every `ActionPlanner` turn returns exactly one schema-validated action:
 
-- `call_tool`: request one registered tool with structured JSON input and a declared risk level.
+- `call_tool`: request one registered tool with structured JSON input. The model cannot declare or lower risk.
 - `ask_user`: stop and request information or a decision that cannot be derived safely.
 - `complete`: request completion after deterministic success gates have passed.
 
@@ -48,8 +48,11 @@ Advisor mode forbids all tool execution, including read tools.
 
 Default limits are:
 
-- at most 20 executed steps;
+- at most 20 planned steps;
+- at most 24 actual tool calls, including retries;
+- at most 24 model planning rounds, including the initial PlanBuilder call;
 - at most one retry after a tool failure;
+- at most one protocol-structure repair request;
 - at most one automatic rewrite of a high-risk report.
 
 When any applicable budget is exhausted, the Agent enters a user-waiting state. It must not silently expand the budget or continue invoking AI. Repeated identical tool calls with identical input are rejected unless they are the one permitted retry.
@@ -60,7 +63,9 @@ A model response alone cannot complete a run. Completion requires deterministic 
 
 Run states are:
 
-`draft`, `planning`, `awaiting_plan_approval`, `ready`, `running`, `awaiting_action_approval`, `evaluating`, `paused`, `cancelling`, `cancelled`, `failed`, and `completed`.
+`draft`, `planning`, `awaiting_plan_approval`, `ready`, `running`, `awaiting_action_approval`, `awaiting_user`, `evaluating`, `paused`, `cancelling`, `cancelled`, `failed`, and `completed`.
+
+`awaiting_user` is the only state used for missing or stale V20 data, structured questions, exhausted budgets, repeated model-protocol failures, and artifact review. Entering it always releases the executor lease and never starts modelling automatically.
 
 Step states are:
 
@@ -70,11 +75,11 @@ All state changes are validated by the Core state machine. `running` cannot tran
 
 ## Persistence and recovery boundary
 
-The schema v9 implementation in the next development step will make SQLite the sole authority for Agent runs, steps, append-only events, approvals, execution receipts, and canonical artifacts. IndexedDB may cache Agent views but cannot decide whether a run or step succeeded.
+SQLite schema v10 is the sole authority for Agent runs, versioned plans, steps, append-only events, questions and answers, ordered approvals, artifact reviews, model-profile hashes, execution receipts, and canonical artifacts. IndexedDB may cache Agent views but cannot decide whether a run or step succeeded.
 
 Each state transition will update state and append its event in one SQLite transaction. The UI is notified only after commit and reconstructs itself from SQLite after a refresh or WebView restart.
 
-Each mutating tool will use an `operationKey`. Its business mutation and `agent_tool_receipts` record must commit in the same SQLite transaction. Recovery checks the receipt before retrying, preventing a crash between business commit and step completion from duplicating clustering, imports, reports, or exports. Per-run leases prevent concurrent executors; expired leases may be recovered after application restart.
+Each mutating tool uses an `operationKey`. Its business mutation, artifact, step result, budget update, event, and `agent_tool_receipts` record commit in the same SQLite transaction. Recovery checks the receipt before retrying. Per-run leases use owner, token, and generation fencing; a stale executor cannot commit even if a late network response arrives after takeover.
 
 Canonical Agent-generated report content and audit metadata will be stored as SQLite artifacts. The existing IndexedDB report library remains a compatibility mirror that can be rebuilt if mirroring fails.
 
@@ -86,6 +91,6 @@ The Agent stores concise decision summaries and policy reasons only. It does not
 
 ## Compatibility boundaries
 
-This contract does not change Tauri commands, frontend routes, SQLite schema v8, `PipelineJob`, `TaskLog`, `ResearchReport`, V20 data structures, report review rules, installation behaviour, or the paper journey. The application version remains `0.21.0-beta.2` until the final v0.22 release step.
+The supervised backend adds narrow Tauri commands and upgrades an opened user library to SQLite schema v10, while the Beta.2 seed remains schema v8 and is migrated after installation. It does not add a frontend route or Agent page, and it does not change `PipelineJob`, `TaskLog`, `ResearchReport`, V20 data structures, installation behaviour, or the paper journey. The application version remains `0.21.0-beta.2` until the final v0.22 release step.
 
-The first Agent beta deliberately excludes multi-Agent coordination, arbitrary web browsing, arbitrary plugins, arbitrary SQL or shell access, autonomous deletion, vector long-term memory, and unsupervised external paper import.
+The first Agent beta deliberately excludes multi-Agent coordination, arbitrary web browsing, arbitrary plugins, arbitrary SQL or shell access, autonomous deletion, vector long-term memory, and unsupervised external paper import. Its initial tool registry is limited to local library and V20 inspection/search, persisted representative-evidence loading, immutable evidence/report artifacts, deterministic report audit, and report revision.

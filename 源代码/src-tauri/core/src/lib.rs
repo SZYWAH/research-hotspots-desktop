@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod agent_executor;
+pub mod agent_protocol;
 pub mod agent_report;
 pub mod agent_store;
 pub mod agent_tools;

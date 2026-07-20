@@ -1,3 +1,6 @@
+mod agent_model_gateway;
+mod agent_runtime;
+
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
@@ -10,17 +13,17 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use research_hotspots_core::agent::{AgentAutomationMode, AgentBudget};
+use research_hotspots_core::agent_store::{migrate_library_file, AgentRepository, AgentRunRecord, AgentRunSnapshot, NewAgentRun};
 use research_hotspots_core::{
     atomic_replace_file_with_rollback, create_empty_library_atomically,
     install_seed_library_atomically,
     read_analysis_state, read_unified_galaxy_rows,
-    read_unified_hotspot_rows, validate_library_candidate_connection,
+    read_unified_hotspot_rows, validate_active_snapshot, validate_library_candidate_connection,
     validate_library_candidate_file, write_snapshot_transaction, AnalysisState, SnapshotHotspot,
     FirstRunMode, SeedExpectation, SnapshotMembership, SnapshotWriteInput,
     ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
 };
-use research_hotspots_core::agent::{AgentAutomationMode, AgentBudget, AgentRiskLevel, AgentRunStatus};
-use research_hotspots_core::agent_store::{migrate_library_file, AgentRepository, AgentRunRecord, AgentRunSnapshot, NewAgentRun};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -94,20 +97,14 @@ struct PaperQueryResult {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentCreateRunInput { database_dir: Option<String>, id: String, project_id: Option<String>, snapshot_id: Option<String>, automation_mode: AgentAutomationMode, objective: String, budget: Option<AgentBudget> }
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentCreateRunInput { database_dir: Option<String>, id: String, project_id: Option<String>, automation_mode: AgentAutomationMode, objective: String, budget: Option<AgentBudget> }
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentRunQueryInput { database_dir: Option<String>, run_id: String }
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentRunListInput { database_dir: Option<String>, project_id: Option<String>, limit: Option<u32>, offset: Option<u32> }
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentApprovalInput { database_dir: Option<String>, id: String, run_id: String, plan_version: Option<u32>, step_id: Option<String>, approval_kind: String, decision: String, approved_hash: String, risk: Option<AgentRiskLevel>, actor_id: String, policy_reason: Option<String> }
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentControlInput { database_dir: Option<String>, run_id: String, action: String }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -8040,20 +8037,14 @@ ER  -
 #[tauri::command]
 fn agent_create_run(app: tauri::AppHandle, input: AgentCreateRunInput) -> Result<AgentRunRecord, String> {
     let (conn, _, _) = open_library_database(&app, input.database_dir)?;
-    AgentRepository::new(&conn)?.create_run(NewAgentRun { id: input.id, project_id: input.project_id.unwrap_or_else(default_project_id), snapshot_id: input.snapshot_id, automation_mode: input.automation_mode, objective: input.objective, budget: input.budget.unwrap_or_default(), now_ms: now_millis().min(i64::MAX as u128) as i64 })
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let snapshot_id = validate_active_snapshot(&conn, &project_id)?.map(|snapshot| snapshot.active_snapshot_id);
+    AgentRepository::new(&conn)?.create_run(NewAgentRun { id: input.id, project_id, snapshot_id, automation_mode: input.automation_mode, objective: input.objective, budget: input.budget.unwrap_or_default(), now_ms: now_millis().min(i64::MAX as u128) as i64 })
 }
 #[tauri::command]
 fn agent_get_run(app: tauri::AppHandle, input: AgentRunQueryInput) -> Result<AgentRunSnapshot, String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.snapshot(&input.run_id) }
 #[tauri::command]
 fn agent_list_runs(app: tauri::AppHandle, input: AgentRunListInput) -> Result<Vec<AgentRunRecord>, String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.list_runs(&input.project_id.unwrap_or_else(default_project_id), input.limit.unwrap_or(50), input.offset.unwrap_or(0)) }
-#[tauri::command]
-fn agent_record_approval(app: tauri::AppHandle, input: AgentApprovalInput) -> Result<(), String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.record_approval(&input.id, &input.run_id, input.plan_version, input.step_id.as_deref(), &input.approval_kind, &input.decision, &input.approved_hash, input.risk, &input.actor_id, input.policy_reason.as_deref(), now_millis().min(i64::MAX as u128) as i64) }
-#[tauri::command]
-fn agent_control_run(app: tauri::AppHandle, input: AgentControlInput) -> Result<AgentRunRecord, String> {
-    let (conn, _, _) = open_library_database(&app, input.database_dir)?; let repo = AgentRepository::new(&conn)?; let current = repo.get_run(&input.run_id)?.ok_or("AGENT_RUN_NOT_FOUND")?; let now = now_millis().min(i64::MAX as u128) as i64;
-    match input.action.as_str() { "pause" => repo.transition_run(&input.run_id, AgentRunStatus::Paused, None, now)?, "resume" => repo.transition_run(&input.run_id, AgentRunStatus::Ready, None, now)?, "cancel" => { if matches!(current.status, AgentRunStatus::Running | AgentRunStatus::Evaluating) { repo.transition_run(&input.run_id, AgentRunStatus::Cancelling, None, now)?; } repo.transition_run(&input.run_id, AgentRunStatus::Cancelled, None, now + 1)?; }, _ => return Err("AGENT_CONTROL_ACTION_INVALID".into()) }
-    repo.get_run(&input.run_id)?.ok_or_else(|| "AGENT_RUN_NOT_FOUND".into())
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -8062,14 +8053,22 @@ pub fn run() {
         .manage(ClusterTaskRegistry::default())
         .manage(LibraryMutationRegistry::default())
         .manage(AiTaskRegistry::default())
+        .manage(agent_runtime::AgentRuntimeState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             agent_create_run,
             agent_get_run,
             agent_list_runs,
-            agent_record_approval,
-            agent_control_run,
+            agent_runtime::agent_save_model_profile,
+            agent_runtime::agent_plan_run,
+            agent_runtime::agent_execute_run,
+            agent_runtime::agent_decide_plan,
+            agent_runtime::agent_decide_action,
+            agent_runtime::agent_submit_answer,
+            agent_runtime::agent_review_artifact,
+            agent_runtime::agent_get_events,
+            agent_runtime::agent_control_run,
             get_library_setup_state,
             validate_library_location,
             initialize_library,

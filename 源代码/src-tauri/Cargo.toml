@@ -80,4 +80,4 @@ fs2 = "0.4"
 research-hotspots-core = { path = "core" }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["sync", "time", "macros"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt", "net"] }
