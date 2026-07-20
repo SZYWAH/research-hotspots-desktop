@@ -1,4 +1,7 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use research_hotspots_core::{
     agent::{
@@ -20,11 +23,13 @@ fn main() -> Result<(), String> {
         }
     }
     let root = root.ok_or("--root is required")?;
-    if root.exists() {
-        fs::remove_dir_all(&root).map_err(|e| e.to_string())?
-    }
-    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    prepare_owned_root(&root)?;
     let database = root.join("agent-v8.sqlite");
+    remove_owned_files(
+        &database,
+        &root.join("too-new.sqlite"),
+        &root.join("agent-v8.pre-schema-v10.1000.sqlite"),
+    )?;
     let conn = Connection::open(&database).map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE papers(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,source TEXT NOT NULL,title TEXT NOT NULL,abstract TEXT NOT NULL,field TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,search_blob TEXT NOT NULL DEFAULT '');").map_err(|e|e.to_string())?;
     ensure_v20_schema(&conn)?;
@@ -33,7 +38,7 @@ fn main() -> Result<(), String> {
     drop(conn);
     let migration = migrate_library_file(&database, "project-default", 1000, true)?;
     if migration.previous_version != 8
-        || migration.current_version != 9
+        || migration.current_version != 10
         || migration.backup_path.as_ref().is_none_or(|p| !p.exists())
     {
         return Err("migration audit failed".into());
@@ -48,7 +53,7 @@ fn main() -> Result<(), String> {
     let too_new = root.join("too-new.sqlite");
     let too_new_conn = Connection::open(&too_new).map_err(|e| e.to_string())?;
     too_new_conn
-        .pragma_update(None, "user_version", 10)
+        .pragma_update(None, "user_version", 11)
         .map_err(|e| e.to_string())?;
     drop(too_new_conn);
     if migrate_library_file(&too_new, "project-default", 1001, true).unwrap_err()
@@ -138,5 +143,34 @@ fn main() -> Result<(), String> {
         "{}",
         serde_json::to_string_pretty(&output).map_err(|e| e.to_string())?
     );
+    Ok(())
+}
+
+fn prepare_owned_root(root: &Path) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    let canonical = fs::canonicalize(root).map_err(|error| error.to_string())?;
+    let text = canonical.to_string_lossy();
+    let drive_path = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    if !drive_path.to_ascii_uppercase().starts_with("D:\\") {
+        return Err(format!("AGENT_PERSISTENCE_AUDIT_REQUIRES_D_DRIVE:{text}"));
+    }
+    fs::write(canonical.join(".agent-persistence-audit-owned"),"Only agent-v8.sqlite*, too-new.sqlite*, and the schema-v10 audit backup are managed by this audit.\n").map_err(|error|error.to_string())
+}
+
+fn remove_owned_files(database: &Path, too_new: &Path, backup: &Path) -> Result<(), String> {
+    for base in [database, too_new] {
+        for path in [
+            base.to_path_buf(),
+            PathBuf::from(format!("{}-wal", base.display())),
+            PathBuf::from(format!("{}-shm", base.display())),
+        ] {
+            if path.exists() {
+                fs::remove_file(&path).map_err(|error| format!("{}:{error}", path.display()))?;
+            }
+        }
+    }
+    if backup.exists() {
+        fs::remove_file(backup).map_err(|error| format!("{}:{error}", backup.display()))?;
+    }
     Ok(())
 }

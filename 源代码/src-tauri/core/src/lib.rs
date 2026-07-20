@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const V20_SCHEMA_VERSION: i64 = 8;
-pub const LIBRARY_SCHEMA_VERSION: i64 = 9;
+pub const LIBRARY_SCHEMA_VERSION: i64 = 10;
 pub const MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION: i64 = 8;
 pub const V20_ALGORITHM_VERSION: &str = "v20-unified-1";
 
@@ -483,7 +483,7 @@ pub fn install_seed_library_atomically(
             || value.hotspot_count != seed_value.hotspot_count
             || value.membership_count != seed_value.membership_count
         {
-            return Err("SEED_SCHEMA_V9_MIGRATION_MISMATCH".to_string());
+            return Err("SEED_SCHEMA_V10_MIGRATION_MISMATCH".to_string());
         }
         cleanup_sqlite_sidecars(partial);
         Ok(value)
