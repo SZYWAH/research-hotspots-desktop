@@ -45,6 +45,11 @@ name = "prepare_default_library"
 path = "src/bin/prepare_default_library.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "audit_windows_first_run"
+path = "src/bin/audit_windows_first_run.rs"
+required-features = ["dev-tools"]
+
 [lib]
 name = "research_hotspots_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const V20_SCHEMA_VERSION: i64 = 8;
 pub const V20_ALGORITHM_VERSION: &str = "v20-unified-1";
@@ -71,7 +73,8 @@ pub struct UnifiedHotspotRows {
     pub hotspots: Vec<SnapshotHotspot>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatedLibraryCandidate {
     pub schema_version: i64,
     pub project_id: String,
@@ -79,6 +82,50 @@ pub struct ValidatedLibraryCandidate {
     pub hotspot_count: i64,
     pub membership_count: i64,
     pub snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstRunMode {
+    Seed,
+    Empty,
+    Existing,
+}
+
+impl FirstRunMode {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "seed" => Ok(Self::Seed),
+            "empty" => Ok(Self::Empty),
+            "existing" => Ok(Self::Existing),
+            _ => Err("UNKNOWN_LIBRARY_SETUP_MODE".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRunLocationValidation {
+    pub valid: bool,
+    pub database_dir: PathBuf,
+    pub database_path: PathBuf,
+    pub writable: bool,
+    pub available_space_bytes: u64,
+    pub required_space_bytes: u64,
+    pub existing_database: bool,
+    pub existing: Option<ValidatedLibraryCandidate>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SeedExpectation {
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub schema_version: i64,
+    pub project_id: String,
+    pub snapshot_id: String,
+    pub paper_count: i64,
+    pub hotspot_count: i64,
+    pub membership_count: i64,
 }
 
 pub fn ensure_v20_schema(conn: &Connection) -> Result<(), String> {
@@ -282,7 +329,7 @@ where
     }
     let file_name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| "INVALID_TARGET_NAME".to_string())?;
     let partial = target.with_file_name(format!("{file_name}.partial"));
-    let _ = fs::remove_file(&partial);
+    cleanup_sqlite_artifacts(&partial);
     let result = (|| {
         fs::copy(source, &partial).map_err(|error| format!("COPY_FAILED: {error}"))?;
         let value = validate(&partial)?;
@@ -290,9 +337,145 @@ where
         Ok(value)
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&partial);
+        cleanup_sqlite_artifacts(&partial);
     }
     result
+}
+
+pub fn ensure_library_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(include_str!("library_schema.sql")).map_err(|error| error.to_string())?;
+    ensure_v20_schema(conn)
+}
+
+pub fn cleanup_sqlite_artifacts(database_path: &Path) {
+    let _ = fs::remove_file(database_path);
+    let _ = fs::remove_file(format!("{}-wal", database_path.to_string_lossy()));
+    let _ = fs::remove_file(format!("{}-shm", database_path.to_string_lossy()));
+}
+
+pub fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|error| format!("Cannot read {:?}: {error}", path))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| format!("Cannot hash {:?}: {error}", path))?;
+        if read == 0 { break; }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn validate_first_run_location(
+    database_dir: &Path,
+    mode: FirstRunMode,
+    project_id: &str,
+    seed_size_bytes: Option<u64>,
+) -> Result<FirstRunLocationValidation, String> {
+    fs::create_dir_all(database_dir).map_err(|error| format!("CANNOT_CREATE_LIBRARY_DIR: {error}"))?;
+    let probe = database_dir.join(format!(".research-hotspots-write-test-{}", std::process::id()));
+    let writable = fs::write(&probe, b"ok").is_ok();
+    let _ = fs::remove_file(&probe);
+    let available_space_bytes = fs2::available_space(database_dir).unwrap_or_default();
+    let required_space_bytes = match mode {
+        FirstRunMode::Seed => seed_size_bytes.unwrap_or_default().saturating_add(64 * 1024 * 1024),
+        _ => 16 * 1024 * 1024,
+    };
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let existing_database = database_path.is_file();
+    let existing_result = if existing_database {
+        Some(validate_library_candidate_file(&database_path, project_id))
+    } else {
+        None
+    };
+    let existing = existing_result.as_ref().and_then(|value| value.as_ref().ok()).cloned();
+    let invalid_existing = existing_result.as_ref().and_then(|value| value.as_ref().err()).cloned();
+
+    let (valid, message) = if !writable {
+        (false, "LIBRARY_DIRECTORY_NOT_WRITABLE".to_string())
+    } else if mode == FirstRunMode::Existing && !existing_database {
+        (false, "EXISTING_LIBRARY_NOT_FOUND".to_string())
+    } else if mode == FirstRunMode::Existing && existing.is_none() {
+        (false, invalid_existing.unwrap_or_else(|| "EXISTING_LIBRARY_INVALID".to_string()))
+    } else if mode != FirstRunMode::Existing && existing_database {
+        (false, if existing.is_some() { "TARGET_ALREADY_EXISTS".to_string() } else { invalid_existing.unwrap_or_else(|| "TARGET_DATABASE_INVALID".to_string()) })
+    } else if available_space_bytes > 0 && available_space_bytes < required_space_bytes {
+        (false, "INSUFFICIENT_DISK_SPACE".to_string())
+    } else {
+        (true, "ok".to_string())
+    };
+
+    Ok(FirstRunLocationValidation {
+        valid,
+        database_dir: database_dir.to_path_buf(),
+        database_path,
+        writable,
+        available_space_bytes,
+        required_space_bytes,
+        existing_database,
+        existing,
+        message,
+    })
+}
+
+pub fn create_empty_library_atomically(target: &Path, project_id: &str) -> Result<ValidatedLibraryCandidate, String> {
+    if target.exists() { return Err("TARGET_ALREADY_EXISTS".to_string()); }
+    let file_name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| "INVALID_TARGET_NAME".to_string())?;
+    let partial = target.with_file_name(format!("{file_name}.partial"));
+    cleanup_sqlite_artifacts(&partial);
+    let result = (|| {
+        let conn = Connection::open(&partial).map_err(|error| format!("EMPTY_LIBRARY_CREATE_FAILED: {error}"))?;
+        ensure_library_schema(&conn)?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|error| error.to_string())?;
+        drop(conn);
+        let validated = validate_library_candidate_file(&partial, project_id)?;
+        if validated.paper_count != 0 || validated.snapshot_id.is_some() {
+            return Err("EMPTY_LIBRARY_CONTAINS_DATA".to_string());
+        }
+        cleanup_sqlite_sidecars(&partial);
+        fs::rename(&partial, target).map_err(|error| format!("ATOMIC_SWITCH_FAILED: {error}"))?;
+        Ok(validated)
+    })();
+    if result.is_err() { cleanup_sqlite_artifacts(&partial); }
+    result
+}
+
+pub fn install_seed_library_atomically(
+    seed: &Path,
+    target: &Path,
+    expectation: &SeedExpectation,
+) -> Result<ValidatedLibraryCandidate, String> {
+    if fs::metadata(seed).map_err(|error| format!("SEED_NOT_READABLE: {error}"))?.len() != expectation.size_bytes {
+        return Err("SEED_SIZE_MISMATCH".to_string());
+    }
+    if !sha256_file(seed)?.eq_ignore_ascii_case(&expectation.sha256) {
+        return Err("SEED_SHA256_MISMATCH".to_string());
+    }
+    if let Some(parent) = target.parent() {
+        let available = fs2::available_space(parent).unwrap_or_default();
+        if available > 0 && available < expectation.size_bytes.saturating_add(64 * 1024 * 1024) {
+            return Err("INSUFFICIENT_DISK_SPACE".to_string());
+        }
+    }
+    copy_file_atomically_without_overwrite(seed, target, |partial| {
+        if !sha256_file(partial)?.eq_ignore_ascii_case(&expectation.sha256) { return Err("COPIED_SEED_SHA256_MISMATCH".to_string()); }
+        let value = validate_library_candidate_file(partial, &expectation.project_id)?;
+        if value.schema_version != expectation.schema_version
+            || value.project_id != expectation.project_id
+            || value.snapshot_id.as_deref() != Some(expectation.snapshot_id.as_str())
+            || value.paper_count != expectation.paper_count
+            || value.hotspot_count != expectation.hotspot_count
+            || value.membership_count != expectation.membership_count
+        {
+            return Err("SEED_V20_MANIFEST_MISMATCH".to_string());
+        }
+        cleanup_sqlite_sidecars(partial);
+        Ok(value)
+    })
+}
+
+fn cleanup_sqlite_sidecars(database_path: &Path) {
+    let _ = fs::remove_file(format!("{}-wal", database_path.to_string_lossy()));
+    let _ = fs::remove_file(format!("{}-shm", database_path.to_string_lossy()));
 }
 
 pub fn atomic_replace_file_with_rollback<T, F>(active: &Path, staged: &Path, safety: &Path, validate: F) -> Result<(bool, T), String>

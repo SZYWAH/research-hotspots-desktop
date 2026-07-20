@@ -11,11 +11,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use research_hotspots_core::{
-    atomic_replace_file_with_rollback, copy_file_atomically_without_overwrite,
+    atomic_replace_file_with_rollback, create_empty_library_atomically,
+    install_seed_library_atomically,
     read_analysis_state, read_unified_galaxy_rows,
     read_unified_hotspot_rows, validate_library_candidate_connection,
     validate_library_candidate_file, write_snapshot_transaction, AnalysisState, SnapshotHotspot,
-    SnapshotMembership, SnapshotWriteInput, ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
+    FirstRunMode, SeedExpectation, SnapshotMembership, SnapshotWriteInput,
+    ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -197,7 +199,6 @@ struct InitializeLibraryResult {
 #[derive(Clone)]
 struct LibraryFileValidation {
     schema_version: i64,
-    project_id: String,
     snapshot_id: Option<String>,
     paper_count: i64,
     hotspot_count: i64,
@@ -1216,7 +1217,7 @@ fn initialize_library(
         .map_err(|error| format!("无法创建论文库目录 {:?}: {error}", database_dir))?;
 
     match mode.as_str() {
-        "seed" => install_seed_library(&app, &database_dir, &database_path)?,
+        "seed" => install_seed_library(&app, &database_path)?,
         "empty" => create_empty_library(&database_path)?,
         "existing" => {}
         _ => unreachable!(),
@@ -6194,100 +6195,43 @@ fn validate_library_location_impl(
     database_dir: &str,
     mode: &str,
 ) -> Result<LibraryLocationValidation, String> {
-    let mode = mode.trim().to_ascii_lowercase();
-    if !matches!(mode.as_str(), "seed" | "empty" | "existing") {
-        return Err("未知的论文库初始化方式。".to_string());
-    }
+    let mode_name = mode.trim().to_ascii_lowercase();
+    let mode = FirstRunMode::parse(&mode_name).map_err(|_| "未知的论文库初始化方式。".to_string())?;
     if database_dir.trim().is_empty() {
         return Err("请先选择论文库目录。".to_string());
     }
 
     let database_dir = PathBuf::from(database_dir.trim());
-    fs::create_dir_all(&database_dir)
-        .map_err(|error| format!("无法创建论文库目录 {:?}: {error}", database_dir))?;
-    let writable_probe = database_dir.join(format!(
-        ".research-hotspots-write-test-{}-{}",
-        std::process::id(),
-        now_millis()
-    ));
-    let writable = fs::write(&writable_probe, b"ok").is_ok();
-    let _ = fs::remove_file(&writable_probe);
-    let available_space_bytes = fs2::available_space(&database_dir).unwrap_or_default();
-    let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    let existing_database = database_path.is_file();
-    let existing_validation = if existing_database {
-        validate_database_file(&database_path)
-    } else {
-        Err("目录中没有现有论文库。".to_string())
-    };
-    let existing_database_valid = existing_validation.is_ok();
-    let (paper_count, hotspot_count, membership_count, snapshot_id, database_schema_version) =
-        existing_validation
-            .as_ref()
-            .map(|value| {
-                (
-                    value.paper_count,
-                    value.hotspot_count,
-                    value.membership_count,
-                    value.snapshot_id.clone(),
-                    Some(value.schema_version),
-                )
-            })
-            .unwrap_or((0, 0, 0, None, None));
-    let required_space_bytes = if mode == "seed" {
-        load_default_library_manifest(app)?
-            .size_bytes
-            .saturating_add(64 * 1024 * 1024)
-    } else {
-        16 * 1024 * 1024
-    };
-
-    let (valid, message) = if !writable {
-        (false, "所选目录不可写，请选择其他目录。".to_string())
-    } else if mode == "existing" && !existing_database {
-        (
-            false,
-            "所选目录中未找到 research-hotspots-v7.sqlite。".to_string(),
-        )
-    } else if mode == "existing" && !existing_database_valid {
-        (
-            false,
-            existing_validation
-                .err()
-                .unwrap_or_else(|| "现有论文库无效。".to_string()),
-        )
-    } else if mode != "existing" && existing_database {
-        if existing_database_valid {
-            (
-                false,
-                "所选目录已包含有效论文库。请选择“使用现有库”，应用不会覆盖它。".to_string(),
-            )
-        } else {
-            (
-                false,
-                "所选目录已包含同名但无效的数据库。请移走该文件或选择其他目录。".to_string(),
-            )
-        }
-    } else if available_space_bytes > 0 && available_space_bytes < required_space_bytes {
-        (
-            false,
-            format!(
-                "可用空间不足：至少需要 {} MB。",
-                required_space_bytes / 1024 / 1024
-            ),
-        )
-    } else {
-        (true, "目录检查通过。".to_string())
+    let seed_size = if mode == FirstRunMode::Seed { Some(load_default_library_manifest(app)?.size_bytes) } else { None };
+    let core = research_hotspots_core::validate_first_run_location(
+        &database_dir,
+        mode,
+        &default_project_id(),
+        seed_size,
+    )?;
+    let existing_database_valid = core.existing.is_some();
+    let (paper_count, hotspot_count, membership_count, snapshot_id, database_schema_version) = core.existing
+        .as_ref()
+        .map(|value| (value.paper_count, value.hotspot_count, value.membership_count, value.snapshot_id.clone(), Some(value.schema_version)))
+        .unwrap_or((0, 0, 0, None, None));
+    let message = match core.message.as_str() {
+        "ok" => "目录检查通过。".to_string(),
+        "LIBRARY_DIRECTORY_NOT_WRITABLE" => "所选目录不可写，请选择其他目录。".to_string(),
+        "EXISTING_LIBRARY_NOT_FOUND" => "所选目录中未找到 research-hotspots-v7.sqlite。".to_string(),
+        "TARGET_ALREADY_EXISTS" => "所选目录已包含有效论文库。请选择“使用现有库”，应用不会覆盖它。".to_string(),
+        "TARGET_DATABASE_INVALID" => "所选目录已包含同名但无效的数据库。请移走该文件或选择其他目录。".to_string(),
+        "INSUFFICIENT_DISK_SPACE" => format!("可用空间不足：至少需要 {} MB。", core.required_space_bytes / 1024 / 1024),
+        error => error.to_string(),
     };
 
     Ok(LibraryLocationValidation {
-        valid,
+        valid: core.valid,
         database_dir: database_dir.to_string_lossy().to_string(),
-        database_path: database_path.to_string_lossy().to_string(),
-        writable,
-        available_space_bytes,
-        required_space_bytes,
-        existing_database,
+        database_path: core.database_path.to_string_lossy().to_string(),
+        writable: core.writable,
+        available_space_bytes: core.available_space_bytes,
+        required_space_bytes: core.required_space_bytes,
+        existing_database: core.existing_database,
         existing_database_valid,
         paper_count,
         hotspot_count,
@@ -6300,42 +6244,16 @@ fn validate_library_location_impl(
 }
 
 fn create_empty_library(database_path: &Path) -> Result<(), String> {
-    if database_path.exists() {
-        return Err("目标目录已存在论文库，应用不会覆盖它。".to_string());
-    }
-    let partial_path = database_path.with_extension("sqlite.partial");
-    let _ = fs::remove_file(&partial_path);
-    let result = (|| {
-        let conn = Connection::open(&partial_path)
-            .map_err(|error| format!("无法创建空白论文库 {:?}: {error}", partial_path))?;
-        initialize_library_database(&conn)?;
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-            .map_err(|error| format!("无法完成空白论文库初始化: {error}"))?;
-        drop(conn);
-        let verified = validate_database_file(&partial_path)?;
-        if verified.paper_count != 0 || verified.snapshot_id.is_some() {
-            return Err("空白论文库验证失败：包含了不应存在的数据。".to_string());
-        }
-        cleanup_sqlite_sidecars(&partial_path);
-        fs::rename(&partial_path, database_path)
-            .map_err(|error| format!("无法完成空白论文库原子安装: {error}"))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&partial_path);
-        cleanup_sqlite_sidecars(&partial_path);
-    }
-    result
-}
-
-fn cleanup_sqlite_sidecars(database_path: &Path) {
-    let _ = fs::remove_file(format!("{}-wal", database_path.to_string_lossy()));
-    let _ = fs::remove_file(format!("{}-shm", database_path.to_string_lossy()));
+    create_empty_library_atomically(database_path, &default_project_id())
+        .map(|_| ())
+        .map_err(|error| match error.as_str() {
+            "TARGET_ALREADY_EXISTS" => "目标目录已存在论文库，应用不会覆盖它。".to_string(),
+            _ => format!("空白论文库安全初始化失败: {error}"),
+        })
 }
 
 fn install_seed_library(
     app: &tauri::AppHandle,
-    database_dir: &Path,
     database_path: &Path,
 ) -> Result<(), String> {
     if database_path.exists() {
@@ -6343,44 +6261,17 @@ fn install_seed_library(
     }
     let (seed_path, _) = default_library_resource_paths(app)?;
     let manifest = load_default_library_manifest(app)?;
-    let seed_size = fs::metadata(&seed_path)
-        .map_err(|error| format!("无法读取默认论文库资源: {error}"))?
-        .len();
-    if seed_size != manifest.size_bytes {
-        return Err("默认论文库资源大小与清单不一致。".to_string());
-    }
-    let seed_sha256 = sha256_file(&seed_path)?;
-    if !seed_sha256.eq_ignore_ascii_case(&manifest.sha256) {
-        return Err("默认论文库资源 SHA-256 校验失败。".to_string());
-    }
-
-    let required_space = seed_size.saturating_add(64 * 1024 * 1024);
-    let available_space = fs2::available_space(database_dir).unwrap_or_default();
-    if available_space > 0 && available_space < required_space {
-        return Err(format!(
-            "可用空间不足：至少需要 {} MB。",
-            required_space / 1024 / 1024
-        ));
-    }
-
-    copy_file_atomically_without_overwrite(&seed_path, database_path, |partial_path| {
-        let copied_sha256 = sha256_file(&partial_path)?;
-        if !copied_sha256.eq_ignore_ascii_case(&manifest.sha256) {
-            return Err("复制后的默认论文库 SHA-256 校验失败。".to_string());
-        }
-        let verified = validate_database_file(&partial_path)?;
-        if verified.schema_version != manifest.database_schema_version
-            || verified.project_id != manifest.project_id
-            || verified.snapshot_id.as_deref() != Some(manifest.snapshot_id.as_str())
-            || verified.paper_count != manifest.paper_count
-            || verified.hotspot_count != manifest.hotspot_count
-            || verified.membership_count != manifest.membership_count
-        {
-            return Err("复制后的 V20 快照、论文、热点或归属计数与清单不一致。".to_string());
-        }
-        cleanup_sqlite_sidecars(partial_path);
-        Ok(())
-    }).map_err(|error| match error.as_str() {
+    let expectation = SeedExpectation {
+        sha256: manifest.sha256,
+        size_bytes: manifest.size_bytes,
+        schema_version: manifest.database_schema_version,
+        project_id: manifest.project_id,
+        snapshot_id: manifest.snapshot_id,
+        paper_count: manifest.paper_count,
+        hotspot_count: manifest.hotspot_count,
+        membership_count: manifest.membership_count,
+    };
+    install_seed_library_atomically(&seed_path, database_path, &expectation).map(|_| ()).map_err(|error| match error.as_str() {
         "TARGET_ALREADY_EXISTS" => "目标目录已存在论文库，应用不会覆盖它。".to_string(),
         _ => format!("默认论文库安全安装失败: {error}"),
     })
@@ -6392,7 +6283,6 @@ fn validate_database_file(database_path: &Path) -> Result<LibraryFileValidation,
         .map_err(|error| format!("SQLite 论文库验证失败: {error}"))?;
     Ok(LibraryFileValidation {
         schema_version: verified.schema_version,
-        project_id: verified.project_id,
         snapshot_id: verified.snapshot_id,
         paper_count: verified.paper_count,
         hotspot_count: verified.hotspot_count,

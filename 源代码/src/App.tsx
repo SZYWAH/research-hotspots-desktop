@@ -121,6 +121,7 @@ import {
   testAiConnection,
 } from "./ai/deepseek";
 import { searchAcademicSources } from "./lib/searchSources";
+import { deriveAnalysisProgress } from "./lib/analysisProgress";
 import { buildOfflineHotspotReport, formatHotspotEvidenceMarkdown, hotspotEvidenceToPapers } from "./lib/hotspotEvidenceReport";
 import {
   loadPersistedHotspotEvidence,
@@ -200,6 +201,7 @@ import type {
   SearchOptions,
   SourceKind,
   TaskLog,
+  V20HotspotSnapshot,
 } from "./types";
 import { DISCIPLINES } from "./types";
 
@@ -349,6 +351,7 @@ export default function App() {
   const [librarySetupRequired, setLibrarySetupRequired] = useState(false);
   const [libraryFacets, setLibraryFacets] = useState<PaperLibraryFacets | null>(null);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
+  const [v20Snapshot, setV20Snapshot] = useState<V20HotspotSnapshot | null>(null);
   const [reports, setReports] = useState<ResearchReport[]>([]);
   const [jobs, setJobs] = useState<PipelineJob[]>([]);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
@@ -446,8 +449,10 @@ export default function App() {
       getAllTaskLogs(),
       getAiSettings(),
     ]);
+    let nextV20Snapshot: V20HotspotSnapshot | null = null;
     if (isDesktopRuntime() && !galaxyVisualReview) {
       const snapshot = await getV20HotspotSnapshot({ databaseDir: nextSettings.databaseDir, projectId: nextProject.id });
+      nextV20Snapshot = snapshot ?? null;
       if (requestSequence !== refreshRequestSequenceRef.current) return;
       if (snapshot) {
         await replaceV20HotspotCache(snapshot);
@@ -481,6 +486,7 @@ export default function App() {
     setLibraryStatus(nextStatus);
     setLibraryFacets(nextFacets);
     setHotspots(nextHotspots);
+    setV20Snapshot(nextV20Snapshot);
     setReports(nextReports);
     setJobs(nextJobs);
     setTaskLogs(nextTaskLogs);
@@ -651,7 +657,7 @@ export default function App() {
 
       <section ref={workspaceRef} className="workspace">
         {activeView === "dashboard" && (
-          <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} libraryStatus={libraryStatus} loading={loading} onNavigate={setActiveView} />
+          <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
         )}
         {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {(activeView === "galaxy" || galaxyVisited) && settings && activeProject && (
@@ -664,6 +670,7 @@ export default function App() {
               settings={settings}
               activeProject={activeProject}
               libraryStatus={libraryStatus}
+              v20Snapshot={v20Snapshot}
               app17Session={galaxySessionsRef.current.get(galaxySessionCacheKey(settings.databaseDir, activeProject.id)) ?? EMPTY_GALAXY_SESSION}
               app17SessionKey={galaxySessionCacheKey(settings.databaseDir, activeProject.id)}
               visualReview={galaxyVisualReview}
@@ -684,7 +691,7 @@ export default function App() {
         )}
         {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "about" && <AboutView settings={settings} libraryStatus={libraryStatus} hotspots={hotspots} reports={reports} />}
@@ -1185,6 +1192,7 @@ function DashboardView({
   jobs,
   taskLogs,
   libraryStatus,
+  v20Snapshot,
   loading,
   onNavigate,
 }: {
@@ -1195,16 +1203,22 @@ function DashboardView({
   jobs: PipelineJob[];
   taskLogs: TaskLog[];
   libraryStatus: PaperLibraryStatus | null;
+  v20Snapshot: V20HotspotSnapshot | null;
   loading: boolean;
   onNavigate: (view: ActiveView) => void;
 }) {
   const paperCount = libraryStatus?.paperCount ?? dashboard?.paperCount ?? papers.length;
-  const cleanJob = jobs.find((job) => job.stage === "clean");
-  const clusterJob = jobs.find((job) => job.stage === "cluster");
-  const cleanRunning = cleanJob?.status === "queued" || cleanJob?.status === "running";
-  const clusterRunning = clusterJob?.status === "queued" || clusterJob?.status === "running";
-  const cleanDone = cleanJob?.status === "done";
-  const clusterDone = clusterJob?.status === "done" && hotspots.length > 0;
+  const analysisProgress = useMemo(() => deriveAnalysisProgress({
+    paperCount,
+    hotspotCount: hotspots.length,
+    jobs,
+    snapshot: v20Snapshot,
+  }), [hotspots.length, jobs, paperCount, v20Snapshot]);
+  const { cleanJob, clusterJob } = analysisProgress;
+  const cleanRunning = analysisProgress.cleanState === "running";
+  const clusterRunning = analysisProgress.clusterState === "running";
+  const cleanDone = analysisProgress.cleanState === "done";
+  const clusterDone = analysisProgress.clusterState === "done";
   const latestTaskLog = useMemo(
     () => taskLogs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
     [taskLogs],
@@ -1224,24 +1238,8 @@ function DashboardView({
   const latestYear = yearRows.at(-1);
   const yearRange = firstYear && latestYear ? `${firstYear.year}-${latestYear.year}` : "暂无年份";
 
-  const cleanStepState: DashboardStepState = paperCount === 0
-    ? "pending"
-    : cleanRunning
-      ? "running"
-      : cleanJob?.status === "failed"
-        ? "failed"
-        : cleanDone
-          ? "done"
-          : "pending";
-  const clusterStepState: DashboardStepState = !cleanDone
-    ? "pending"
-    : clusterRunning
-      ? "running"
-      : clusterJob?.status === "failed"
-        ? "failed"
-        : clusterDone
-          ? "done"
-          : "pending";
+  const cleanStepState: DashboardStepState = analysisProgress.cleanState;
+  const clusterStepState: DashboardStepState = analysisProgress.clusterState;
   const progressSteps: DashboardProgressStep[] = [
     {
       id: "prepare",
@@ -1258,7 +1256,11 @@ function DashboardView({
     {
       id: "cluster",
       title: "热点建模",
-      detail: clusterDone ? `${hotspots.length} 个热点` : clusterJob?.detail || "生成热点与演化趋势",
+      detail: clusterDone
+        ? `${hotspots.length} 个热点 · V20 快照已同步`
+        : analysisProgress.snapshotStale
+          ? "论文库已变化，需要重新运行热点建模"
+          : clusterJob?.detail || "生成热点与演化趋势",
       state: clusterStepState,
     },
     {
@@ -1294,12 +1296,12 @@ function DashboardView({
       icon: Loader2,
       tone: "running",
     };
-  } else if (cleanJob?.status === "failed") {
+  } else if (cleanStepState === "failed") {
     primaryAction = {
       stage: "clean",
       stageLabel: "清洗去重",
       title: "上次清洗未完成",
-      description: cleanJob.detail || "进入分析流水线查看失败原因并重试当前步骤。",
+      description: cleanJob?.detail || "进入分析流水线查看失败原因并重试当前步骤。",
       buttonLabel: "处理清洗问题",
       target: "pipeline",
       icon: RefreshCw,
@@ -1327,12 +1329,12 @@ function DashboardView({
       icon: Loader2,
       tone: "running",
     };
-  } else if (clusterJob?.status === "failed") {
+  } else if (clusterStepState === "failed") {
     primaryAction = {
       stage: "cluster",
       stageLabel: "热点建模",
       title: "上次热点建模未完成",
-      description: clusterJob.detail || "进入分析流水线查看失败原因并重新运行热点建模。",
+      description: clusterJob?.detail || "进入分析流水线查看失败原因并重新运行热点建模。",
       buttonLabel: "处理建模问题",
       target: "pipeline",
       icon: Network,
@@ -2935,6 +2937,7 @@ function GalaxyView({
   settings,
   activeProject,
   libraryStatus,
+  v20Snapshot,
   app17Session,
   app17SessionKey,
   visualReview,
@@ -2951,6 +2954,7 @@ function GalaxyView({
   settings: AiSettings;
   activeProject: Project;
   libraryStatus: PaperLibraryStatus | null;
+  v20Snapshot: V20HotspotSnapshot | null;
   app17Session: GalaxySessionState;
   app17SessionKey: string;
   visualReview: boolean;
@@ -3002,7 +3006,7 @@ function GalaxyView({
   const visualReviewAutomationRef = useRef({ key: "", hotspotSelected: false, systemRequested: false, paperSelected: false, paperRequested: false });
   const galaxyInspectorScrollRef = useRef<HTMLDivElement>(null);
   const cachedSnapshotIds = useMemo(() => Array.from(new Set(hotspots.map((hotspot) => hotspot.snapshotId).filter(Boolean))), [hotspots]);
-  const cachedSnapshotId = cachedSnapshotIds.length === 1 ? cachedSnapshotIds[0] : undefined;
+  const cachedSnapshotId = v20Snapshot?.snapshotId ?? (cachedSnapshotIds.length === 1 ? cachedSnapshotIds[0] : undefined);
   const v20SnapshotConsistent = visualReview || !app17Payload?.ready || Boolean(
     app17Payload.snapshotId && cachedSnapshotId && app17Payload.snapshotId === cachedSnapshotId,
   );
@@ -5509,6 +5513,7 @@ function PipelineView({
   settings,
   activeProject,
   libraryStatus,
+  v20Snapshot,
   onNavigate,
   onRefresh,
   onNotice,
@@ -5520,6 +5525,7 @@ function PipelineView({
   settings: AiSettings;
   activeProject: Project;
   libraryStatus: PaperLibraryStatus | null;
+  v20Snapshot: V20HotspotSnapshot | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
   onNotice: (value: string) => void;
@@ -5532,22 +5538,15 @@ function PipelineView({
     || (hotspot.source !== "seed" && Boolean(hotspot.analysis?.evidencePaperIds.length))
   )).length;
   const hasModeledHotspotResult = modeledHotspotCount > 0;
-  const cleanJob = jobs.find((item) => item.stage === "clean");
-  const clusterJob = jobs.find((item) => item.stage === "cluster");
-  const cleanState: PipelineStepState = cleanJob?.status === "running"
-    ? "running"
-    : cleanJob?.status === "failed"
-      ? "failed"
-      : cleanJob?.status === "done"
-        ? "done"
-        : "pending";
-  const clusterState: PipelineStepState = clusterJob?.status === "running"
-    ? "running"
-    : clusterJob?.status === "failed"
-      ? "failed"
-      : clusterJob?.status === "done" && hasModeledHotspotResult
-        ? "done"
-        : "pending";
+  const analysisProgress = useMemo(() => deriveAnalysisProgress({
+    paperCount,
+    hotspotCount: hotspots.length,
+    jobs,
+    snapshot: v20Snapshot,
+  }), [hotspots.length, jobs, paperCount, v20Snapshot]);
+  const { cleanJob, clusterJob } = analysisProgress;
+  const cleanState: PipelineStepState = analysisProgress.cleanState;
+  const clusterState: PipelineStepState = analysisProgress.clusterState;
   const currentStepId: PipelineStepId = paperCount === 0
     ? "prepare"
     : cleanState !== "done"
@@ -5611,7 +5610,7 @@ function PipelineView({
       id: "result",
       title: "查看结果",
       description: hasModeledHotspotResult
-        ? `已生成 ${modeledHotspotCount} 个热点`
+        ? `已生成 ${modeledHotspotCount} 个热点${analysisProgress.snapshotCurrent ? "，V20 快照已同步" : ""}`
         : hotspots.length > 0
           ? "当前仅有样例热点，请先运行热点建模"
           : "建模完成后查看热点证据",
