@@ -1,5 +1,7 @@
 pub mod agent;
+pub mod agent_report;
 pub mod agent_store;
+pub mod agent_tools;
 
 use std::collections::HashSet;
 use std::fs;

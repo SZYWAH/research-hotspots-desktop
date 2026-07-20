@@ -27,6 +27,12 @@ export function extractCitationIndices(text: string) {
     .sort((a, b) => a - b);
 }
 
+function reportBodyForAudit(content: string) {
+  const referenceHeading = /^\s*#{1,4}\s*(参考文献|References)\s*$/im;
+  const match = referenceHeading.exec(content);
+  return (match ? content.slice(0, match.index) : content).trim();
+}
+
 export function normalizeReportOutput(content: string, topic: string, papers: Paper[], evidenceProfile?: ReportEvidenceProfile) {
   let text = content
     .replace(/^```(?:markdown|md|text)?\s*/i, "")
@@ -103,11 +109,12 @@ export function evaluateReportQuality(content: string, papers: Paper[]): Researc
     return { citationCoverage: 0, citationAccuracy: 0, consistencyScore: 0 };
   }
 
-  const cited = extractCitationIndices(content);
+  const auditableContent = reportBodyForAudit(content);
+  const cited = extractCitationIndices(auditableContent);
   const valid = cited.filter((index) => index >= 1 && index <= papers.length);
   const citationCoverage = valid.length / papers.length;
   const citationAccuracy = cited.length > 0 ? valid.length / cited.length : 0;
-  const density = Math.min(((cited.length / Math.max(content.length, 1)) * 1000) / 8, 1);
+  const density = Math.min(((cited.length / Math.max(auditableContent.length, 1)) * 1000) / 8, 1);
   const consistencyScore = Math.min(1, citationAccuracy * 0.5 + citationCoverage * 0.3 + density * 0.2);
 
   return {
@@ -118,11 +125,12 @@ export function evaluateReportQuality(content: string, papers: Paper[]): Researc
 }
 
 export function auditReport(content: string, papers: Paper[]): ReportAudit {
-  const citedIndices = extractCitationIndices(content);
+  const auditableContent = reportBodyForAudit(content);
+  const citedIndices = extractCitationIndices(auditableContent);
   const valid = citedIndices.filter((index) => index >= 1 && index <= papers.length);
   const invalidCitationCount = citedIndices.length - valid.length;
   const uncitedPaperCount = Math.max(0, papers.length - new Set(valid).size);
-  const paragraphs = content
+  const paragraphs = auditableContent
     .split(/\n{2,}/)
     .map((part) => part.trim())
     .filter((part) => part.length > 80 && !/^#{1,4}\s/.test(part) && !/\[\d+\]/.test(part))
@@ -130,8 +138,8 @@ export function auditReport(content: string, papers: Paper[]): ReportAudit {
   const vagueSignals = ["显著", "重要", "巨大潜力", "广泛应用", "突破", "前景广阔"];
   const ungrounded = paragraphs.filter((paragraph) => vagueSignals.some((signal) => paragraph.includes(signal)));
   const coverage = papers.length > 0 ? valid.length / papers.length : 0;
-  const missingRequiredSections = requiredReportSections.filter((section) => !content.includes(section));
-  const evidenceProfilePresent = /##\s*证据概览/.test(content);
+  const missingRequiredSections = requiredReportSections.filter((section) => !auditableContent.includes(section));
+  const evidenceProfilePresent = /##\s*证据概览/.test(auditableContent);
   const riskLevel: ReportAudit["riskLevel"] =
     invalidCitationCount > 0 || paragraphs.length >= 5 || coverage < 0.25 || missingRequiredSections.length >= 3 || !evidenceProfilePresent
       ? "high"
