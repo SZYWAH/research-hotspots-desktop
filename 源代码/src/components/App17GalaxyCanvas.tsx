@@ -5,6 +5,14 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 
 import type { App17GalaxyHotspotPoint, App17GalaxyPayload, HotspotEvidencePaperSnapshot } from "../types";
+import {
+  App17PaperJourneyController,
+  resolveGalaxyPaperReadingPose,
+  type GalaxyPaperJourneyFrame,
+  type GalaxyPaperJourneyPanelState,
+  type GalaxyPaperJourneyPathMode,
+  type GalaxyPaperJourneyState,
+} from "./App17PaperJourneyController";
 
 type App17GalaxyCommand = {
   kind: "reset" | "fit" | "top" | "enter-system" | "exit-system" | "reset-system" | "focus-paper" | "return-system-center" | "toggle-paper-inspection";
@@ -22,6 +30,8 @@ export type GalaxyPaperInspectionMode = "none" | "docked" | "centered";
 export type GalaxyPaperPanelState = "hidden" | "staged" | "entering" | "visible" | "exiting";
 
 export type GalaxyPaperInspectionVisualType = "none" | "data-sphere" | "energy-core";
+
+export type GalaxyPaperVisualOwnerState = "none" | "acquiring" | "owned" | "releasing";
 
 export type GalaxyPaperCameraWriter = "orbit" | "paper-flight" | "paper-composition" | "paper-return";
 
@@ -124,6 +134,9 @@ export type GalaxyPerformanceSnapshot = {
   systemPaperDetailQueryMs: number;
   systemPaperDetailCacheState: GalaxyPaperDetailCacheState;
   systemViewMode: GalaxySystemViewMode;
+  systemPaperJourneyState: GalaxyPaperJourneyState;
+  systemPaperJourneyProgress: number;
+  systemPaperJourneyPathMode: GalaxyPaperJourneyPathMode;
   systemPaperFocusState: GalaxyPaperFocusState;
   systemPaperFocusProgress: number;
   systemPaperFocusStartDistance: number;
@@ -146,7 +159,48 @@ export type GalaxyPerformanceSnapshot = {
   systemPaperTargetAnchorX: number;
   systemPaperAnchorErrorPx: number;
   systemPaperCameraWriter: GalaxyPaperCameraWriter;
+  systemPaperCameraWriterChanges: number;
+  systemPaperQuaternionDeltaDegrees: number;
+  systemPaperAnchorDeltaPx: number;
+  systemPaperVisualOwnerState: GalaxyPaperVisualOwnerState;
+  systemPaperVisualOwnerOpacity: number;
+  systemPaperVisualCompactLod: number;
+  systemPaperVisibleEnergyRatio: number;
+  systemPaperHandoffAlphaSum: number;
+  systemPaperHandoffPointDiameter: number;
+  systemPaperHandoffCloseupDiameter: number;
+  systemPaperHandoffPointAlpha: number;
+  systemPaperHandoffCloseupAlpha: number;
+  systemPaperHandoffPositionDeltaPx: number;
+  systemPaperProjectedTargetDiameter: number;
+  systemPaperCameraTravelDistance: number;
+  systemPaperCameraDistanceToTarget: number;
+  systemPaperTargetWorldPositionDrift: number;
+  systemPaperMinimumStarClearance: number;
+  systemPaperSmoothnessExtensionMs: number;
+  systemPaperReturnPositionError: number;
+  systemPaperReturnAngleErrorDegrees: number;
+  systemPaperStarInFrustum: boolean;
+  systemPaperStarDrawCalls: number;
   systemPaperReturnHorizontalReversals: number;
+  systemPaperTargetBodyDiameterPx: number;
+  systemPaperActualBodyDiameterPx: number;
+  systemPaperRepresentativeCarrierRatio: number;
+  systemPaperEndpointStarExitMarginPx: number;
+  systemPaperEndpointCandidateCount: number;
+  systemPaperEndpointDirectionDeviationDegrees: number;
+  systemPaperEndpointCompositionRejected: boolean;
+  systemPaperCameraRayLateralDeviation: number;
+  systemPaperTargetScreenStepPx: number;
+  systemPaperTargetScreenReversals: number;
+  systemPaperCameraQuaternionStepDegrees: number;
+  systemPaperProgressStep: number;
+  systemPaperResolvedReadingDistance: number;
+  systemPaperReadingDistanceRelaxation: number;
+  systemPaperOrdinarySurfaceMorph: number;
+  systemPaperOrdinaryAtmosphereMorph: number;
+  systemPaperHandoffDiameterRatio: number;
+  systemRepresentativeCarrierEdgeLeak: number;
   systemRepresentativeEnergyCoreDrawCalls: number;
   systemRepresentativeEnergyDetailBlend: number;
   systemRepresentativeEnergyBloomOpacity: number;
@@ -353,6 +407,8 @@ type GalaxySystemCloudPaper = {
   position: THREE.Vector3;
   color: string;
   index: number;
+  displaySize: number;
+  visualSizeVariation: number;
 };
 
 type GalaxySystemVisualMode = "display" | "theory";
@@ -454,65 +510,116 @@ type GalaxyExplorationRuntime = {
   entryFocusDistance: number;
 };
 
-type GalaxyPaperFocusRuntime = {
-  state: GalaxyPaperFocusState;
-  blend: number;
-  fromBlend: number;
-  toBlend: number;
-  targetId: string;
-  startDistance: number;
-  targetDistance: number;
-  targetScreenSize: number;
-  flightStrength: number;
-  canceled: boolean;
-};
-
-type GalaxyPaperInspectionRuntime = {
+type GalaxyPaperJourneyPresentationRuntime = {
   mode: GalaxyPaperInspectionMode;
   visualType: GalaxyPaperInspectionVisualType;
-  blend: number;
-  dockBlend: number;
-  dockTransition: App17ScalarTransition | null;
   panelState: GalaxyPaperPanelState;
-  panelProgress: number;
-  panelTransition: App17ScalarTransition | null;
+  startDistance: number;
+  targetScreenSize: number;
+  systemPointDiameter: number;
+  compactOpticalDiameter: number;
+  worldDiameter: number;
+  targetBodyDiameterPx: number;
+  representativeCarrierRatio: number;
+  endpointStarExitMarginPx: number;
+  endpointCandidateCount: number;
+  endpointDirectionDeviationDegrees: number;
+  endpointCompositionRejected: boolean;
 };
 
-type GalaxyPaperVisualHandoffState = "none" | "entering" | "locked" | "return-hold" | "return-handoff";
+type PaperReadingOpticalProfile = {
+  targetBodyDiameterPx: number;
+  targetProjectedDiameterPx: number;
+  representativeCarrierRatio: number;
+};
 
-type GalaxyPaperVisualHandoffRuntime = {
-  state: GalaxyPaperVisualHandoffState;
-  lockedInspectionBlend: number;
-  lockedProjectedDiameter: number;
-  lockedAnchorNdcX: number;
-  returnHoldProgress: number;
-  cameraTakeoverPending: boolean;
+type GalaxyPaperFlightTraceSample = {
+  timestamp: number;
+  targetId: string;
+  visualType: GalaxyPaperInspectionVisualType;
+  focusState: GalaxyPaperFocusState;
+  pathMode: GalaxyPaperJourneyPathMode;
+  cameraWriter: GalaxyPaperCameraWriter;
+  ownerState: "none" | "acquiring" | "owned" | "releasing";
+  ownerOpacity: number;
+  compactLod: number;
+  systemPointDiameter: number;
+  inspectionProjectedDiameter: number;
+  projectedTargetDiameter: number;
+  cameraTravelDistance: number;
+  cameraDistanceToTarget: number;
+  targetWorldPositionDrift: number;
+  minimumStarClearance: number;
+  starSafeRadius: number;
+  smoothnessExtensionMs: number;
+  returnPositionError: number;
+  returnAngleErrorDegrees: number;
+  pointCoreDiameter: number;
+  dedicatedCoreDiameter: number;
+  pointAlpha: number;
+  dedicatedAlpha: number;
+  visibleEnergyRatio: number;
+  screenX: number;
+  screenY: number;
+  anchorErrorPx: number;
+  quaternionDeltaDegrees: number;
+  cameraWriterChanges: number;
+  canvasResizeCount: number;
+  returnHorizontalReversals: number;
+  visibleCoreDiameter: number;
+  visibleCoreX: number;
+  visibleCoreY: number;
+  visibleCoreEnergy: number;
+  cameraToPaperDistance: number;
+  cameraToStarDistance: number;
+  starToPaperDistance: number;
+  starProjectedDiameter: number;
+  starViewportRatio: number;
+  starScreenX: number;
+  starScreenY: number;
+  starFocusAttenuation: number;
+  starInFrustum: boolean;
+  starDrawCalls: number;
+  starViewDepth: number;
+  handoffAlphaSum: number;
+  handoffPositionDeltaPx: number;
+  visibleTargetObjectCount: number;
+  canvasTop: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  pageScrollY: number;
+  targetBodyDiameterPx: number;
+  actualBodyDiameterPx: number;
+  representativeCarrierRatio: number;
+  endpointStarExitMarginPx: number;
+  endpointCandidateCount: number;
+  endpointDirectionDeviationDegrees: number;
+  endpointCompositionRejected: boolean;
+  cameraRayLateralDeviation: number;
+  targetScreenStepPx: number;
+  targetScreenReversals: number;
+  cameraQuaternionStepDegrees: number;
+  progressStep: number;
+  resolvedReadingDistance: number;
+  readingDistanceRelaxation: number;
+  ordinarySurfaceMorph: number;
+  ordinaryAtmosphereMorph: number;
+  handoffDiameterRatio: number;
+  representativeCarrierEdgeLeak: number;
+};
+
+type GalaxyPaperVisibleCoreMetrics = {
+  diameter: number;
+  x: number;
+  y: number;
+  energy: number;
+};
+
+type GalaxyPaperFlightTraceWindow = Window & {
+  __APP17_PAPER_FLIGHT_TRACE__?: GalaxyPaperFlightTraceSample[];
 };
 
 type GalaxyPaperFlightPathMode = "none" | "direct" | "avoidance";
-
-type GalaxyPaperDirectFlight = {
-  kind: "focus" | "return";
-  pathMode: GalaxyPaperFlightPathMode;
-  startedAt: number;
-  durationMs: number;
-  startCameraPosition: THREE.Vector3;
-  endCameraPosition: THREE.Vector3;
-  controlPoint: THREE.Vector3 | null;
-  arcLengthTable: Float32Array | null;
-  startQuaternion: THREE.Quaternion;
-  endQuaternion: THREE.Quaternion;
-  startLookTarget: THREE.Vector3;
-  endLookTarget: THREE.Vector3;
-  paperWorldPosition: THREE.Vector3;
-  startDistance: number;
-  targetDistance: number;
-  minimumStarClearance: number;
-  returnPose: App17OrbitPose | null;
-  startAnchorNdcX: number;
-  targetAnchorNdcX: number;
-  settledFramePending: boolean;
-};
 
 type GalaxyPaperCompositionTimeline = {
   targetAnchorNdcX: number;
@@ -521,6 +628,7 @@ type GalaxyPaperCompositionTimeline = {
   panelHeaderProgress: number;
   panelBodyProgress: number;
   cameraWriter: GalaxyPaperCameraWriter;
+  cameraWriterChangesThisFrame: number;
   returnHorizontalReversals: number;
   lastReturnScreenX: number;
   lastReturnDirection: number;
@@ -563,6 +671,7 @@ const APP17_SYSTEM_RADIUS = 3.2;
 const APP17_SYSTEM_ORBIT_SEGMENTS = 96;
 const APP17_SYSTEM_CACHE_LIMIT = 4;
 const APP17_SYSTEM_STAR_RADIUS = 0.38;
+const APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS = 0.82;
 const APP17_SYSTEM_STAR_DRAW_CALLS = 3;
 const APP17_SYSTEM_STAR_FAR_MAX_VIEWPORT_RATIO = 0.09;
 const APP17_SYSTEM_STAR_NEAR_MIN_VIEWPORT_RATIO = 0.2;
@@ -584,11 +693,12 @@ const APP17_SYSTEM_PAPER_PICK_RADIUS_PX = 12;
 const APP17_SYSTEM_ORDINARY_PAPER_PICK_RADIUS_PX = 7;
 const APP17_SYSTEM_PAPER_PICK_INTERVAL_MS = 1_000 / 30;
 const APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE = 0.12;
-const APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE = 2.2;
+const APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE = 4.5;
 const APP17_SYSTEM_PAPER_FOCUS_DISTANCE = 0.85;
 const APP17_SYSTEM_PAPER_FOCUS_TRANSITION_MS = 1_800;
-const APP17_SYSTEM_PAPER_RETARGET_TRANSITION_MS = 1_100;
-const APP17_SYSTEM_PAPER_RETURN_TRANSITION_MS = 1_100;
+const APP17_SYSTEM_PAPER_RETARGET_TRANSITION_MS = 1_800;
+const APP17_SYSTEM_PAPER_RETURN_TRANSITION_MS = 1_800;
+const APP17_SYSTEM_PAPER_RETURN_DIRECTION_NOISE_PX = 0.75;
 const APP17_SYSTEM_PAPER_FOCUS_ORDINARY_SIZE = 32;
 const APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_SIZE = 43;
 const APP17_SYSTEM_PAPER_FOCUS_ORDINARY_MAX_SIZE = 52;
@@ -597,25 +707,22 @@ const APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS = 0.34;
 const APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS = 0.55;
 const APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_BRIGHTNESS = 0.45;
 const APP17_SYSTEM_PAPER_FOCUS_ORBIT_BRIGHTNESS = 0.28;
-const APP17_SYSTEM_PAPER_FOCUS_STAR_BRIGHTNESS = 0.24;
 const APP17_SYSTEM_PAPER_FOCUS_RESPONSE = 20;
 const APP17_PAPER_INSPECTION_PANEL_START_PROGRESS = 0.36;
 const APP17_PAPER_INSPECTION_HEADER_START_PROGRESS = 0.46;
 const APP17_PAPER_INSPECTION_BODY_START_PROGRESS = 0.58;
 const APP17_PAPER_INSPECTION_PANEL_ENTER_MS = 520;
-const APP17_PAPER_INSPECTION_PANEL_EXIT_MS = 150;
 const APP17_PAPER_INSPECTION_TOGGLE_MS = 420;
+const APP17_PAPER_INSPECTION_MOTION_RESUME_MS = 1_000;
 const APP17_PAPER_INSPECTION_WORLD_DIAMETER = 0.08;
 const APP17_PAPER_INSPECTION_ARRIVAL_VIEWPORT_RATIO = 0.62;
-const APP17_PAPER_INSPECTION_HANDOFF_START_PX = 22;
-const APP17_PAPER_INSPECTION_HANDOFF_END_PX = 26;
-const APP17_PAPER_RETURN_VISUAL_HOLD_PROGRESS = 0.18;
 const APP17_REPRESENTATIVE_SYSTEM_SIZE_SCALE = 1.32;
 const APP17_REPRESENTATIVE_INSPECTION_SCALE = 1.16;
-const APP17_REPRESENTATIVE_INSPECTION_HANDOFF_START_PX = 24;
-const APP17_REPRESENTATIVE_INSPECTION_HANDOFF_END_PX = 56;
 const APP17_REPRESENTATIVE_BLOOM_STRENGTH_SCALE = 0.9;
 const APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE = 1.35;
+// The ordinary paper PointSprite's soft halo has a wider visible footprint than
+// its nominal point size. Match that optical footprint before the static owner
+// handoff while the camera starts moving through the real scene.
 const APP17_REPRESENTATIVE_ENERGY_DETAIL_START_PX = 24;
 const APP17_REPRESENTATIVE_ENERGY_DETAIL_END_PX = 72;
 const APP17_REPRESENTATIVE_ENERGY_NEAR_BLOOM_END_PX = 160;
@@ -629,11 +736,12 @@ const APP17_REPRESENTATIVE_OUTER_HALO_SCALE = 3.65;
 const APP17_REPRESENTATIVE_MICRO_CORE_RATIO = 0.18;
 const APP17_REPRESENTATIVE_MICRO_CORE_MIN_DIAMETER_PX = 14;
 const APP17_REPRESENTATIVE_MICRO_CORE_MAX_DIAMETER_PX = 22;
+const APP17_REPRESENTATIVE_MICRO_CORE_SYSTEM_RATIO = 0.16;
 const APP17_REPRESENTATIVE_MICRO_CORE_BRIGHTNESS = 0.985;
 const APP17_REPRESENTATIVE_MICRO_CORE_BLOOM_WEIGHT = 0.028;
-const APP17_PAPER_FLIGHT_AIM_PORTION = 0.42;
 const APP17_PAPER_FLIGHT_STAR_CLEARANCE = 1.25;
-const APP17_PAPER_FLIGHT_ARC_SAMPLES = 64;
+const APP17_PAPER_READING_BODY_VIEWPORT_RATIO = 0.10;
+const APP17_PAPER_REPRESENTATIVE_CARRIER_VIEWPORT_RATIO = 0.373;
 const APP17_BLOOM_LAYER = 1;
 const APP17_BLOOM_RESOLUTION_SCALE = 0.65;
 const APP17_LOCAL_BLOOM_THRESHOLD = 0.82;
@@ -690,6 +798,10 @@ const REPRESENTATIVE_ENERGY_FIELD_GLSL = `
 
   float representativeBoundedEnergy(float rawEnergy) {
     return 1.0 - exp(-max(0.0, rawEnergy) * 0.82);
+  }
+
+  float representativeCarrierEnvelope(float opticalRadius) {
+    return 1.0 - smoothstep(1.24, 1.32, opticalRadius);
   }
 
   float representativeEnergyHash(float value) {
@@ -1031,6 +1143,18 @@ export function App17GalaxyCanvas({
     const focusViewPosition = new THREE.Vector3();
     const systemCenterViewPosition = new THREE.Vector3();
     const systemWorldScale = new THREE.Vector3(1, 1, 1);
+    const paperTraceStarWorldPosition = new THREE.Vector3();
+    const paperTraceStarProjectedPosition = new THREE.Vector3();
+    const paperTraceSourceWorldPosition = new THREE.Vector3();
+    const paperTraceSourceProjectedPosition = new THREE.Vector3();
+    const paperTraceTargetProjectedPosition = new THREE.Vector3();
+    const paperTracePickWorldPosition = new THREE.Vector3();
+    const paperTracePickProjectedPosition = new THREE.Vector3();
+    const recentRepresentativeScreenPositions = new Map<string, Array<{
+      timestamp: number;
+      x: number;
+      y: number;
+    }>>();
 
     const raycaster = new THREE.Raycaster();
     const overviewPointPickThreshold = sceneData.kind === "app14" ? 0.22 : 0.16;
@@ -1083,36 +1207,23 @@ export function App17GalaxyCanvas({
       systemDistance: APP17_SYSTEM_DISTANCE,
       entryFocusDistance: APP17_SYSTEM_DISTANCE,
     };
-    const paperFocus: GalaxyPaperFocusRuntime = {
-      state: "idle",
-      blend: 0,
-      fromBlend: 0,
-      toBlend: 0,
-      targetId: "",
-      startDistance: 0,
-      targetDistance: 0,
-      targetScreenSize: 0,
-      flightStrength: 0,
-      canceled: false,
-    };
-    const paperInspection: GalaxyPaperInspectionRuntime = {
+    const paperPresentation: GalaxyPaperJourneyPresentationRuntime = {
       mode: "none",
       visualType: "none",
-      blend: 0,
-      dockBlend: 0,
-      dockTransition: null,
       panelState: "hidden",
-      panelProgress: 0,
-      panelTransition: null,
+      startDistance: 0,
+      targetScreenSize: 0,
+      systemPointDiameter: APP17_SYSTEM_PAPER_FOCUS_ORDINARY_SIZE,
+      compactOpticalDiameter: APP17_SYSTEM_PAPER_FOCUS_ORDINARY_SIZE,
+      worldDiameter: APP17_PAPER_INSPECTION_WORLD_DIAMETER,
+      targetBodyDiameterPx: APP17_REPRESENTATIVE_BODY_CORE_MIN_DIAMETER_PX,
+      representativeCarrierRatio: 0,
+      endpointStarExitMarginPx: 0,
+      endpointCandidateCount: 0,
+      endpointDirectionDeviationDegrees: 0,
+      endpointCompositionRejected: false,
     };
-    const paperVisualHandoff: GalaxyPaperVisualHandoffRuntime = {
-      state: "none",
-      lockedInspectionBlend: 0,
-      lockedProjectedDiameter: 0,
-      lockedAnchorNdcX: 0,
-      returnHoldProgress: APP17_PAPER_RETURN_VISUAL_HOLD_PROGRESS,
-      cameraTakeoverPending: false,
-    };
+    let publishedPaperFocusState: GalaxyPaperFocusState = "idle";
     const paperComposition: GalaxyPaperCompositionTimeline = {
       targetAnchorNdcX: 0,
       currentAnchorNdcX: 0,
@@ -1120,10 +1231,15 @@ export function App17GalaxyCanvas({
       panelHeaderProgress: 0,
       panelBodyProgress: 0,
       cameraWriter: "orbit",
+      cameraWriterChangesThisFrame: 0,
       returnHorizontalReversals: 0,
       lastReturnScreenX: Number.NaN,
       lastReturnDirection: 0,
     };
+    const paperJourney = new App17PaperJourneyController();
+    let paperJourneyFrame: GalaxyPaperJourneyFrame = paperJourney.getFrame();
+    let previousPaperJourneyState: GalaxyPaperJourneyState = "idle";
+    let pendingPaperJourneyAction: "exit-system" | "reset-system" | null = null;
     let systemResources: GalaxySystemResources | null = null;
     const systemCache = new Map<string, GalaxySystemResources>();
     const systemVisualMode: GalaxySystemVisualMode = sceneData.kind === "app14" ? "display" : "theory";
@@ -1155,11 +1271,24 @@ export function App17GalaxyCanvas({
     let paperFocusTargetDistance = 0;
     let lastPaperAngularSizeRatio = 0;
     let lastPaperAngularGrowthRatio = 0;
-    let paperDirectFlight: GalaxyPaperDirectFlight | null = null;
+    let paperFocusWorldPosition: THREE.Vector3 | null = null;
+    const lastRenderedPaperCameraQuaternion = camera.quaternion.clone();
+    let lastPaperQuaternionDeltaDegrees = 0;
+    let lastPaperAnchorDeltaPx = 0;
+    let lastPaperProjectionX = Number.NaN;
+    let lastPaperHandoffAlphaSum = 1;
+    let lastPaperHandoffPositionDeltaPx = 0;
+    let lastPaperTargetWorldPositionDrift = 0;
+    let lastPaperPointCoreDiameter = 0;
+    let lastPaperDedicatedCoreDiameter = 0;
+    let lastPaperPointAlpha = 1;
+    let lastPaperDedicatedAlpha = 0;
+    let lastPaperVisibleEnergyRatio = 1;
     let lastPaperFlightPathMode: GalaxyPaperFlightPathMode = "none";
     let lastPaperCameraDistance = 0;
     let lastPaperCenterErrorPx = 0;
     let lastPaperStarClearance = 0;
+    let lastPaperStarSafeRadius = 0;
     let lastTransitionTailP95Ms = 0;
     let lastTransitionTailLongFrames50 = 0;
     let transitionCanvasResizeCount = 0;
@@ -1171,6 +1300,7 @@ export function App17GalaxyCanvas({
     let lastRepresentativeCommitMs = 0;
     let timelinePausedAt = 0;
     let paperInspectionTimeSeconds = 0;
+    let paperInspectionMotionStrength = 0;
     let lastInspectionToggleAt = Number.NEGATIVE_INFINITY;
     let lastPointerDragEndedAt = Number.NEGATIVE_INFINITY;
     let fullscreenBlend = fullscreenRef.current ? 1 : 0;
@@ -1466,6 +1596,16 @@ export function App17GalaxyCanvas({
       const currentFrameMs = averageValue(recentFrameSamples);
       const environmentSourceCounts = getEnvironmentSourceCounts();
       const starVisualState = systemResources?.star.getVisualState();
+      let systemPaperStarInFrustum = false;
+      if (systemResources?.star.object.visible) {
+        systemResources.star.object.updateMatrixWorld(true);
+        systemResources.star.object.getWorldPosition(paperTraceStarWorldPosition);
+        paperTraceStarProjectedPosition.copy(paperTraceStarWorldPosition).project(camera);
+        systemPaperStarInFrustum = Math.abs(paperTraceStarProjectedPosition.x) <= 1
+          && Math.abs(paperTraceStarProjectedPosition.y) <= 1
+          && paperTraceStarProjectedPosition.z >= -1
+          && paperTraceStarProjectedPosition.z <= 1;
+      }
       const paperVisualState = systemResources?.cloudLayer.getVisualState();
       const representativeVisualState = systemResources?.representativeLayer?.getVisualState();
       const orbitVisualState = systemResources?.orbitLayer?.getVisualState();
@@ -1515,7 +1655,7 @@ export function App17GalaxyCanvas({
         selectionToFirstFrameMs: lastSelectionToFirstFrameMs,
         resumeToFirstFrameMs: lastResumeToFirstFrameMs,
         focusTransitionMs: lastFocusTransitionMs,
-        focusTransitionActive: orbit.transition?.kind === "enter-system" || paperDirectFlight?.kind === "focus",
+        focusTransitionActive: orbit.transition?.kind === "enter-system" || paperJourneyFrame.state === "flying-in",
         systemPrepareMs: lastSystemPrepareMs,
         systemCacheHit: lastSystemCacheHit,
         systemVisualMode: systemResources?.visualMode ?? "none",
@@ -1569,29 +1709,80 @@ export function App17GalaxyCanvas({
         systemPaperDetailQueryMs: paperDetailQueryMsRef.current,
         systemPaperDetailCacheState: paperDetailCacheStateRef.current,
         systemViewMode,
-        systemPaperFocusState: paperFocus.state,
-        systemPaperFocusProgress: paperFocus.blend,
-        systemPaperFocusStartDistance: paperFocus.startDistance,
+        systemPaperJourneyState: paperJourneyFrame.state,
+        systemPaperJourneyProgress: paperJourneyFrame.journeyProgress,
+        systemPaperJourneyPathMode: paperJourneyFrame.pathMode,
+        systemPaperFocusState: publishedPaperFocusState,
+        systemPaperFocusProgress: paperJourneyFrame.focusBlend,
+        systemPaperFocusStartDistance: paperPresentation.startDistance,
         systemPaperFocusTransitionMs: lastPaperFocusTransitionMs,
         systemPaperFocusTargetDistance: paperFocusTargetDistance,
-        systemPaperFocusTargetScreenSize: paperFocus.targetScreenSize,
-        systemPaperFocusNeighborBrightness: THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS, paperFocus.blend),
-        systemPaperFocusContextBrightness: THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS, paperFocus.blend),
+        systemPaperFocusTargetScreenSize: paperPresentation.targetScreenSize,
+        systemPaperFocusNeighborBrightness: THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS, paperJourneyFrame.focusBlend),
+        systemPaperFocusContextBrightness: THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS, paperJourneyFrame.focusBlend),
         systemPaperFocusCanceled: lastPaperFocusCanceled,
-        systemPaperInspectionMode: paperInspection.mode,
+        systemPaperInspectionMode: paperPresentation.mode,
         systemPaperInspectionVisualType: inspectionVisualState.visualType,
-        systemPaperInspectionBlend: paperInspection.blend,
-        systemPaperInspectionDockBlend: paperInspection.dockBlend,
+        systemPaperInspectionBlend: paperJourneyFrame.visualOwnerOpacity,
+        systemPaperInspectionDockBlend: paperPresentation.mode === "docked"
+          ? paperJourneyFrame.panelProgress
+          : 0,
         systemPaperInspectionDiameter: inspectionVisualState.projectedDiameter,
         systemPaperInspectionDrawCalls: inspectionVisualState.drawCalls,
-        systemPaperPanelState: paperInspection.panelState,
-        systemPaperPanelProgress: paperInspection.panelProgress,
+        systemPaperPanelState: paperPresentation.panelState,
+        systemPaperPanelProgress: paperJourneyFrame.panelProgress,
         systemPaperPanelHeaderProgress: paperComposition.panelHeaderProgress,
         systemPaperPanelBodyProgress: paperComposition.panelBodyProgress,
         systemPaperTargetAnchorX: paperComposition.targetAnchorNdcX,
         systemPaperAnchorErrorPx: paperComposition.anchorErrorPx,
         systemPaperCameraWriter: paperComposition.cameraWriter,
+        systemPaperCameraWriterChanges: paperComposition.cameraWriterChangesThisFrame,
+        systemPaperQuaternionDeltaDegrees: lastPaperQuaternionDeltaDegrees,
+        systemPaperAnchorDeltaPx: lastPaperAnchorDeltaPx,
+        systemPaperVisualOwnerState: journeyOwnerState(paperJourneyFrame.state),
+        systemPaperVisualOwnerOpacity: paperJourneyFrame.visualOwnerOpacity,
+        systemPaperVisualCompactLod: paperJourneyFrame.inspectionLod,
+        systemPaperVisibleEnergyRatio: lastPaperVisibleEnergyRatio,
+        systemPaperHandoffAlphaSum: lastPaperHandoffAlphaSum,
+        systemPaperHandoffPointDiameter: lastPaperPointCoreDiameter,
+        systemPaperHandoffCloseupDiameter: lastPaperDedicatedCoreDiameter,
+        systemPaperHandoffPointAlpha: lastPaperPointAlpha,
+        systemPaperHandoffCloseupAlpha: lastPaperDedicatedAlpha,
+        systemPaperHandoffPositionDeltaPx: lastPaperHandoffPositionDeltaPx,
+        systemPaperProjectedTargetDiameter: paperJourneyFrame.projectedTargetDiameter,
+        systemPaperCameraTravelDistance: paperJourneyFrame.cameraTravelDistance,
+        systemPaperCameraDistanceToTarget: paperJourneyFrame.cameraDistanceToTarget,
+        systemPaperTargetWorldPositionDrift: Math.max(
+          paperJourneyFrame.targetWorldPositionDrift,
+          lastPaperTargetWorldPositionDrift,
+        ),
+        systemPaperMinimumStarClearance: paperJourneyFrame.minimumStarClearance,
+        systemPaperSmoothnessExtensionMs: paperJourneyFrame.smoothnessExtensionMs,
+        systemPaperReturnPositionError: paperJourneyFrame.returnPositionError,
+        systemPaperReturnAngleErrorDegrees: paperJourneyFrame.returnAngleErrorDegrees,
+        systemPaperStarInFrustum,
+        systemPaperStarDrawCalls: starVisualState?.drawCalls ?? 0,
         systemPaperReturnHorizontalReversals: paperComposition.returnHorizontalReversals,
+        systemPaperTargetBodyDiameterPx: paperPresentation.targetBodyDiameterPx,
+        systemPaperActualBodyDiameterPx: inspectionVisualState.visualType === "energy-core"
+          ? inspectionVisualState.energyBodyCoreDiameter
+          : inspectionVisualState.projectedDiameter,
+        systemPaperRepresentativeCarrierRatio: paperPresentation.representativeCarrierRatio,
+        systemPaperEndpointStarExitMarginPx: paperPresentation.endpointStarExitMarginPx,
+        systemPaperEndpointCandidateCount: paperPresentation.endpointCandidateCount,
+        systemPaperEndpointDirectionDeviationDegrees: paperPresentation.endpointDirectionDeviationDegrees,
+        systemPaperEndpointCompositionRejected: paperPresentation.endpointCompositionRejected,
+        systemPaperCameraRayLateralDeviation: paperJourneyFrame.cameraRayLateralDeviation,
+        systemPaperTargetScreenStepPx: paperJourneyFrame.targetScreenStepPx,
+        systemPaperTargetScreenReversals: paperJourneyFrame.targetScreenReversals,
+        systemPaperCameraQuaternionStepDegrees: paperJourneyFrame.cameraQuaternionStepDegrees,
+        systemPaperProgressStep: paperJourneyFrame.progressStep,
+        systemPaperResolvedReadingDistance: paperJourneyFrame.resolvedReadingDistance,
+        systemPaperReadingDistanceRelaxation: paperJourneyFrame.readingDistanceRelaxation,
+        systemPaperOrdinarySurfaceMorph: inspectionVisualState.ordinarySurfaceMorph,
+        systemPaperOrdinaryAtmosphereMorph: inspectionVisualState.ordinaryAtmosphereMorph,
+        systemPaperHandoffDiameterRatio: inspectionVisualState.handoffDiameterRatio,
+        systemRepresentativeCarrierEdgeLeak: inspectionVisualState.representativeCarrierEdgeLeak,
         systemRepresentativeEnergyCoreDrawCalls: systemResources?.representativeLayer ? 1 : 0,
         systemRepresentativeEnergyDetailBlend: representativeEnergyVisualState?.energyDetailBlend ?? 0,
         systemRepresentativeEnergyBloomOpacity: representativeEnergyVisualState?.energyBloomOpacity ?? 0,
@@ -1731,7 +1922,7 @@ export function App17GalaxyCanvas({
       if (!runtimeActive) return;
       const rect = hostElement.getBoundingClientRect();
       if (rect.width < 2 || rect.height < 2) return;
-      if (orbit.transition?.kind === "enter-system" || orbit.transition?.kind === "exit-system" || paperDirectFlight) {
+      if (orbit.transition?.kind === "enter-system" || orbit.transition?.kind === "exit-system" || paperJourney.isMoving()) {
         transitionCanvasResizeCount += 1;
       }
       width = Math.max(1, Math.floor(rect.width));
@@ -1741,6 +1932,16 @@ export function App17GalaxyCanvas({
       bloomBufferPixelRatio = bloomPipeline?.setSize(width, height, currentPixelRatio) ?? 0;
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      if (paperJourney.getState() === "reading") {
+        paperJourney.reprojectReading({
+          fovDegrees: camera.fov,
+          aspect: camera.aspect,
+          zoom: camera.zoom,
+          up: camera.up.clone(),
+        });
+        paperJourneyFrame = paperJourney.advance(performance.now());
+        paperFocusWorldPosition = paperJourneyFrame.targetWorldPosition?.clone() ?? null;
+      }
       labelCanvas.width = Math.max(1, Math.floor(width * idlePixelRatio));
       labelCanvas.height = Math.max(1, Math.floor(height * idlePixelRatio));
       labelCanvas.style.width = `${width}px`;
@@ -1753,17 +1954,18 @@ export function App17GalaxyCanvas({
     resize();
 
     const pauseTimeline = () => {
-      if (timelinePausedAt <= 0) timelinePausedAt = performance.now();
+      if (timelinePausedAt > 0) return;
+      timelinePausedAt = performance.now();
+      paperJourney.pause(timelinePausedAt);
     };
 
     const resumeTimeline = () => {
       if (timelinePausedAt <= 0) return;
-      const pausedDuration = Math.max(0, performance.now() - timelinePausedAt);
+      const resumedAt = performance.now();
+      const pausedDuration = Math.max(0, resumedAt - timelinePausedAt);
       if (orbit.transition) orbit.transition.startedAt += pausedDuration;
-      if (paperDirectFlight) paperDirectFlight.startedAt += pausedDuration;
+      paperJourney.resume(resumedAt);
       if (fullscreenTransition) fullscreenTransition.startedAt += pausedDuration;
-      if (paperInspection.dockTransition) paperInspection.dockTransition.startedAt += pausedDuration;
-      if (paperInspection.panelTransition) paperInspection.panelTransition.startedAt += pausedDuration;
       timelinePausedAt = 0;
     };
 
@@ -1811,56 +2013,74 @@ export function App17GalaxyCanvas({
       }
     };
 
-    const setPaperFocusState = (state: GalaxyPaperFocusState, paperId = paperFocus.targetId) => {
-      paperFocus.state = state;
+    const setPaperFocusState = (state: GalaxyPaperFocusState, paperId = paperJourney.getTargetId()) => {
+      if (publishedPaperFocusState === state) return;
+      publishedPaperFocusState = state;
       onPaperFocusStateChangeRef.current?.(state, paperId);
     };
 
-    const setPaperInspectionMode = (mode: GalaxyPaperInspectionMode, paperId = paperFocus.targetId) => {
-      if (paperInspection.mode === mode) return;
-      paperInspection.mode = mode;
+    const setPaperInspectionMode = (mode: GalaxyPaperInspectionMode, paperId = paperJourney.getTargetId()) => {
+      if (paperPresentation.mode === mode) return;
+      paperPresentation.mode = mode;
       onPaperInspectionModeChangeRef.current?.(mode, paperId);
       labelDirty = true;
     };
-    const setPaperPanelState = (state: GalaxyPaperPanelState, paperId = paperFocus.targetId) => {
-      if (paperInspection.panelState === state) return;
-      paperInspection.panelState = state;
+    const setPaperPanelState = (state: GalaxyPaperPanelState, paperId = paperJourney.getTargetId()) => {
+      if (paperPresentation.panelState === state) return;
+      paperPresentation.panelState = state;
       onPaperPanelStateChangeRef.current?.(state, paperId);
     };
     const paperReadingAnchorNdcX = () => {
-      if (fullscreenRef.current) return -0.48;
-      return window.innerWidth >= 1280 ? -0.2 : 0;
+      if (fullscreenRef.current) return -0.5;
+      return window.innerWidth >= 1280 ? -0.46 : 0;
+    };
+    const setPaperCameraWriter = (writer: GalaxyPaperCameraWriter) => {
+      if (paperComposition.cameraWriter === writer) return;
+      paperComposition.cameraWriter = writer;
+      paperComposition.cameraWriterChangesThisFrame += 1;
+    };
+    const captureCameraPose = () => ({
+      position: camera.position.clone(),
+      quaternion: camera.quaternion.clone(),
+    });
+    const paperJourneyProjection = () => ({
+      fovDegrees: camera.fov,
+      aspect: camera.aspect,
+      zoom: camera.zoom,
+      up: camera.up.clone(),
+    });
+    const journeyFocusState = (state: GalaxyPaperJourneyState): GalaxyPaperFocusState => {
+      if (state === "idle") return "idle";
+      if (state === "acquiring" || state === "flying-in") return "entering";
+      if (state === "reading") return "focused";
+      return "exiting";
+    };
+    const journeyOwnerState = (state: GalaxyPaperJourneyState): GalaxyPaperFlightTraceSample["ownerState"] => {
+      if (state === "idle") return "none";
+      if (state === "acquiring") return "acquiring";
+      if (state === "releasing") return "releasing";
+      return "owned";
+    };
+    const journeyCameraWriter = (frame: GalaxyPaperJourneyFrame): GalaxyPaperCameraWriter => {
+      if (frame.state === "reading") return "paper-composition";
+      if (frame.state === "flying-out" || frame.state === "releasing") return "paper-return";
+      if (frame.state === "acquiring" || frame.state === "flying-in") return "paper-flight";
+      return "orbit";
     };
     const applyRuntimeCamera = () => {
-      if (paperDirectFlight) return;
-      if (
-        paperFocus.state === "focused"
-        && paperInspection.blend > 0.001
-        && width > 0
-        && height > 0
-      ) {
-        const cameraPosition = orbitPoseCameraPosition(captureOrbitPose(orbit));
-        const anchorTarget = paperInspection.mode === "centered"
-          ? 0
-          : paperReadingAnchorNdcX() * paperInspection.dockBlend;
-        camera.position.copy(cameraPosition);
-        camera.quaternion.copy(cameraQuaternionForAnchoredTarget(
-          cameraPosition,
-          orbit.center,
-          camera,
-          anchorTarget,
-          0,
-        ));
+      if (paperJourneyFrame.cameraPose) {
+        camera.position.copy(paperJourneyFrame.cameraPose.position);
+        camera.quaternion.copy(paperJourneyFrame.cameraPose.quaternion);
         camera.updateMatrixWorld(true);
-        paperComposition.targetAnchorNdcX = anchorTarget;
-        paperComposition.currentAnchorNdcX = anchorTarget;
-        paperComposition.cameraWriter = "paper-composition";
+        paperComposition.targetAnchorNdcX = paperJourneyFrame.anchorNdcX;
+        paperComposition.currentAnchorNdcX = paperJourneyFrame.anchorNdcX;
+        setPaperCameraWriter(journeyCameraWriter(paperJourneyFrame));
         return;
       }
       applyCameraOrbit(camera, orbit);
       paperComposition.targetAnchorNdcX = 0;
       paperComposition.currentAnchorNdcX = 0;
-      paperComposition.cameraWriter = "orbit";
+      setPaperCameraWriter("orbit");
     };
 
     const calculateSystemEntryScale = (renderHotspot: App17RenderPoint, topicKey: string) => {
@@ -2281,38 +2501,19 @@ export function App17GalaxyCanvas({
         invalidate(true);
         return;
       }
+      if (paperJourney.getState() !== "idle") {
+        pendingPaperJourneyAction = "exit-system";
+        returnToSystemCenter(now);
+        return;
+      }
       const saved = exploration.savedOverviewPose ?? {
         center: sceneData.camera.center.clone(),
         distance: sceneData.camera.distance,
         azimuth: sceneData.camera.azimuth,
         elevation: sceneData.camera.elevation,
       };
-      if (paperDirectFlight) {
-        syncOrbitFromCamera(orbit, camera, orbit.center);
-        paperDirectFlight = null;
-      }
       exploration.fromBlend = exploration.blend;
       exploration.toBlend = 0;
-      if (paperFocus.state !== "idle") {
-        paperFocus.fromBlend = paperFocus.blend;
-        paperFocus.toBlend = 0;
-        paperFocus.flightStrength = 0;
-        paperFocus.canceled = paperFocus.state === "entering";
-        lastPaperFocusCanceled = paperFocus.canceled;
-        setPaperFocusState("exiting");
-        if (paperInspection.panelState !== "hidden" || paperInspection.panelProgress > 0.001) {
-          paperInspection.panelTransition = {
-            startedAt: now,
-            durationMs: APP17_PAPER_INSPECTION_PANEL_EXIT_MS,
-            from: paperInspection.panelProgress,
-            to: 0,
-          };
-          setPaperPanelState("exiting");
-        } else {
-          paperInspection.panelTransition = null;
-          setPaperPanelState("hidden");
-        }
-      }
       orbit.viewMode = "overview";
       transitionFrameTimes.length = 0;
       lastTransitionRenderTime = 0;
@@ -2332,17 +2533,10 @@ export function App17GalaxyCanvas({
 
     const resetSystemView = (now: number) => {
       if (exploration.state !== "system") return;
-      if (paperDirectFlight) {
-        syncOrbitFromCamera(orbit, camera, orbit.center);
-        paperDirectFlight = null;
-      }
-      if (paperFocus.state !== "idle") {
-        paperFocus.fromBlend = paperFocus.blend;
-        paperFocus.toBlend = 0;
-        paperFocus.flightStrength = 0;
-        paperFocus.canceled = paperFocus.state === "entering";
-        lastPaperFocusCanceled = paperFocus.canceled;
-        setPaperFocusState("exiting");
+      if (paperJourney.getState() !== "idle") {
+        pendingPaperJourneyAction = "reset-system";
+        returnToSystemCenter(now);
+        return;
       }
       startOrbitTransition(
         orbit,
@@ -2375,15 +2569,17 @@ export function App17GalaxyCanvas({
         source: metadata?.source ?? representativePaper?.source,
         representative: metadata?.representative ?? Boolean(representativePaper),
         representativeRank: representativePaper?.rank ?? -1,
+        displaySize: representativePaper?.displaySize ?? ordinaryPaper?.displaySize ?? 1,
+        visualSizeVariation: ordinaryPaper?.visualSizeVariation ?? 1,
       };
     };
 
-    const configurePaperInspectionVisual = () => {
-      const visual = resolveSystemPaperVisual(paperFocus.targetId);
+    const configurePaperInspectionVisual = (paperId = paperJourney.getTargetId()) => {
+      const visual = resolveSystemPaperVisual(paperId);
       if (!visual) return;
-      paperInspection.visualType = visual.representative ? "energy-core" : "data-sphere";
+      paperPresentation.visualType = visual.representative ? "energy-core" : "data-sphere";
       paperInspectionVisual.configure({
-        paperId: paperFocus.targetId,
+        paperId,
         bodyColor: visual.color,
         haloColor: visual.haloColor,
         source: visual.source,
@@ -2393,97 +2589,104 @@ export function App17GalaxyCanvas({
     };
     inspectionMetadataControllerRef.current = configurePaperInspectionVisual;
 
-    const applyPaperFocusBlend = (blend: number) => {
-      paperFocus.blend = THREE.MathUtils.clamp(blend, 0, 1);
+    const applyPaperJourneySceneFrame = (frame: GalaxyPaperJourneyFrame) => {
+      const blend = THREE.MathUtils.clamp(frame.focusBlend, 0, 1);
+      const inspectionBlend = THREE.MathUtils.clamp(frame.visualOwnerOpacity, 0, 1);
+      const targetId = frame.targetId;
       if (!systemResources) return;
-      const targetPosition = resolveSystemPaperPosition(paperFocus.targetId);
-      const flightStrength = paperFocus.state === "entering" || paperFocus.state === "exiting"
-        ? paperFocus.flightStrength
+      const targetPosition = targetId ? resolveSystemPaperPosition(targetId) : undefined;
+      const flightStrength = frame.state === "flying-in" || frame.state === "flying-out"
+        ? Math.sin(Math.PI * frame.journeyProgress)
         : 0;
+      const activeCameraDistance = frame.targetWorldPosition
+        ? camera.position.distanceTo(frame.targetWorldPosition)
+        : orbit.distance;
       systemResources.cloudLayer.setPaperFocus(
-        paperFocus.targetId,
+        targetId,
         targetPosition,
-        paperFocus.blend,
-        paperInspection.blend,
+        blend,
+        inspectionBlend,
         flightStrength,
-        orbit.distance,
+        activeCameraDistance,
       );
       systemResources.representativeLayer?.setPaperFocus(
-        paperFocus.targetId,
+        targetId,
         targetPosition,
-        paperFocus.blend,
-        paperInspection.blend,
+        blend,
+        inspectionBlend,
         flightStrength,
-        orbit.distance,
+        activeCameraDistance,
       );
-      const targetRank = systemResources.representativePapers.findIndex((paper) => paper.id === paperFocus.targetId);
-      systemResources.representativeBloomLayer?.setPaperFocusBlend(paperFocus.blend, paperInspection.blend, targetRank);
-      systemResources.orbitLayer?.setPaperFocus(
-        paperFocus.blend,
+      const targetRank = systemResources.representativePapers.findIndex((paper) => paper.id === targetId);
+      systemResources.representativeBloomLayer?.setPaperFocusBlend(
+        blend,
+        inspectionBlend,
         targetRank,
-        paperInspection.blend,
       );
-      systemResources.star.setFocusAttenuation(
-        THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_STAR_BRIGHTNESS, paperFocus.blend),
+      systemResources.orbitLayer?.setPaperFocus(
+        blend,
+        targetRank,
+        inspectionBlend,
       );
+      systemResources.star.setFocusAttenuation(1);
       const targetLayerState = targetRank >= 0
         ? systemResources.representativeLayer?.getVisualState()
         : systemResources.cloudLayer.getVisualState();
-      paperFocus.targetScreenSize = paperInspectionVisual.getVisualState().projectedDiameter
+      paperPresentation.targetScreenSize = paperInspectionVisual.getVisualState().projectedDiameter
         || targetLayerState?.paperFocusTargetScreenSize
         || 0;
-      configurePaperInspectionVisual();
-      const nextNear = paperInspection.blend > 0.001 ? 0.02 : 0.1;
+      const nextNear = frame.state !== "idle" ? 0.02 : 0.1;
       if (Math.abs(camera.near - nextNear) > 0.001) {
         camera.near = nextNear;
         camera.updateProjectionMatrix();
       }
     };
 
-    const resetPaperVisualHandoff = () => {
-      paperVisualHandoff.state = "none";
-      paperVisualHandoff.lockedInspectionBlend = 0;
-      paperVisualHandoff.lockedProjectedDiameter = 0;
-      paperVisualHandoff.lockedAnchorNdcX = 0;
-      paperVisualHandoff.returnHoldProgress = APP17_PAPER_RETURN_VISUAL_HOLD_PROGRESS;
-      paperVisualHandoff.cameraTakeoverPending = false;
-    };
-
     const finishPaperFocusReset = () => {
-      applyPaperFocusBlend(0);
-      paperFocus.blend = 0;
-      paperFocus.fromBlend = 0;
-      paperFocus.toBlend = 0;
-      paperFocus.targetId = "";
-      paperFocus.startDistance = 0;
-      paperFocus.targetDistance = 0;
-      paperFocus.targetScreenSize = 0;
-      paperFocus.flightStrength = 0;
-      paperFocus.canceled = false;
-      paperDirectFlight = null;
+      paperJourney.reset();
+      paperJourneyFrame = paperJourney.getFrame();
+      applyPaperJourneySceneFrame(paperJourneyFrame);
+      paperFocusWorldPosition = null;
       lastPaperFlightPathMode = "none";
       lastPaperCameraDistance = 0;
       lastPaperCenterErrorPx = 0;
       lastPaperStarClearance = 0;
-      paperInspection.blend = 0;
-      paperInspection.visualType = "none";
-      paperInspection.dockBlend = 0;
-      paperInspection.dockTransition = null;
-      paperInspection.panelProgress = 0;
-      paperInspection.panelTransition = null;
+      lastPaperStarSafeRadius = 0;
+      lastPaperHandoffAlphaSum = 1;
+      lastPaperHandoffPositionDeltaPx = 0;
+      lastPaperTargetWorldPositionDrift = 0;
+      lastPaperPointCoreDiameter = 0;
+      lastPaperDedicatedCoreDiameter = 0;
+      lastPaperPointAlpha = 1;
+      lastPaperDedicatedAlpha = 0;
+      lastPaperVisibleEnergyRatio = 1;
+      paperPresentation.mode = "none";
+      paperPresentation.visualType = "none";
+      paperPresentation.panelState = "hidden";
+      paperPresentation.startDistance = 0;
+      paperPresentation.targetScreenSize = 0;
+      paperPresentation.systemPointDiameter = APP17_SYSTEM_PAPER_FOCUS_ORDINARY_SIZE;
+      paperPresentation.compactOpticalDiameter = APP17_SYSTEM_PAPER_FOCUS_ORDINARY_SIZE;
+      paperPresentation.worldDiameter = APP17_PAPER_INSPECTION_WORLD_DIAMETER;
+      paperPresentation.targetBodyDiameterPx = APP17_REPRESENTATIVE_BODY_CORE_MIN_DIAMETER_PX;
+      paperPresentation.representativeCarrierRatio = 0;
+      paperPresentation.endpointStarExitMarginPx = 0;
+      paperPresentation.endpointCandidateCount = 0;
+      paperPresentation.endpointDirectionDeviationDegrees = 0;
+      paperPresentation.endpointCompositionRejected = false;
+      paperInspectionMotionStrength = 0;
       paperInspectionVisual.object.visible = false;
-      resetPaperVisualHandoff();
       paperComposition.targetAnchorNdcX = 0;
       paperComposition.currentAnchorNdcX = 0;
       paperComposition.anchorErrorPx = 0;
       paperComposition.panelHeaderProgress = 0;
       paperComposition.panelBodyProgress = 0;
-      paperComposition.cameraWriter = "orbit";
+      setPaperCameraWriter("orbit");
       paperComposition.returnHorizontalReversals = 0;
       paperComposition.lastReturnScreenX = Number.NaN;
       paperComposition.lastReturnDirection = 0;
-      setPaperInspectionMode("none", "");
-      setPaperPanelState("hidden", "");
+      onPaperInspectionModeChangeRef.current?.("none", "");
+      onPaperPanelStateChangeRef.current?.("hidden", "");
       camera.near = 0.1;
       camera.updateProjectionMatrix();
       savedSystemPose = null;
@@ -2492,467 +2695,622 @@ export function App17GalaxyCanvas({
       setPaperFocusState("idle", "");
     };
 
-    const updatePaperInspectionHandoff = () => {
-      if (!systemResources || !paperFocus.targetId || paperFocus.state === "idle") {
-        paperInspection.blend = 0;
-        return;
-      }
-      const localPosition = resolveSystemPaperPosition(paperFocus.targetId);
-      if (!localPosition) {
-        paperInspection.blend = 0;
-        return;
-      }
-      systemResources.root.updateMatrixWorld(true);
-      const worldPosition = localPosition.clone().applyMatrix4(systemResources.root.matrixWorld);
-      const targetVisual = resolveSystemPaperVisual(paperFocus.targetId);
-      const representativeInspection = Boolean(targetVisual?.representative);
-      const inspectionScale = representativeInspection
-        ? APP17_REPRESENTATIVE_INSPECTION_SCALE
-        : 1;
-      const projectedDiameter = projectedWorldDiameterPixels(
-        worldPosition,
-        APP17_PAPER_INSPECTION_WORLD_DIAMETER * inspectionScale,
-        camera,
-        height,
-      );
-      const sizeBlend = smoothStepRange(
-        representativeInspection
-          ? APP17_REPRESENTATIVE_INSPECTION_HANDOFF_START_PX
-          : APP17_PAPER_INSPECTION_HANDOFF_START_PX,
-        representativeInspection
-          ? APP17_REPRESENTATIVE_INSPECTION_HANDOFF_END_PX
-          : APP17_PAPER_INSPECTION_HANDOFF_END_PX,
-        projectedDiameter,
-      );
-      const focusGate = smoothStepRange(0.04, 0.24, paperFocus.blend);
-      const dynamicBlend = sizeBlend * focusGate;
+    const paperVisualIsolation = import.meta.env.DEV
+      ? new URLSearchParams(window.location.search).get("paper-visual")
+      : null;
+    const paperFlightPixelTraceEnabled = import.meta.env.DEV
+      && new URLSearchParams(window.location.search).get("paper-trace") === "1";
+    let paperPixelReadback = new Uint8Array(0);
+    let paperPixelReadbackFailed = false;
+    let pendingPaperFlightTracePhase: "focus" | "return" | null = null;
+    let paperFlightTracePublishAt = 0;
 
-      if (paperVisualHandoff.state === "return-hold") {
-        const returnFlight = paperDirectFlight?.kind === "return" ? paperDirectFlight : null;
-        const returnProgress = returnFlight
-          ? THREE.MathUtils.clamp(
-              (performance.now() - returnFlight.startedAt) / Math.max(1, returnFlight.durationMs),
-              0,
-              1,
-            )
-          : 1;
-        if (returnProgress <= paperVisualHandoff.returnHoldProgress) {
-          paperInspection.blend = paperVisualHandoff.lockedInspectionBlend;
-          return;
-        }
-        paperVisualHandoff.state = "return-handoff";
-      }
-
-      if (paperVisualHandoff.state === "return-handoff") {
-        // Keep the close-up visible until the physical projected size has crossed back through its handoff range.
-        paperInspection.blend = Math.min(paperVisualHandoff.lockedInspectionBlend, sizeBlend);
-        return;
-      }
-
-      if (paperVisualHandoff.state === "locked") {
-        paperInspection.blend = paperVisualHandoff.lockedInspectionBlend;
-        return;
-      }
-
-      paperInspection.blend = dynamicBlend;
-      if (paperVisualHandoff.state === "entering" && dynamicBlend >= 0.995) {
-        paperVisualHandoff.state = "locked";
-        paperVisualHandoff.lockedInspectionBlend = dynamicBlend;
-        paperVisualHandoff.lockedProjectedDiameter = projectedDiameter;
-        paperVisualHandoff.lockedAnchorNdcX = paperComposition.currentAnchorNdcX;
-      }
+    const resetPaperFlightTrace = () => {
+      if (!import.meta.env.DEV) return;
+      (window as GalaxyPaperFlightTraceWindow).__APP17_PAPER_FLIGHT_TRACE__ = [];
+      delete renderer.domElement.dataset.paperFlightTrace;
+      delete renderer.domElement.dataset.paperFlightTracePhase;
+      paperFlightTracePublishAt = 0;
     };
 
-    const createFocusPaperFlight = (
-      paperWorldPosition: THREE.Vector3,
-      targetDistance: number,
+    const publishPaperFlightTrace = (phase: "focus" | "return") => {
+      if (!import.meta.env.DEV) return;
+      const samples = (window as GalaxyPaperFlightTraceWindow).__APP17_PAPER_FLIGHT_TRACE__ ?? [];
+      renderer.domElement.dataset.paperFlightTrace = JSON.stringify(samples);
+      renderer.domElement.dataset.paperFlightTracePhase = phase;
+    };
+
+    const recordPaperFlightTrace = (
       now: number,
-      durationMs: number,
+      inspectionProjectedDiameter: number,
+      actualBodyDiameterPx: number,
+      projectedPaper: THREE.Vector3,
+      visibleCore: GalaxyPaperVisibleCoreMetrics | null,
+      visualMorph: {
+        ordinarySurfaceMorph: number;
+        ordinaryAtmosphereMorph: number;
+        handoffDiameterRatio: number;
+        representativeCarrierEdgeLeak: number;
+      },
     ) => {
-      const startCameraPosition = camera.position.clone();
-      const approachDirection = startCameraPosition.clone().sub(paperWorldPosition);
-      if (approachDirection.lengthSq() < 0.000001) {
-        camera.getWorldDirection(approachDirection).multiplyScalar(-1);
+      if (!import.meta.env.DEV) return;
+      if (!paperJourney.isMoving() && pendingPaperFlightTracePhase === null) return;
+      const traceWindow = window as GalaxyPaperFlightTraceWindow;
+      const samples = traceWindow.__APP17_PAPER_FLIGHT_TRACE__ ?? [];
+      const cameraToPaperDistance = paperFocusWorldPosition
+        ? camera.position.distanceTo(paperFocusWorldPosition)
+        : 0;
+      let cameraToStarDistance = 0;
+      let starToPaperDistance = 0;
+      let starProjectedDiameter = 0;
+      let starViewportRatio = 0;
+      let starScreenX = 0;
+      let starScreenY = 0;
+      let starFocusAttenuation = 1;
+      let starInFrustum = false;
+      let starDrawCalls = 0;
+      let starViewDepth = 0;
+      if (systemResources) {
+        systemResources.star.object.updateMatrixWorld(true);
+        const starCenter = new THREE.Vector3().setFromMatrixPosition(systemResources.star.object.matrixWorld);
+        const starVisualState = systemResources.star.getVisualState();
+        cameraToStarDistance = camera.position.distanceTo(starCenter);
+        starToPaperDistance = paperFocusWorldPosition?.distanceTo(starCenter) ?? 0;
+        starProjectedDiameter = starVisualState.projectedDiameter;
+        starViewportRatio = starVisualState.viewportRatio;
+        starFocusAttenuation = starVisualState.focusAttenuation;
+        starDrawCalls = starVisualState.drawCalls;
+        systemResources.star.object.getWorldPosition(paperTraceStarWorldPosition);
+        paperTraceStarProjectedPosition.copy(paperTraceStarWorldPosition).project(camera);
+        starScreenX = paperTraceStarProjectedPosition.x * width * 0.5;
+        starScreenY = -paperTraceStarProjectedPosition.y * height * 0.5;
+        starInFrustum = systemResources.star.object.visible
+          && Math.abs(paperTraceStarProjectedPosition.x) <= 1
+          && Math.abs(paperTraceStarProjectedPosition.y) <= 1
+          && paperTraceStarProjectedPosition.z >= -1
+          && paperTraceStarProjectedPosition.z <= 1;
+        starViewDepth = -paperTraceStarWorldPosition.clone().applyMatrix4(camera.matrixWorldInverse).z;
       }
-      approachDirection.normalize();
-      const endCameraPosition = paperWorldPosition.clone().addScaledVector(approachDirection, targetDistance);
-      const startLookTarget = orbit.center.clone();
-      const endLookTarget = paperWorldPosition.clone();
-      const startProjection = paperWorldPosition.clone().project(camera);
-      const startAnchorNdcX = THREE.MathUtils.clamp(startProjection.x, -0.96, 0.96);
-      const targetAnchorNdcX = paperReadingAnchorNdcX();
-
-      systemResources?.root.updateMatrixWorld(true);
-      systemResources?.star.object.updateMatrixWorld(true);
-      const starCenter = systemResources
-        ? new THREE.Vector3().setFromMatrixPosition(systemResources.star.object.matrixWorld)
-        : new THREE.Vector3();
-      const starScale = systemResources
-        ? systemResources.star.object.getWorldScale(new THREE.Vector3())
-        : new THREE.Vector3(1, 1, 1);
-      const safeStarRadius = APP17_SYSTEM_STAR_RADIUS
-        * Math.max(starScale.x, starScale.y, starScale.z)
-        * APP17_PAPER_FLIGHT_STAR_CLEARANCE;
-      const avoidance = createPaperAvoidancePath(
-        startCameraPosition,
-        endCameraPosition,
-        starCenter,
-        safeStarRadius,
-        camera,
-        APP17_PAPER_FLIGHT_ARC_SAMPLES,
-      );
-
-      return {
-        kind: "focus" as const,
-        pathMode: avoidance ? "avoidance" as const : "direct" as const,
-        startedAt: now,
-        durationMs,
-        startCameraPosition,
-        endCameraPosition,
-        controlPoint: avoidance?.controlPoint ?? null,
-        arcLengthTable: avoidance?.arcLengthTable ?? null,
-        startQuaternion: camera.quaternion.clone(),
-        endQuaternion: cameraQuaternionForAnchoredTarget(
-          endCameraPosition,
-          endLookTarget,
-          camera,
-          targetAnchorNdcX,
-          0,
+      const canvasRect = renderer.domElement.getBoundingClientRect();
+      const projectedScreenX = projectedPaper.x * width * 0.5;
+      if (
+        paperJourneyFrame.state === "flying-out"
+        && paperJourneyFrame.journeyProgress >= 1 - 300 / APP17_SYSTEM_PAPER_RETURN_TRANSITION_MS
+      ) {
+        if (!Number.isFinite(paperComposition.lastReturnScreenX)) {
+          paperComposition.lastReturnScreenX = projectedScreenX;
+        } else {
+          const horizontalDelta = projectedScreenX - paperComposition.lastReturnScreenX;
+          if (Math.abs(horizontalDelta) >= APP17_SYSTEM_PAPER_RETURN_DIRECTION_NOISE_PX) {
+            const direction = Math.sign(horizontalDelta);
+            if (
+              paperComposition.lastReturnDirection !== 0
+              && direction !== paperComposition.lastReturnDirection
+            ) {
+              paperComposition.returnHorizontalReversals += 1;
+            }
+            paperComposition.lastReturnDirection = direction;
+            paperComposition.lastReturnScreenX = projectedScreenX;
+          }
+        }
+      }
+      samples.push({
+        timestamp: now,
+        targetId: paperJourneyFrame.targetId,
+        visualType: paperPresentation.visualType,
+        focusState: publishedPaperFocusState,
+        pathMode: lastPaperFlightPathMode,
+        cameraWriter: paperComposition.cameraWriter,
+        ownerState: journeyOwnerState(paperJourneyFrame.state),
+        ownerOpacity: paperJourneyFrame.visualOwnerOpacity,
+        compactLod: paperJourneyFrame.inspectionLod,
+        systemPointDiameter: paperPresentation.systemPointDiameter,
+        inspectionProjectedDiameter,
+        projectedTargetDiameter: paperJourneyFrame.projectedTargetDiameter,
+        cameraTravelDistance: paperJourneyFrame.cameraTravelDistance,
+        cameraDistanceToTarget: paperJourneyFrame.cameraDistanceToTarget,
+        targetWorldPositionDrift: Math.max(
+          paperJourneyFrame.targetWorldPositionDrift,
+          lastPaperTargetWorldPositionDrift,
         ),
-        startLookTarget,
-        endLookTarget,
-        paperWorldPosition: paperWorldPosition.clone(),
-        startDistance: startCameraPosition.distanceTo(paperWorldPosition),
-        targetDistance,
-        minimumStarClearance: Math.max(
-          0,
-          (avoidance?.minimumClearance
-            ?? segmentPointMinimumDistance(startCameraPosition, endCameraPosition, starCenter)) - safeStarRadius,
-        ),
-        returnPose: null,
-        startAnchorNdcX,
-        targetAnchorNdcX,
-        settledFramePending: false,
-      } satisfies GalaxyPaperDirectFlight;
+        minimumStarClearance: paperJourneyFrame.minimumStarClearance,
+        starSafeRadius: lastPaperStarSafeRadius,
+        smoothnessExtensionMs: paperJourneyFrame.smoothnessExtensionMs,
+        returnPositionError: paperJourneyFrame.returnPositionError,
+        returnAngleErrorDegrees: paperJourneyFrame.returnAngleErrorDegrees,
+        pointCoreDiameter: lastPaperPointCoreDiameter,
+        dedicatedCoreDiameter: lastPaperDedicatedCoreDiameter,
+        pointAlpha: lastPaperPointAlpha,
+        dedicatedAlpha: lastPaperDedicatedAlpha,
+        visibleEnergyRatio: lastPaperVisibleEnergyRatio,
+        screenX: projectedScreenX,
+        screenY: -projectedPaper.y * height * 0.5,
+        anchorErrorPx: paperComposition.anchorErrorPx,
+        quaternionDeltaDegrees: lastPaperQuaternionDeltaDegrees,
+        cameraWriterChanges: paperComposition.cameraWriterChangesThisFrame,
+        canvasResizeCount: transitionCanvasResizeCount,
+        returnHorizontalReversals: paperComposition.returnHorizontalReversals,
+        visibleCoreDiameter: visibleCore?.diameter ?? 0,
+        visibleCoreX: visibleCore?.x ?? 0,
+        visibleCoreY: visibleCore?.y ?? 0,
+        visibleCoreEnergy: visibleCore?.energy ?? 0,
+        cameraToPaperDistance,
+        cameraToStarDistance,
+        starToPaperDistance,
+        starProjectedDiameter,
+        starViewportRatio,
+        starScreenX,
+        starScreenY,
+        starFocusAttenuation,
+        starInFrustum,
+        starDrawCalls,
+        starViewDepth,
+        handoffAlphaSum: lastPaperHandoffAlphaSum,
+        handoffPositionDeltaPx: lastPaperHandoffPositionDeltaPx,
+        visibleTargetObjectCount: Number(lastPaperPointAlpha > 0.001)
+          + Number(lastPaperDedicatedAlpha > 0.001),
+        canvasTop: canvasRect.top,
+        canvasWidth: canvasRect.width,
+        canvasHeight: canvasRect.height,
+        pageScrollY: window.scrollY,
+        targetBodyDiameterPx: paperPresentation.targetBodyDiameterPx,
+        actualBodyDiameterPx,
+        representativeCarrierRatio: paperPresentation.representativeCarrierRatio,
+        endpointStarExitMarginPx: paperPresentation.endpointStarExitMarginPx,
+        endpointCandidateCount: paperPresentation.endpointCandidateCount,
+        endpointDirectionDeviationDegrees: paperPresentation.endpointDirectionDeviationDegrees,
+        endpointCompositionRejected: paperPresentation.endpointCompositionRejected,
+        cameraRayLateralDeviation: paperJourneyFrame.cameraRayLateralDeviation,
+        targetScreenStepPx: paperJourneyFrame.targetScreenStepPx,
+        targetScreenReversals: paperJourneyFrame.targetScreenReversals,
+        cameraQuaternionStepDegrees: paperJourneyFrame.cameraQuaternionStepDegrees,
+        progressStep: paperJourneyFrame.progressStep,
+        resolvedReadingDistance: paperJourneyFrame.resolvedReadingDistance,
+        readingDistanceRelaxation: paperJourneyFrame.readingDistanceRelaxation,
+        ordinarySurfaceMorph: visualMorph.ordinarySurfaceMorph,
+        ordinaryAtmosphereMorph: visualMorph.ordinaryAtmosphereMorph,
+        handoffDiameterRatio: visualMorph.handoffDiameterRatio,
+        representativeCarrierEdgeLeak: visualMorph.representativeCarrierEdgeLeak,
+      });
+      if (samples.length > 720) samples.splice(0, samples.length - 720);
+      traceWindow.__APP17_PAPER_FLIGHT_TRACE__ = samples;
+      if (paperFlightPixelTraceEnabled) {
+        renderer.domElement.dataset.paperFlightTrace = JSON.stringify(samples);
+      }
     };
 
-    const createReturnPaperFlight = (target: App17OrbitPose, now: number, durationMs: number) => {
-      const endCameraPosition = orbitPoseCameraPosition(target);
-      const targetPaperPosition = resolveSystemPaperPosition(paperFocus.targetId);
-      const paperWorldPosition = systemResources && targetPaperPosition
-        ? targetPaperPosition.clone().applyMatrix4(systemResources.root.matrixWorld)
-        : orbit.center.clone();
-      const startProjection = paperWorldPosition.clone().project(camera);
+    const measurePaperVisibleCore = (
+      projectedPaper: THREE.Vector3,
+      inspectionProjectedDiameter: number,
+    ): GalaxyPaperVisibleCoreMetrics | null => {
+      if (!paperFlightPixelTraceEnabled || paperPixelReadbackFailed) return null;
+      const canvas = renderer.domElement;
+      const bufferWidth = canvas.width;
+      const bufferHeight = canvas.height;
+      if (bufferWidth < 2 || bufferHeight < 2 || width < 2 || height < 2) return null;
+      const scaleX = bufferWidth / width;
+      const scaleY = bufferHeight / height;
+      const centerX = (projectedPaper.x * 0.5 + 0.5) * bufferWidth;
+      const centerY = (projectedPaper.y * 0.5 + 0.5) * bufferHeight;
+      const radiusCss = THREE.MathUtils.clamp(
+        Math.max(18, inspectionProjectedDiameter * 0.12),
+        18,
+        72,
+      );
+      const radiusX = Math.max(2, Math.ceil(radiusCss * scaleX));
+      const radiusY = Math.max(2, Math.ceil(radiusCss * scaleY));
+      const x = Math.max(0, Math.floor(centerX - radiusX));
+      const y = Math.max(0, Math.floor(centerY - radiusY));
+      const sampleWidth = Math.min(bufferWidth - x, radiusX * 2 + 1);
+      const sampleHeight = Math.min(bufferHeight - y, radiusY * 2 + 1);
+      if (sampleWidth < 2 || sampleHeight < 2) return null;
+      const analysisRadiusCss = THREE.MathUtils.clamp(
+        inspectionProjectedDiameter * 0.12,
+        4,
+        40,
+      );
+      const radialEnvelopeAt = (px: number, py: number) => {
+        const dx = (x + px + 0.5 - centerX) / scaleX;
+        const dy = (y + py + 0.5 - centerY) / scaleY;
+        const normalizedRadius = Math.sqrt(dx * dx + dy * dy) / analysisRadiusCss;
+        return 1 - THREE.MathUtils.smoothstep(normalizedRadius, 0.72, 1);
+      };
+      const requiredLength = sampleWidth * sampleHeight * 4;
+      if (paperPixelReadback.length < requiredLength) paperPixelReadback = new Uint8Array(requiredLength);
+      const pixels = paperPixelReadback.subarray(0, requiredLength);
+      try {
+        const gl = renderer.getContext();
+        gl.readPixels(x, y, sampleWidth, sampleHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      } catch (error) {
+        paperPixelReadbackFailed = true;
+        console.warn("[app17] paper pixel trace readback failed", error);
+        return null;
+      }
+
+      let peak = 0;
+      let borderSum = 0;
+      let borderCount = 0;
+      for (let py = 0; py < sampleHeight; py += 1) {
+        for (let px = 0; px < sampleWidth; px += 1) {
+          const offset = (py * sampleWidth + px) * 4;
+          const luminance = (
+            pixels[offset] * 0.2126
+            + pixels[offset + 1] * 0.7152
+            + pixels[offset + 2] * 0.0722
+          ) / 255;
+          if (radialEnvelopeAt(px, py) > 0) peak = Math.max(peak, luminance);
+          if (px < 2 || py < 2 || px >= sampleWidth - 2 || py >= sampleHeight - 2) {
+            borderSum += luminance;
+            borderCount += 1;
+          }
+        }
+      }
+      const background = borderCount > 0 ? borderSum / borderCount : 0;
+      const contrast = peak - background;
+      if (contrast < 0.025) return null;
+      const coreWeightForLuminance = (luminance: number) => {
+        const normalized = THREE.MathUtils.clamp((luminance - background) / contrast, 0, 1);
+        const softCore = THREE.MathUtils.smoothstep(normalized, 0.12, 0.88);
+        return softCore * softCore * contrast;
+      };
+      let weightedX = 0;
+      let weightedY = 0;
+      let totalWeight = 0;
+      for (let py = 0; py < sampleHeight; py += 1) {
+        for (let px = 0; px < sampleWidth; px += 1) {
+          const offset = (py * sampleWidth + px) * 4;
+          const luminance = (
+            pixels[offset] * 0.2126
+            + pixels[offset + 1] * 0.7152
+            + pixels[offset + 2] * 0.0722
+          ) / 255;
+          const weight = coreWeightForLuminance(luminance) * radialEnvelopeAt(px, py);
+          if (weight <= 0) continue;
+          weightedX += (x + px + 0.5) * weight;
+          weightedY += (y + py + 0.5) * weight;
+          totalWeight += weight;
+        }
+      }
+      if (totalWeight <= 0) return null;
+      const centroidBufferX = weightedX / totalWeight;
+      const centroidBufferY = weightedY / totalWeight;
+      let radialMoment = 0;
+      for (let py = 0; py < sampleHeight; py += 1) {
+        for (let px = 0; px < sampleWidth; px += 1) {
+          const offset = (py * sampleWidth + px) * 4;
+          const luminance = (
+            pixels[offset] * 0.2126
+            + pixels[offset + 1] * 0.7152
+            + pixels[offset + 2] * 0.0722
+          ) / 255;
+          const weight = coreWeightForLuminance(luminance) * radialEnvelopeAt(px, py);
+          if (weight <= 0) continue;
+          const dx = (x + px + 0.5 - centroidBufferX) / scaleX;
+          const dy = (y + py + 0.5 - centroidBufferY) / scaleY;
+          radialMoment += (dx * dx + dy * dy) * weight;
+        }
+      }
+      const rmsRadius = Math.sqrt(Math.max(0, radialMoment / totalWeight));
       return {
-        kind: "return" as const,
-        pathMode: "direct" as const,
-        startedAt: now,
-        durationMs,
-        startCameraPosition: camera.position.clone(),
-        endCameraPosition,
-        controlPoint: null,
-        arcLengthTable: null,
-        startQuaternion: camera.quaternion.clone(),
-        endQuaternion: cameraQuaternionForTarget(endCameraPosition, target.center, camera.up),
-        startLookTarget: paperWorldPosition.clone(),
-        endLookTarget: target.center.clone(),
-        paperWorldPosition,
-        startDistance: camera.position.distanceTo(paperWorldPosition),
-        targetDistance: target.distance,
-        minimumStarClearance: lastPaperStarClearance,
-        returnPose: cloneOrbitPose(target),
-        startAnchorNdcX: THREE.MathUtils.clamp(startProjection.x, -0.96, 0.96),
-        targetAnchorNdcX: 0,
-        settledFramePending: false,
-      } satisfies GalaxyPaperDirectFlight;
+        // Energy moments remain continuous when a subpixel core crosses the
+        // raster grid, unlike counting pixels above a hard threshold.
+        diameter: rmsRadius * 2.4,
+        x: centroidBufferX / scaleX,
+        y: height - centroidBufferY / scaleY,
+        energy: totalWeight / Math.max(0.0001, scaleX * scaleY),
+      };
     };
 
     const focusPaperById = (paperId: string, now: number) => {
-      if (exploration.state !== "system" || !systemResources) return;
+      if (exploration.state !== "system" || !systemResources) {
+        if (import.meta.env.DEV) {
+          renderer.domElement.dataset.paperFocusRejection = JSON.stringify({
+            reason: "system-not-ready",
+            paperId,
+            explorationState: exploration.state,
+            hasSystemResources: Boolean(systemResources),
+          });
+        }
+        return;
+      }
       const localPosition = resolveSystemPaperPosition(paperId);
-      if (!localPosition) return;
-      const retargeting = paperFocus.state !== "idle" && Boolean(savedSystemPose);
+      if (!localPosition) {
+        if (import.meta.env.DEV) {
+          renderer.domElement.dataset.paperFocusRejection = JSON.stringify({
+            reason: "paper-position-missing",
+            paperId,
+          });
+        }
+        return;
+      }
+      delete renderer.domElement.dataset.paperFocusRejection;
+      const retargeting = paperJourney.getState() !== "idle" && Boolean(savedSystemPose);
       if (!savedSystemPose) savedSystemPose = captureOrbitPose(orbit);
       systemResources.root.updateMatrixWorld(true);
       const worldPosition = localPosition.clone().applyMatrix4(systemResources.root.matrixWorld);
-      const targetDistance = paperInspectionTargetDistance(camera, APP17_PAPER_INSPECTION_ARRIVAL_VIEWPORT_RATIO);
-      paperFocusTargetDistance = Math.min(camera.position.distanceTo(worldPosition), targetDistance);
-      paperFocus.targetId = paperId;
-      paperFocus.startDistance = camera.position.distanceTo(worldPosition);
-      paperFocus.targetDistance = paperFocusTargetDistance;
-      paperFocus.fromBlend = retargeting ? 1 : paperFocus.blend;
-      paperFocus.toBlend = 1;
-      paperFocus.flightStrength = 0;
-      paperFocus.canceled = false;
+      const targetVisual = resolveSystemPaperVisual(paperId);
+      const representativeInspection = Boolean(targetVisual?.representative);
+      const paperViewDepth = Math.max(
+        1,
+        -worldPosition.clone().applyMatrix4(camera.matrixWorldInverse).z,
+      );
+      const pointDistanceScale = THREE.MathUtils.clamp(10 / paperViewDepth, 0.78, 1.18);
+      const systemPointDiameter = representativeInspection
+        ? Math.max(1, (targetVisual?.displaySize ?? 1) * pointDistanceScale)
+        : THREE.MathUtils.clamp(
+            (targetVisual?.displaySize ?? 1)
+              * (targetVisual?.visualSizeVariation ?? 1)
+              * pointDistanceScale,
+            2.05,
+            4.2,
+          );
+      // Acquisition is now a pure ownership handoff. The dedicated ordinary
+      // visual starts with the exact source point footprint instead of the old
+      // 1.68x jump that exposed the sphere carrier immediately.
+      const compactOpticalDiameter = systemPointDiameter;
+      const effectiveFov = THREE.MathUtils.degToRad(camera.getEffectiveFOV());
+      // Calibrate at the real ownership boundary. The old farther-endpoint
+      // calibration enlarged retargeted papers before the source point had
+      // faded, which made the handoff itself visible.
+      const ownerCalibrationDepth = paperViewDepth;
+      const visibleWorldHeight = 2
+        * ownerCalibrationDepth
+        * Math.tan(effectiveFov * 0.5);
+      const ownerCarrierDiameter = compactOpticalDiameter
+        * (representativeInspection ? APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE : 1);
+      const ownerWorldDiameter = Math.max(
+        0.0001,
+        ownerCarrierDiameter
+          * visibleWorldHeight
+          / Math.max(1, height),
+      );
+      const opticalProfile = resolvePaperReadingOpticalProfile(
+        representativeInspection,
+        height,
+      );
+      const targetAnchorNdcX = paperReadingAnchorNdcX();
+      const targetDistance = paperInspectionTargetDistance(
+        camera,
+        opticalProfile.targetProjectedDiameterPx / Math.max(1, height),
+        ownerWorldDiameter,
+        APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE,
+        targetAnchorNdcX,
+      );
+      systemResources.star.object.updateMatrixWorld(true);
+      const starCenter = new THREE.Vector3().setFromMatrixPosition(systemResources.star.object.matrixWorld);
+      const starScale = systemResources.star.object.getWorldScale(new THREE.Vector3());
+      const starWorldRadius = APP17_SYSTEM_STAR_RADIUS
+        * Math.max(starScale.x, starScale.y, starScale.z);
+      const starSafeRadius = starWorldRadius * APP17_PAPER_FLIGHT_STAR_CLEARANCE;
+      const startPose = captureCameraPose();
+      const projection = paperJourneyProjection();
+      const startProjection = worldPosition.clone().project(camera);
+      const startAnchorNdcX = THREE.MathUtils.clamp(startProjection.x, -0.96, 0.96);
+      const startAnchorNdcY = THREE.MathUtils.clamp(startProjection.y, -0.96, 0.96);
+      const resolvedReadingPose = resolveGalaxyPaperReadingPose({
+        startCameraPose: startPose,
+        targetWorldPosition: worldPosition,
+        targetDistance,
+        startAnchorNdcX,
+        startAnchorNdcY,
+        endAnchorNdcX: targetAnchorNdcX,
+        endAnchorNdcY: 0,
+        projection,
+        viewportWidth: width,
+        viewportHeight: height,
+        starCenter,
+        starSafeRadius,
+        starPhysicalRadius: starWorldRadius,
+      });
+      if (!resolvedReadingPose) {
+        if (import.meta.env.DEV) {
+          renderer.domElement.dataset.paperFocusRejection = JSON.stringify({
+            reason: "straight-ray-not-safe",
+            paperId,
+            targetDistance,
+            targetBodyDiameterPx: opticalProfile.targetBodyDiameterPx,
+            targetProjectedDiameterPx: opticalProfile.targetProjectedDiameterPx,
+            starWorldRadius,
+            endpointCandidateCount: 1,
+          });
+        }
+        if (!retargeting) finishPaperFocusReset();
+        paperPresentation.targetBodyDiameterPx = opticalProfile.targetBodyDiameterPx;
+        paperPresentation.representativeCarrierRatio = opticalProfile.representativeCarrierRatio;
+        paperPresentation.endpointStarExitMarginPx = 0;
+        paperPresentation.endpointCandidateCount = 1;
+        paperPresentation.endpointDirectionDeviationDegrees = 0;
+        paperPresentation.endpointCompositionRejected = true;
+        invalidate(true);
+        return;
+      }
+      const nextJourneyFrame = paperJourney.startFocus({
+        now,
+        targetId: paperId,
+        targetWorldPosition: worldPosition,
+        startPose,
+        systemPose: startPose,
+        endCameraPose: resolvedReadingPose.endCameraPose,
+        preparedPath: resolvedReadingPose.path,
+        startAnchorNdcX,
+        startAnchorNdcY,
+        targetAnchorNdcX,
+        targetAnchorNdcY: 0,
+        durationMs: retargeting
+          ? APP17_SYSTEM_PAPER_RETARGET_TRANSITION_MS
+          : APP17_SYSTEM_PAPER_FOCUS_TRANSITION_MS,
+        retargeting,
+        projection,
+        starCenter,
+        starSafeRadius,
+        starPhysicalRadius: starWorldRadius,
+        targetWorldDiameter: ownerWorldDiameter,
+        viewportWidth: width,
+        viewportHeight: height,
+      });
+      const focusAccepted = nextJourneyFrame.state !== "idle"
+        && nextJourneyFrame.targetId === paperId;
+      if (!focusAccepted) {
+        if (import.meta.env.DEV) {
+          renderer.domElement.dataset.paperFocusRejection = JSON.stringify({
+            reason: "path-clearance",
+            paperId,
+            targetDistance,
+            starSafeRadius,
+          });
+        }
+        paperJourneyFrame = nextJourneyFrame;
+        if (!retargeting) finishPaperFocusReset();
+        invalidate(true);
+        return;
+      }
+
+      paperJourneyFrame = nextJourneyFrame;
+      resetPaperFlightTrace();
+      paperFocusWorldPosition = paperJourneyFrame.targetWorldPosition?.clone() ?? worldPosition.clone();
+      paperInspectionMotionStrength = 0;
+      paperPresentation.startDistance = camera.position.distanceTo(worldPosition);
+      paperPresentation.systemPointDiameter = systemPointDiameter;
+      paperPresentation.compactOpticalDiameter = compactOpticalDiameter;
+      paperPresentation.worldDiameter = ownerWorldDiameter;
+      paperPresentation.targetBodyDiameterPx = opticalProfile.targetBodyDiameterPx;
+      paperPresentation.representativeCarrierRatio = opticalProfile.representativeCarrierRatio;
+      paperPresentation.endpointStarExitMarginPx = resolvedReadingPose.endpointStarExitMarginPx;
+      paperPresentation.endpointCandidateCount = resolvedReadingPose.endpointCandidateCount;
+      paperPresentation.endpointDirectionDeviationDegrees = resolvedReadingPose.endpointDirectionDeviationDegrees;
+      paperPresentation.endpointCompositionRejected = false;
+      paperFocusTargetDistance = resolvedReadingPose.resolvedReadingDistance;
       lastPaperFocusCanceled = false;
-      paperVisualHandoff.state = "entering";
-      paperVisualHandoff.lockedInspectionBlend = 0;
-      paperVisualHandoff.lockedProjectedDiameter = 0;
-      paperVisualHandoff.lockedAnchorNdcX = paperComposition.currentAnchorNdcX;
-      paperVisualHandoff.returnHoldProgress = APP17_PAPER_RETURN_VISUAL_HOLD_PROGRESS;
-      paperVisualHandoff.cameraTakeoverPending = false;
-      const keepReadingPanel = retargeting && paperInspection.panelProgress > 0.5;
-      paperInspection.dockTransition = null;
-      paperInspection.panelTransition = null;
-      paperInspection.panelProgress = keepReadingPanel ? 1 : 0;
-      paperInspection.blend = retargeting ? 0 : paperInspection.blend;
-      paperInspection.dockBlend = keepReadingPanel ? 1 : 0;
-      paperComposition.panelHeaderProgress = keepReadingPanel ? 1 : 0;
-      paperComposition.panelBodyProgress = keepReadingPanel ? 1 : 0;
+      paperComposition.panelHeaderProgress = 0;
+      paperComposition.panelBodyProgress = 0;
       paperComposition.returnHorizontalReversals = 0;
       paperComposition.lastReturnScreenX = Number.NaN;
       paperComposition.lastReturnDirection = 0;
-      setPaperInspectionMode(keepReadingPanel ? "docked" : "none", paperId);
-      setPaperPanelState(keepReadingPanel ? "visible" : "staged", paperId);
+      setPaperInspectionMode("none", paperId);
+      setPaperPanelState("staged", paperId);
       setSystemViewMode("paper-focus");
       setPaperFocusState("entering", paperId);
-      configurePaperInspectionVisual();
-      applyPaperFocusBlend(paperFocus.blend);
+      configurePaperInspectionVisual(paperId);
       transitionFrameTimes.length = 0;
       lastTransitionRenderTime = 0;
       beginTransitionLayoutDiagnostics();
       cancelOrbitMotion(orbit);
       pendingWheelDelta = 0;
-      paperDirectFlight = createFocusPaperFlight(
-        worldPosition,
-        paperFocusTargetDistance,
-        now,
-        retargeting ? APP17_SYSTEM_PAPER_RETARGET_TRANSITION_MS : APP17_SYSTEM_PAPER_FOCUS_TRANSITION_MS,
-      );
-      lastPaperFlightPathMode = paperDirectFlight.pathMode;
-      lastPaperStarClearance = paperDirectFlight.minimumStarClearance;
-      paperComposition.targetAnchorNdcX = paperDirectFlight.targetAnchorNdcX;
-      paperComposition.currentAnchorNdcX = paperDirectFlight.startAnchorNdcX;
-      paperComposition.cameraWriter = "paper-flight";
+      lastPaperFlightPathMode = paperJourneyFrame.pathMode;
+      lastPaperStarClearance = paperJourneyFrame.minimumStarClearance;
+      lastPaperStarSafeRadius = starSafeRadius;
+      paperComposition.targetAnchorNdcX = paperJourneyFrame.anchorNdcX;
+      paperComposition.currentAnchorNdcX = paperJourneyFrame.anchorNdcX;
+      setPaperCameraWriter("paper-flight");
       invalidate(true);
     };
 
     const returnToSystemCenter = (now: number) => {
-      if (exploration.state !== "system" || !savedSystemPose || paperFocus.state === "idle") return;
-      const target = savedSystemPose;
-      paperFocus.fromBlend = paperFocus.blend;
-      paperFocus.toBlend = 0;
-      paperFocus.flightStrength = 0;
-      paperFocus.canceled = paperFocus.state === "entering";
-      lastPaperFocusCanceled = paperFocus.canceled;
+      if (exploration.state !== "system" || !savedSystemPose || paperJourney.getState() === "idle") return;
+      const canceledDuringEntry = publishedPaperFocusState === "entering";
+      const duration = APP17_SYSTEM_PAPER_RETURN_TRANSITION_MS;
+      const nextJourneyFrame = paperJourney.getState() === "acquiring" || paperJourney.getState() === "flying-in"
+        ? paperJourney.cancel(now, captureCameraPose())
+        : paperJourney.startReturn({
+            now,
+            currentPose: captureCameraPose(),
+            projection: paperJourneyProjection(),
+            durationMs: duration,
+          });
+      if (nextJourneyFrame.state !== "flying-out" && nextJourneyFrame.state !== "releasing") {
+        paperJourneyFrame = nextJourneyFrame;
+        invalidate(true);
+        return;
+      }
+
+      paperJourneyFrame = nextJourneyFrame;
+      resetPaperFlightTrace();
+      lastPaperFocusCanceled = canceledDuringEntry;
       setPaperFocusState("exiting");
-      paperInspection.dockTransition = null;
-      paperVisualHandoff.state = "return-hold";
-      paperVisualHandoff.lockedInspectionBlend = paperInspection.blend;
-      paperVisualHandoff.lockedProjectedDiameter = paperInspectionVisual.getVisualState().projectedDiameter;
-      paperVisualHandoff.lockedAnchorNdcX = paperComposition.currentAnchorNdcX;
-      paperVisualHandoff.returnHoldProgress = APP17_PAPER_RETURN_VISUAL_HOLD_PROGRESS;
-      paperVisualHandoff.cameraTakeoverPending = false;
-      paperComposition.cameraWriter = "paper-return";
+      setPaperCameraWriter("paper-return");
       paperComposition.returnHorizontalReversals = 0;
       paperComposition.lastReturnScreenX = Number.NaN;
       paperComposition.lastReturnDirection = 0;
-      if (paperInspection.panelProgress > 0.001) {
-        paperInspection.panelTransition = {
-          startedAt: now,
-          durationMs: APP17_PAPER_INSPECTION_PANEL_EXIT_MS,
-          from: paperInspection.panelProgress,
-          to: 0,
-        };
-        setPaperPanelState("exiting");
-      } else {
-        paperInspection.panelTransition = null;
-        paperInspection.panelProgress = 0;
-        setPaperPanelState("hidden");
-      }
-      const duration = paperFocus.canceled
-        ? Math.max(260, APP17_SYSTEM_PAPER_RETURN_TRANSITION_MS * Math.max(0.22, paperFocus.blend))
-        : APP17_SYSTEM_PAPER_RETURN_TRANSITION_MS;
+      setPaperPanelState(paperJourneyFrame.panelProgress > 0.001 ? "exiting" : "hidden");
       transitionFrameTimes.length = 0;
       lastTransitionRenderTime = 0;
       cancelOrbitMotion(orbit);
       pendingWheelDelta = 0;
-      paperDirectFlight = createReturnPaperFlight(target, now, duration);
-      lastPaperFlightPathMode = paperDirectFlight.pathMode;
+      lastPaperFlightPathMode = paperJourneyFrame.pathMode;
       invalidate(true);
     };
 
-    const advancePaperDirectFlight = (now: number) => {
-      const flight = paperDirectFlight;
-      if (!flight) return false;
-      if (flight.settledFramePending) {
-        paperDirectFlight = null;
-        lastPaperFocusTransitionMs = Math.max(0, now - flight.startedAt);
-        lastTransitionP95Ms = percentileNumber(transitionFrameTimes, 0.95);
-        lastTransitionLongFrames50 = transitionFrameTimes.filter((value) => value > 50).length;
-        if (flight.kind === "focus") {
-          syncOrbitFromCamera(orbit, camera, flight.paperWorldPosition);
-          orbit.targetDistance = orbit.distance;
-          applyPaperFocusBlend(1);
-          updatePaperInspectionHandoff();
-          applyPaperFocusBlend(1);
-          setPaperFocusState("focused");
-          setSystemViewMode("paper-focus");
-          paperInspection.panelTransition = null;
-          paperInspection.panelProgress = 1;
-          paperInspection.dockBlend = 1;
-          paperComposition.currentAnchorNdcX = flight.targetAnchorNdcX;
-          paperComposition.targetAnchorNdcX = flight.targetAnchorNdcX;
-          paperComposition.panelHeaderProgress = 1;
-          paperComposition.panelBodyProgress = 1;
-          paperComposition.cameraWriter = "paper-composition";
-          setPaperInspectionMode("docked");
-          setPaperPanelState("visible");
-        } else {
-          const returnPose = flight.returnPose;
-          if (returnPose) {
-            orbit.center.copy(returnPose.center);
-            orbit.distance = returnPose.distance;
-            orbit.targetDistance = returnPose.distance;
-            orbit.azimuth = returnPose.azimuth;
-            orbit.elevation = returnPose.elevation;
-            applyCameraOrbit(camera, orbit);
+    const advancePaperJourney = (now: number) => {
+      const previousState = previousPaperJourneyState;
+      paperJourneyFrame = paperJourney.advance(now);
+      paperFocusWorldPosition = paperJourneyFrame.targetWorldPosition?.clone() ?? null;
+      previousPaperJourneyState = paperJourneyFrame.state;
+
+      if (paperJourneyFrame.state === "idle") {
+        if (previousState !== "idle") {
+          const pendingAction = pendingPaperJourneyAction;
+          pendingPaperJourneyAction = null;
+          if (savedSystemPose) {
+            orbit.center.copy(savedSystemPose.center);
+            orbit.distance = savedSystemPose.distance;
+            orbit.targetDistance = savedSystemPose.distance;
+            orbit.azimuth = savedSystemPose.azimuth;
+            orbit.elevation = savedSystemPose.elevation;
           }
-          paperComposition.cameraWriter = "orbit";
+          publishPaperFlightTrace("return");
+          pendingPaperFlightTracePhase = null;
           finishPaperFocusReset();
+          if (pendingAction === "exit-system") beginExitSystem(now);
+          else if (pendingAction === "reset-system") resetSystemView(now);
         }
-        return true;
+        return previousState !== "idle";
       }
-      const progress = THREE.MathUtils.clamp((now - flight.startedAt) / Math.max(1, flight.durationMs), 0, 1);
-      const eased = smootherStep(progress);
-      const nextPosition = samplePaperDirectFlightPosition(flight, eased);
-      const lookTarget = flight.startLookTarget.clone().lerp(flight.endLookTarget, eased);
-      camera.position.copy(nextPosition);
-      if (flight.kind === "focus") {
-        const anchorProgress = smootherStep(progress);
-        const currentAnchor = THREE.MathUtils.lerp(
-          flight.startAnchorNdcX,
-          flight.targetAnchorNdcX,
-          anchorProgress,
-        );
-        const anchoredQuaternion = cameraQuaternionForAnchoredTarget(
-          nextPosition,
-          flight.paperWorldPosition,
-          camera,
-          currentAnchor,
-          0,
-        );
-        camera.quaternion.slerpQuaternions(
-          flight.startQuaternion,
-          anchoredQuaternion,
-          smootherStep(Math.min(1, progress / APP17_PAPER_FLIGHT_AIM_PORTION)),
-        );
-        paperInspection.dockBlend = anchorProgress;
-        paperComposition.currentAnchorNdcX = currentAnchor;
-        paperComposition.targetAnchorNdcX = flight.targetAnchorNdcX;
-        paperComposition.cameraWriter = "paper-flight";
 
-        if (paperInspection.panelState !== "visible") {
-          const panelStartAt = flight.durationMs * APP17_PAPER_INSPECTION_PANEL_START_PROGRESS;
-          const panelElapsed = now - flight.startedAt - panelStartAt;
-          paperInspection.panelProgress = smootherStep(
-            THREE.MathUtils.clamp(panelElapsed / APP17_PAPER_INSPECTION_PANEL_ENTER_MS, 0, 1),
-          );
-          paperComposition.panelHeaderProgress = smoothStepRange(
-            APP17_PAPER_INSPECTION_HEADER_START_PROGRESS,
-            0.76,
-            progress,
-          );
-          paperComposition.panelBodyProgress = smoothStepRange(
-            APP17_PAPER_INSPECTION_BODY_START_PROGRESS,
-            0.94,
-            progress,
-          );
-          if (progress >= APP17_PAPER_INSPECTION_PANEL_START_PROGRESS) {
-            if (paperInspection.mode !== "docked") setPaperInspectionMode("docked");
-            setPaperPanelState(progress >= 0.94 ? "visible" : "entering");
+      const nextFocusState = journeyFocusState(paperJourneyFrame.state);
+        if (publishedPaperFocusState !== nextFocusState) {
+        setPaperFocusState(nextFocusState, paperJourneyFrame.targetId);
+          if (nextFocusState === "focused") {
+            lastPaperFocusTransitionMs = APP17_SYSTEM_PAPER_FOCUS_TRANSITION_MS;
+            pendingPaperFlightTracePhase = "focus";
+            paperFlightTracePublishAt = now + 320;
           }
-        }
-      } else {
-        const currentAnchor = THREE.MathUtils.lerp(
-          flight.startAnchorNdcX,
-          flight.targetAnchorNdcX,
-          eased,
-        );
-        camera.quaternion.copy(cameraQuaternionForAnchoredTarget(
-          nextPosition,
-          lookTarget,
-          camera,
-          currentAnchor,
-          0,
-        ));
-        paperComposition.currentAnchorNdcX = currentAnchor;
-        paperComposition.targetAnchorNdcX = flight.targetAnchorNdcX;
-        paperComposition.cameraWriter = "paper-return";
-      }
-      camera.updateMatrixWorld(true);
-
-      syncOrbitFromCamera(orbit, camera, lookTarget);
-      paperFocus.flightStrength = Math.sin(Math.PI * eased);
-      applyPaperFocusBlend(THREE.MathUtils.lerp(paperFocus.fromBlend, paperFocus.toBlend, eased));
-      updatePaperInspectionHandoff();
-      applyPaperFocusBlend(paperFocus.blend);
-      lastPaperCameraDistance = camera.position.distanceTo(flight.paperWorldPosition);
-      const projectedPaper = flight.paperWorldPosition.clone().project(camera);
-      lastPaperCenterErrorPx = Math.hypot(
-        projectedPaper.x * width * 0.5,
-        projectedPaper.y * height * 0.5,
-      );
-      paperComposition.anchorErrorPx = Math.abs(
-        projectedPaper.x - paperComposition.currentAnchorNdcX,
-      ) * width * 0.5;
-      if (flight.kind === "return") {
-        if (Number.isFinite(paperComposition.lastReturnScreenX)) {
-          const movement = projectedPaper.x - paperComposition.lastReturnScreenX;
-          const direction = Math.abs(movement) > 0.0005 ? Math.sign(movement) : 0;
-          if (
-            direction !== 0
-            && paperComposition.lastReturnDirection !== 0
-            && direction !== paperComposition.lastReturnDirection
-          ) {
-            paperComposition.returnHorizontalReversals += 1;
-          }
-          if (direction !== 0) paperComposition.lastReturnDirection = direction;
-        }
-        paperComposition.lastReturnScreenX = projectedPaper.x;
       }
 
-      if (progress < 1) return true;
-      camera.position.copy(flight.endCameraPosition);
-      camera.quaternion.copy(flight.endQuaternion);
-      camera.updateMatrixWorld(true);
-      syncOrbitFromCamera(orbit, camera, flight.endLookTarget);
-      if (flight.kind === "focus") {
-        const targetVisual = resolveSystemPaperVisual(paperFocus.targetId);
-        const inspectionDiameter = APP17_PAPER_INSPECTION_WORLD_DIAMETER
-          * (targetVisual?.representative ? APP17_REPRESENTATIVE_INSPECTION_SCALE : 1);
-        paperVisualHandoff.state = "locked";
-        paperVisualHandoff.lockedInspectionBlend = 1;
-        paperVisualHandoff.lockedProjectedDiameter = projectedWorldDiameterPixels(
-          flight.paperWorldPosition,
-          inspectionDiameter,
-          camera,
-          height,
-        );
-        paperVisualHandoff.lockedAnchorNdcX = flight.targetAnchorNdcX;
+      if (paperVisualIsolation === "system") paperJourneyFrame.visualOwnerOpacity = 0;
+      else if (paperVisualIsolation === "dedicated") paperJourneyFrame.visualOwnerOpacity = 1;
+      paperComposition.panelHeaderProgress = smoothStepRange(0.12, 0.52, paperJourneyFrame.panelProgress);
+      paperComposition.panelBodyProgress = smoothStepRange(0.34, 0.92, paperJourneyFrame.panelProgress);
+      paperComposition.currentAnchorNdcX = paperJourneyFrame.anchorNdcX;
+      paperComposition.targetAnchorNdcX = paperJourneyFrame.anchorNdcX;
+      lastPaperFlightPathMode = paperJourneyFrame.pathMode;
+      lastPaperStarClearance = paperJourneyFrame.minimumStarClearance;
+      setPaperCameraWriter(journeyCameraWriter(paperJourneyFrame));
+
+      const nextPanelState = paperJourneyFrame.panelState as GalaxyPaperJourneyPanelState;
+      if (paperPresentation.panelState !== nextPanelState) {
+        setPaperPanelState(nextPanelState, paperJourneyFrame.targetId);
       }
-      flight.settledFramePending = true;
-      paperVisualHandoff.cameraTakeoverPending = true;
-      return true;
+      if (
+        nextPanelState !== "hidden"
+        && nextPanelState !== "staged"
+        && paperPresentation.mode !== "centered"
+      ) {
+        setPaperInspectionMode("docked", paperJourneyFrame.targetId);
+      }
+      if (paperJourneyFrame.state === "reading") setSystemViewMode("paper-focus");
+
+      return paperJourney.isMoving();
     };
 
     const togglePaperInspection = (now: number) => {
-      if (exploration.state !== "system" || paperFocus.state !== "focused" || paperInspection.blend < 0.98) return;
-      const nextMode: GalaxyPaperInspectionMode = paperInspection.mode === "centered" ? "docked" : "centered";
-      paperInspection.dockTransition = {
-        startedAt: now,
-        durationMs: APP17_PAPER_INSPECTION_TOGGLE_MS,
-        from: paperInspection.dockBlend,
-        to: nextMode === "docked" ? 1 : 0,
-      };
+      if (exploration.state !== "system" || paperJourney.getState() !== "reading" || paperJourneyFrame.visualOwnerOpacity < 0.98) return;
+      const nextMode: GalaxyPaperInspectionMode = paperPresentation.mode === "centered" ? "docked" : "centered";
       setPaperInspectionMode(nextMode);
-      paperInspection.panelTransition = {
-        startedAt: now,
-        durationMs: nextMode === "docked" ? APP17_PAPER_INSPECTION_PANEL_ENTER_MS : APP17_PAPER_INSPECTION_PANEL_EXIT_MS,
-        from: paperInspection.panelProgress,
-        to: nextMode === "docked" ? 1 : 0,
-      };
-      setPaperPanelState(nextMode === "docked" ? "entering" : "exiting");
+      paperJourney.setReadingAnchor(nextMode === "docked" ? paperReadingAnchorNdcX() : 0);
+      paperJourney.setReadingPanelVisible(nextMode === "docked", now);
+      paperJourneyFrame = paperJourney.advance(now);
+      paperFocusWorldPosition = paperJourneyFrame.targetWorldPosition?.clone() ?? null;
+      setPaperPanelState(nextMode === "docked" ? "visible" : "hidden");
       invalidate(true);
     };
 
@@ -2988,14 +3346,19 @@ export function App17GalaxyCanvas({
         * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
       ) / Math.max(0.01, camera.zoom);
       const worldUnitsPerPixel = visibleWorldHeight / Math.max(1, height);
-      const withinScreenRadius = (localPosition: THREE.Vector3, radiusPx: number) => {
+      const screenDistanceSquared = (localPosition: THREE.Vector3) => {
         systemPickWorldPosition.copy(localPosition).applyMatrix4(systemResources!.root.matrixWorld);
         systemPickProjectedPosition.copy(systemPickWorldPosition).project(camera);
-        if (systemPickProjectedPosition.z < -1 || systemPickProjectedPosition.z > 1) return false;
+        if (systemPickProjectedPosition.z < -1 || systemPickProjectedPosition.z > 1) {
+          return Number.POSITIVE_INFINITY;
+        }
         const dx = (systemPickProjectedPosition.x - pointer.x) * width * 0.5;
         const dy = (systemPickProjectedPosition.y - pointer.y) * height * 0.5;
-        return dx * dx + dy * dy <= radiusPx * radiusPx;
+        return dx * dx + dy * dy;
       };
+      const withinScreenRadius = (localPosition: THREE.Vector3, radiusPx: number) => (
+        screenDistanceSquared(localPosition) <= radiusPx * radiusPx
+      );
       const finishPick = (paperId: string) => {
         lastSystemPaperPickId = paperId;
         lastSystemPaperPickMs = performance.now() - pickStartedAt;
@@ -3035,6 +3398,63 @@ export function App17GalaxyCanvas({
         if (systemResources.star.getVisualState().depthOcclusionActive && isSystemPaperOccludedByStar(paper.position, systemResources, camera)) continue;
         return finishPick(paper.id);
       }
+      if (paperJourney.getState() === "flying-in") {
+        let fallbackPaperId = "";
+        let fallbackDistanceSquared = Number.POSITIVE_INFINITY;
+        const representativeRadiusSquared = (APP17_SYSTEM_PAPER_PICK_RADIUS_PX * 1.5) ** 2;
+        for (const paper of systemResources.representativePapers) {
+          if (
+            systemResources.star.getVisualState().depthOcclusionActive
+            && isSystemPaperOccludedByStar(paper.position, systemResources, camera)
+          ) continue;
+          const distanceSquared = screenDistanceSquared(paper.position);
+          if (distanceSquared <= representativeRadiusSquared && distanceSquared < fallbackDistanceSquared) {
+            fallbackPaperId = paper.id;
+            fallbackDistanceSquared = distanceSquared;
+          }
+        }
+        const ordinaryRadiusSquared = (APP17_SYSTEM_ORDINARY_PAPER_PICK_RADIUS_PX * 1.75) ** 2;
+        const ordinaryCount = systemResources.cloudLayer.object.geometry.getAttribute("position").count;
+        for (let index = 0; index < ordinaryCount; index += 1) {
+          const paper = systemResources.cloudLayer.getPaperByIndex(index);
+          if (!paper) continue;
+          if (
+            systemResources.star.getVisualState().depthOcclusionActive
+            && isSystemPaperOccludedByStar(paper.position, systemResources, camera)
+          ) continue;
+          const distanceSquared = screenDistanceSquared(paper.position);
+          if (distanceSquared <= ordinaryRadiusSquared && distanceSquared < fallbackDistanceSquared) {
+            fallbackPaperId = paper.id;
+            fallbackDistanceSquared = distanceSquared;
+          }
+        }
+        if (fallbackPaperId) return finishPick(fallbackPaperId);
+        const recentCutoff = pickStartedAt - 600;
+        const pointerScreenX = pointer.x * width * 0.5;
+        const pointerScreenY = -pointer.y * height * 0.5;
+        const historicalRadiusSquared = (APP17_SYSTEM_PAPER_PICK_RADIUS_PX * 1.75) ** 2;
+        for (const [paperId, samples] of recentRepresentativeScreenPositions) {
+          if (paperId === paperJourney.getTargetId()) continue;
+          const historicalPosition = resolveSystemPaperPosition(paperId);
+          if (!historicalPosition) continue;
+          if (
+            systemResources.star.getVisualState().depthOcclusionActive
+            && isSystemPaperOccludedByStar(historicalPosition, systemResources, camera)
+          ) continue;
+          for (const sample of samples) {
+            if (sample.timestamp < recentCutoff) continue;
+            const distanceSquared = (
+              (sample.x - pointerScreenX) ** 2
+              + (sample.y - pointerScreenY) ** 2
+            );
+            if (distanceSquared <= historicalRadiusSquared && distanceSquared < fallbackDistanceSquared) {
+              fallbackPaperId = paperId;
+              fallbackDistanceSquared = distanceSquared;
+            }
+          }
+        }
+        if (fallbackPaperId) return finishPick(fallbackPaperId);
+      }
       return finishPick("");
     };
 
@@ -3046,7 +3466,7 @@ export function App17GalaxyCanvas({
     };
 
     const pickPaperInspectionVisual = () => {
-      if (paperFocus.state !== "focused" || paperInspection.blend < 0.65 || !paperInspectionVisual.object.visible) return false;
+      if (paperJourney.getState() !== "reading" || paperJourneyFrame.visualOwnerOpacity < 0.65 || !paperInspectionVisual.object.visible) return false;
       raycaster.setFromCamera(pointer, camera);
       return raycaster.intersectObject(paperInspectionVisual.hitObject, false).length > 0;
     };
@@ -3073,7 +3493,7 @@ export function App17GalaxyCanvas({
 
     const handlePointerDown = (event: PointerEvent) => {
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
-      if (paperFocus.state === "entering" || paperFocus.state === "exiting") return;
+      if (paperJourney.isMoving()) return;
       if (event.button !== 0 || orbit.pointerPressed) return;
       if (systemHoverPickTimer) {
         window.clearTimeout(systemHoverPickTimer);
@@ -3089,7 +3509,7 @@ export function App17GalaxyCanvas({
       const inspectionHit = exploration.state === "system" && pickPaperInspectionVisual();
       pressedTargetKind = inspectionHit ? "inspection" : exploration.state === "system" ? "paper" : "hotspot";
       pressedTargetId = inspectionHit
-        ? paperFocus.targetId
+        ? paperJourney.getTargetId()
         : pressedTargetKind === "paper" ? pickSystemPaper(true) : pickHotspot();
       renderer.domElement.setPointerCapture(event.pointerId);
       renderer.domElement.style.cursor = pressedTargetId ? "pointer" : "grab";
@@ -3097,7 +3517,7 @@ export function App17GalaxyCanvas({
 
     const handlePointerMove = (event: PointerEvent) => {
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
-      if (paperFocus.state === "entering" || paperFocus.state === "exiting") return;
+      if (paperJourney.isMoving()) return;
       updatePointer(event);
       if (orbit.pointerPressed) {
         if (!orbit.dragging) {
@@ -3120,12 +3540,23 @@ export function App17GalaxyCanvas({
         const dy = event.clientY - orbit.lastY;
         orbit.lastX = event.clientX;
         orbit.lastY = event.clientY;
-        orbit.azimuth -= dx * 0.0045;
-        orbit.elevation = THREE.MathUtils.clamp(
-          orbit.elevation + dy * 0.0022,
-          sceneData.camera.minElevation,
-          sceneData.camera.maxElevation,
-        );
+        const readingOrbit = paperJourney.getReadingOrbit();
+        if (paperJourney.getState() === "reading" && readingOrbit) {
+          const azimuth = readingOrbit.azimuth - dx * 0.0045;
+          const elevation = THREE.MathUtils.clamp(
+            readingOrbit.elevation + dy * 0.0022,
+            sceneData.camera.minElevation,
+            sceneData.camera.maxElevation,
+          );
+          paperJourney.setReadingOrbit({ azimuth, elevation });
+        } else {
+          orbit.azimuth -= dx * 0.0045;
+          orbit.elevation = THREE.MathUtils.clamp(
+            orbit.elevation + dy * 0.0022,
+            sceneData.camera.minElevation,
+            sceneData.camera.maxElevation,
+          );
+        }
         invalidate(true);
         return;
       }
@@ -3208,8 +3639,7 @@ export function App17GalaxyCanvas({
     const handleDoubleClick = (event: MouseEvent) => {
       if (
         exploration.state !== "system"
-        || paperFocus.state === "entering"
-        || paperFocus.state === "exiting"
+        || (paperJourney.isMoving() && paperJourney.getState() !== "flying-in")
         || orbit.pointerPressed
         || orbit.dragging
         || performance.now() - lastPointerDragEndedAt < 350
@@ -3263,6 +3693,21 @@ export function App17GalaxyCanvas({
         APP17_WHEEL_MAX_PIXEL_DELTA,
       );
       pendingWheelDelta = 0;
+      const readingOrbit = paperJourney.getReadingOrbit();
+      if (paperJourney.getState() === "reading" && readingOrbit) {
+        const previousDistance = readingOrbit.distance;
+        const nextDistance = THREE.MathUtils.clamp(
+          previousDistance * Math.exp(normalizedDelta * APP17_WHEEL_SENSITIVITY),
+          APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE,
+          APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE,
+        );
+        paperJourney.setReadingOrbit({ distance: nextDistance });
+        lastNormalizedWheelDelta = normalizedDelta;
+        lastWheelDistanceRatio = previousDistance > 0
+          ? nextDistance / previousDistance - 1
+          : 0;
+        return Math.abs(nextDistance - previousDistance) > 0.0001;
+      }
       const minDistance = exploration.state === "system"
         ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE : APP17_SYSTEM_MIN_DISTANCE
         : sceneData.camera.minDistance;
@@ -3286,7 +3731,7 @@ export function App17GalaxyCanvas({
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
-      if (paperFocus.state === "entering" || paperFocus.state === "exiting") return;
+      if (paperJourney.isMoving()) return;
       const now = performance.now();
       lastInteractionTime = now;
       scheduleAutoRotateResume(now);
@@ -3302,10 +3747,10 @@ export function App17GalaxyCanvas({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || exploration.state === "overview") return;
       event.preventDefault();
-      if (exploration.state === "system" && paperFocus.state === "exiting") {
+      if (exploration.state === "system" && (paperJourney.getState() === "flying-out" || paperJourney.getState() === "releasing")) {
         return;
       }
-      if (exploration.state === "system" && paperFocus.state !== "idle" && savedSystemPose) {
+      if (exploration.state === "system" && paperJourney.getState() !== "idle" && savedSystemPose) {
         returnToSystemCenter(performance.now());
       } else {
         beginExitSystem(performance.now());
@@ -3325,6 +3770,7 @@ export function App17GalaxyCanvas({
     function render(now: number) {
       frameId = 0;
       if (disposed || !runtimeActive || document.visibilityState === "hidden") return;
+      paperComposition.cameraWriterChangesThisFrame = 0;
 
       if (commandNonceRef.current !== commandRef.current.nonce) {
         commandNonceRef.current = commandRef.current.nonce;
@@ -3386,10 +3832,10 @@ export function App17GalaxyCanvas({
 
       applyPendingWheelZoom();
 
-      const transitioningBefore = orbit.transition !== null || paperDirectFlight !== null;
+      const transitioningBefore = orbit.transition !== null || paperJourney.isMoving();
       const zoomingBefore = orbitZoomActive(orbit);
       const fullscreenTransitioningBefore = fullscreenTransition !== null;
-      const inspectionTransitioningBefore = paperInspection.dockTransition !== null || paperInspection.panelTransition !== null;
+      const inspectionTransitioningBefore = paperJourney.isMoving();
       const ambientSteadyActiveBefore = !reduceMotion && exploration.state === "system";
       const environmentAnimationActiveBefore = !reduceMotion
         && (fullscreenBlend > 0.001 || fullscreenTransition?.to === 1);
@@ -3426,11 +3872,11 @@ export function App17GalaxyCanvas({
       const elapsedMs = Math.min(64, rawElapsedMs);
       const ambientElapsedMs = Math.min(120, rawElapsedMs);
       const measuredTransition = orbit.transition;
-      const measuredPaperFlight = paperDirectFlight;
+      const measuredPaperFlight = paperJourney.isMoving();
       if (
         measuredTransition?.kind === "enter-system"
         || measuredTransition?.kind === "exit-system"
-        || measuredPaperFlight !== null
+        || measuredPaperFlight
       ) {
         const transitionFrameMs = lastTransitionRenderTime > 0 ? now - lastTransitionRenderTime : 0;
         if (transitionFrameMs > 0) transitionFrameTimes.push(transitionFrameMs);
@@ -3466,8 +3912,21 @@ export function App17GalaxyCanvas({
       }
       if (ambientTimelineActive && ambientElapsedMs > 0) {
         ambientTimeSeconds += ambientElapsedMs / 1_000;
-        if (paperInspection.blend > 0.001 && !reduceMotion) {
-          paperInspectionTimeSeconds += ambientElapsedMs / 1_000;
+        // Keep the target's internal energy/surface phase fixed while the
+        // camera is moving. Otherwise the brightness centroid can drift even
+        // when the journey pose itself is perfectly continuous.
+        if (paperJourneyFrame.state === "reading" && !reduceMotion) {
+          paperInspectionMotionStrength = Math.min(
+            1,
+            paperInspectionMotionStrength
+              + ambientElapsedMs / APP17_PAPER_INSPECTION_MOTION_RESUME_MS,
+          );
+          // Integrate the motion clock itself instead of multiplying the full
+          // accumulated phase by a changing strength. This prevents a phase
+          // jump on the first stable reading frames.
+          paperInspectionTimeSeconds += (ambientElapsedMs / 1_000) * paperInspectionMotionStrength;
+        } else {
+          paperInspectionMotionStrength = 0;
         }
         if (sceneData.kind === "app14") {
           farRotationAngle = (farRotationAngle + APP17_FAR_ROTATION_RADIANS_PER_SECOND * (ambientElapsedMs / 1_000)) % (Math.PI * 2);
@@ -3486,7 +3945,7 @@ export function App17GalaxyCanvas({
         systemResources.representativeLayer?.setRepresentativeFocus(selectedOrbitRank, hoveredOrbitRank);
         systemResources.representativeBloomLayer?.setRepresentativeFocus(selectedOrbitRank, hoveredOrbitRank);
         const frozenPaperIds = new Set(
-          [selectedPaperIdRef.current, hoveredSystemPaperId, paperFocus.targetId].filter(Boolean),
+          [selectedPaperIdRef.current, hoveredSystemPaperId, paperJourney.getTargetId()].filter(Boolean),
         );
         const systemAnimationChanged = systemResources.updateAnimation(
           ambientTimelineActive ? ambientElapsedMs / 1_000 : 0,
@@ -3499,56 +3958,8 @@ export function App17GalaxyCanvas({
           if (selectedPaperIdRef.current || hoveredSystemPaperId) labelDirty = true;
         }
       }
-      if (paperInspection.panelTransition && now >= paperInspection.panelTransition.startedAt) {
-        const panelProgress = THREE.MathUtils.clamp(
-          (now - paperInspection.panelTransition.startedAt) / paperInspection.panelTransition.durationMs,
-          0,
-          1,
-        );
-        const enteringPanel = paperInspection.panelTransition.to > paperInspection.panelTransition.from;
-        if (enteringPanel && paperInspection.panelState === "hidden") {
-          setPaperInspectionMode("docked");
-          setPaperPanelState("entering");
-        }
-        paperInspection.panelProgress = THREE.MathUtils.lerp(
-          paperInspection.panelTransition.from,
-          paperInspection.panelTransition.to,
-          smootherStep(panelProgress),
-        );
-        if (!enteringPanel) {
-          paperComposition.panelHeaderProgress = paperInspection.panelProgress;
-          paperComposition.panelBodyProgress = paperInspection.panelProgress;
-        }
-        if (paperInspection.mode !== "centered") paperInspection.dockBlend = paperInspection.panelProgress;
-        orbitChanged = true;
-        labelDirty = true;
-        if (panelProgress >= 1) {
-          paperInspection.panelTransition = null;
-          if (enteringPanel) setPaperPanelState("visible");
-          else {
-            paperInspection.panelProgress = 0;
-            paperInspection.dockBlend = 0;
-            setPaperPanelState("hidden");
-          }
-        }
-      }
-      if (paperInspection.dockTransition) {
-        const dockProgress = THREE.MathUtils.clamp(
-          (now - paperInspection.dockTransition.startedAt) / paperInspection.dockTransition.durationMs,
-          0,
-          1,
-        );
-        paperInspection.dockBlend = THREE.MathUtils.lerp(
-          paperInspection.dockTransition.from,
-          paperInspection.dockTransition.to,
-          smootherStep(dockProgress),
-        );
-        orbitChanged = true;
-        labelDirty = true;
-        if (dockProgress >= 1) paperInspection.dockTransition = null;
-      }
-      if (paperDirectFlight) {
-        advancePaperDirectFlight(now);
+      if (paperJourney.getState() !== "idle") {
+        advancePaperJourney(now);
         orbitChanged = true;
         labelDirty = true;
       }
@@ -3558,18 +3969,6 @@ export function App17GalaxyCanvas({
           const progress = THREE.MathUtils.clamp((now - activeTransition.startedAt) / activeTransition.durationMs, 0, 1);
           const eased = smootherStep(progress);
           applyExplorationBlend(THREE.MathUtils.lerp(exploration.fromBlend, exploration.toBlend, eased));
-        }
-        if (
-          paperFocus.state !== "idle"
-          && (
-            activeTransition.kind === "reset-system"
-            || activeTransition.kind === "exit-system"
-          )
-        ) {
-          const progress = THREE.MathUtils.clamp((now - activeTransition.startedAt) / activeTransition.durationMs, 0, 1);
-          const eased = smootherStep(progress);
-          paperFocus.flightStrength = Math.sin(Math.PI * eased);
-          applyPaperFocusBlend(THREE.MathUtils.lerp(paperFocus.fromBlend, paperFocus.toBlend, eased));
         }
         const completed = advanceOrbitTransition(orbit, now);
         orbitChanged = true;
@@ -3583,7 +3982,7 @@ export function App17GalaxyCanvas({
           setExplorationState("system", true);
           flushDeferredRepresentativeUpdate();
         } else if (completed && activeTransition.kind === "reset-system") {
-          if (paperFocus.state !== "idle") finishPaperFocusReset();
+          if (paperJourney.getState() !== "idle") finishPaperFocusReset();
           else setSystemViewMode("system");
         } else if (completed && activeTransition.kind === "exit-system") {
           lastTransitionP95Ms = percentileNumber(transitionFrameTimes, 0.95);
@@ -3631,62 +4030,196 @@ export function App17GalaxyCanvas({
 
       if (webglRenderNeeded) {
         applyRuntimeCamera();
-        if (paperFocus.state !== "idle") {
-          updatePaperInspectionHandoff();
-          applyPaperFocusBlend(paperFocus.blend);
+        lastPaperQuaternionDeltaDegrees = paperJourneyFrame.state !== "idle"
+          ? THREE.MathUtils.radToDeg(lastRenderedPaperCameraQuaternion.angleTo(camera.quaternion))
+          : 0;
+        lastRenderedPaperCameraQuaternion.copy(camera.quaternion);
+        if (import.meta.env.DEV && paperComposition.cameraWriterChangesThisFrame > 1) {
+          console.warn("[app17] multiple paper camera writers in one frame", {
+            writer: paperComposition.cameraWriter,
+            changes: paperComposition.cameraWriterChangesThisFrame,
+          });
+        }
+        if (paperJourneyFrame.state !== "idle") {
+          applyPaperJourneySceneFrame(paperJourneyFrame);
+          lastPaperHandoffAlphaSum = lastPaperPointAlpha + lastPaperDedicatedAlpha;
+        } else {
+          lastPaperHandoffAlphaSum = 1;
         }
         environmentStarLayer.setCenter(camera.position);
         overviewRoot.updateMatrixWorld();
         root.updateMatrixWorld();
         systemResources?.root.updateMatrixWorld();
         if (systemResources) {
-          const inspectionVisual = resolveSystemPaperVisual(paperFocus.targetId);
-          const inspectionWorldPosition = inspectionVisual?.position.clone().applyMatrix4(systemResources.root.matrixWorld);
-          if (inspectionWorldPosition && paperFocus.state !== "idle") {
+          if (paperJourneyFrame.state !== "idle") {
+            const historyCutoff = now - 600;
+            for (const paper of systemResources.representativePapers) {
+              paperTracePickWorldPosition
+                .copy(paper.position)
+                .applyMatrix4(systemResources.root.matrixWorld);
+              paperTracePickProjectedPosition
+                .copy(paperTracePickWorldPosition)
+                .project(camera);
+              const samples = recentRepresentativeScreenPositions.get(paper.id) ?? [];
+              samples.push({
+                timestamp: now,
+                x: paperTracePickProjectedPosition.x * width * 0.5,
+                y: -paperTracePickProjectedPosition.y * height * 0.5,
+              });
+              while (samples.length > 0 && samples[0].timestamp < historyCutoff) samples.shift();
+              recentRepresentativeScreenPositions.set(paper.id, samples);
+            }
+          } else if (recentRepresentativeScreenPositions.size > 0) {
+            recentRepresentativeScreenPositions.clear();
+          }
+          if (paperFlightPixelTraceEnabled) {
+            const canvasRect = renderer.domElement.getBoundingClientRect();
+            const systemRootMatrixWorld = systemResources.root.matrixWorld;
+            const tracePickTargets: Array<{
+              id: string;
+              kind: "representative" | "ordinary";
+              screenX: number;
+              screenY: number;
+              depth: number;
+            }> = systemResources.representativePapers.map((paper) => {
+                paperTracePickWorldPosition
+                  .copy(paper.position)
+                  .applyMatrix4(systemRootMatrixWorld);
+                paperTracePickProjectedPosition
+                  .copy(paperTracePickWorldPosition)
+                  .project(camera);
+                return {
+                  id: paper.id,
+                  kind: "representative" as const,
+                  screenX: canvasRect.left
+                    + (paperTracePickProjectedPosition.x * 0.5 + 0.5) * canvasRect.width,
+                  screenY: canvasRect.top
+                    + (-paperTracePickProjectedPosition.y * 0.5 + 0.5) * canvasRect.height,
+                  depth: paperTracePickProjectedPosition.z,
+                };
+              });
+            const ordinaryPositionCount = systemResources.cloudLayer.object.geometry
+              .getAttribute("position").count;
+            const ordinaryStride = Math.max(1, Math.floor(ordinaryPositionCount / 96));
+            for (
+              let index = 0;
+              index < ordinaryPositionCount && tracePickTargets.length < systemResources.representativePapers.length + 24;
+              index += ordinaryStride
+            ) {
+              const paper = systemResources.cloudLayer.getPaperByIndex(index);
+              if (!paper) continue;
+              paperTracePickWorldPosition
+                .copy(paper.position)
+                .applyMatrix4(systemRootMatrixWorld);
+              paperTracePickProjectedPosition
+                .copy(paperTracePickWorldPosition)
+                .project(camera);
+              if (
+                Math.abs(paperTracePickProjectedPosition.x) > 0.96
+                || Math.abs(paperTracePickProjectedPosition.y) > 0.96
+                || paperTracePickProjectedPosition.z < -1
+                || paperTracePickProjectedPosition.z > 1
+              ) continue;
+              tracePickTargets.push({
+                id: paper.id,
+                kind: "ordinary",
+                screenX: canvasRect.left
+                  + (paperTracePickProjectedPosition.x * 0.5 + 0.5) * canvasRect.width,
+                screenY: canvasRect.top
+                  + (-paperTracePickProjectedPosition.y * 0.5 + 0.5) * canvasRect.height,
+                depth: paperTracePickProjectedPosition.z,
+              });
+            }
+            renderer.domElement.dataset.paperPickTargets = JSON.stringify(tracePickTargets);
+          }
+          const inspectionWorldPosition = paperJourneyFrame.targetWorldPosition?.clone()
+            ?? paperFocusWorldPosition?.clone();
+          lastPaperHandoffPositionDeltaPx = 0;
+          lastPaperTargetWorldPositionDrift = 0;
+          if (inspectionWorldPosition && paperJourneyFrame.targetId) {
+            const sourceLocalPosition = resolveSystemPaperPosition(paperJourneyFrame.targetId);
+            if (sourceLocalPosition) {
+              paperTraceSourceWorldPosition
+                .copy(sourceLocalPosition)
+                .applyMatrix4(systemResources.root.matrixWorld);
+              lastPaperTargetWorldPositionDrift = paperTraceSourceWorldPosition.distanceTo(inspectionWorldPosition);
+              paperTraceSourceProjectedPosition.copy(paperTraceSourceWorldPosition).project(camera);
+              paperTraceTargetProjectedPosition.copy(inspectionWorldPosition).project(camera);
+              if (
+                Number.isFinite(paperTraceSourceProjectedPosition.x)
+                && Number.isFinite(paperTraceSourceProjectedPosition.y)
+                && Number.isFinite(paperTraceTargetProjectedPosition.x)
+                && Number.isFinite(paperTraceTargetProjectedPosition.y)
+              ) {
+                lastPaperHandoffPositionDeltaPx = Math.hypot(
+                  (paperTraceSourceProjectedPosition.x - paperTraceTargetProjectedPosition.x) * width * 0.5,
+                  (paperTraceSourceProjectedPosition.y - paperTraceTargetProjectedPosition.y) * height * 0.5,
+                );
+              }
+            }
+          }
+          if (inspectionWorldPosition && paperJourneyFrame.state !== "idle") {
             const inspectionProjection = inspectionWorldPosition.clone().project(camera);
+            lastPaperAnchorDeltaPx = Number.isFinite(lastPaperProjectionX)
+              ? Math.abs(inspectionProjection.x - lastPaperProjectionX) * width * 0.5
+              : 0;
+            lastPaperProjectionX = inspectionProjection.x;
             paperComposition.anchorErrorPx = Math.abs(
               inspectionProjection.x - paperComposition.currentAnchorNdcX,
             ) * width * 0.5;
           } else {
             paperComposition.anchorErrorPx = 0;
+            lastPaperAnchorDeltaPx = 0;
+            lastPaperProjectionX = Number.NaN;
           }
-          const projectedDiameterOverride = (
-            paperVisualHandoff.cameraTakeoverPending
-            || paperVisualHandoff.state === "return-hold"
-          ) && paperVisualHandoff.lockedProjectedDiameter > 0
-            ? paperVisualHandoff.lockedProjectedDiameter
-            : undefined;
           paperInspectionVisual.setVisual({
             worldPosition: inspectionWorldPosition,
             camera,
             viewportWidth: width,
             viewportHeight: height,
-            inspectionBlend: paperInspection.blend,
-            projectedDiameterOverride,
-            dockBlend: paperInspection.dockBlend,
-            centered: paperInspection.mode === "centered",
+            inspectionBlend: paperJourneyFrame.visualOwnerOpacity,
+            compactDiameter: paperPresentation.compactOpticalDiameter,
+            worldDiameter: paperPresentation.worldDiameter,
+            targetBodyDiameterPx: paperPresentation.targetBodyDiameterPx,
+            compactLod: paperJourneyFrame.inspectionLod,
+            centered: paperPresentation.mode === "centered",
             fullscreen: fullscreenRef.current,
             wideLayout: window.innerWidth >= 1280,
             timeSeconds: paperInspectionTimeSeconds,
             motionStrength: reduceMotion ? 0 : 1,
           });
           const inspectionVisualState = paperInspectionVisual.getVisualState();
-          if (
-            paperVisualHandoff.cameraTakeoverPending
-            && paperComposition.cameraWriter === "paper-composition"
-          ) {
-            paperVisualHandoff.cameraTakeoverPending = false;
+          if (paperJourneyFrame.state !== "idle") {
+            const ownerOpacity = paperJourneyFrame.visualOwnerOpacity;
+            const representativeInspection = inspectionVisualState.visualType === "energy-core";
+            const opticalScale = representativeInspection ? 1 / APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE : 1;
+            const pointCoreDiameter = Math.max(1, paperPresentation.systemPointDiameter * opticalScale);
+            const closeupCoreDiameter = Math.max(
+              pointCoreDiameter,
+              inspectionVisualState.projectedDiameter * opticalScale,
+            );
+            lastPaperPointCoreDiameter = pointCoreDiameter;
+            lastPaperDedicatedCoreDiameter = closeupCoreDiameter;
+            lastPaperPointAlpha = 1 - ownerOpacity;
+            lastPaperDedicatedAlpha = ownerOpacity;
+            lastPaperVisibleEnergyRatio = (
+              pointCoreDiameter * pointCoreDiameter * (1 - ownerOpacity)
+              + closeupCoreDiameter * closeupCoreDiameter * ownerOpacity
+            ) / Math.max(1, pointCoreDiameter * pointCoreDiameter);
+            lastPaperHandoffAlphaSum = lastPaperPointAlpha + lastPaperDedicatedAlpha;
           }
           lastPaperAngularGrowthRatio = lastPaperAngularSizeRatio > 0 && inspectionVisualState.viewportRatio > 0
             ? inspectionVisualState.viewportRatio / lastPaperAngularSizeRatio - 1
             : 0;
           lastPaperAngularSizeRatio = inspectionVisualState.viewportRatio;
-          paperFocus.targetScreenSize = inspectionVisualState.projectedDiameter
-            || paperFocus.targetScreenSize;
-          systemResources.cloudLayer.setLodDistance(orbit.distance);
-          systemResources.representativeLayer?.setLodDistance(orbit.distance);
+          paperPresentation.targetScreenSize = inspectionVisualState.projectedDiameter
+            || paperPresentation.targetScreenSize;
+          const activeSystemCameraDistance = camera.position.distanceTo(exploration.focusWorld);
+          systemResources.cloudLayer.setLodDistance(activeSystemCameraDistance);
+          systemResources.representativeLayer?.setLodDistance(activeSystemCameraDistance);
           const starProjectionChanged = systemResources.star.updateProjection(camera, width, height);
           const starVisualState = systemResources.star.getVisualState();
+          systemResources.star.setFocusAttenuation(1);
           systemResources.orbitLayer?.setCloseupAttenuation(
             1 - smoothStepRange(0.65, 0.9, starVisualState.viewportRatio) * 0.2,
           );
@@ -3733,7 +4266,7 @@ export function App17GalaxyCanvas({
           const selectedOrdinaryPaper = selectedPaper
             ? undefined
             : systemResources.cloudLayer.getPaperById(selectedPaperIdRef.current);
-          if (paperInspection.blend > 0.08) focusSprite.visible = false;
+          if (paperJourneyFrame.visualOwnerOpacity > 0.08) focusSprite.visible = false;
           else {
             updateSystemPaperFocusSprite(
               focusSprite,
@@ -3766,6 +4299,32 @@ export function App17GalaxyCanvas({
             onBloomAvailabilityChangeRef.current?.(false, bloomUnavailableReason);
           }
         }
+        if (paperFocusWorldPosition && paperJourneyFrame.state !== "idle") {
+          const projectedPaper = paperFocusWorldPosition.clone().project(camera);
+          const traceInspectionVisualState = paperInspectionVisual.getVisualState();
+          const inspectionProjectedDiameter = traceInspectionVisualState.projectedDiameter;
+          const actualBodyDiameterPx = traceInspectionVisualState.visualType === "energy-core"
+            ? traceInspectionVisualState.energyBodyCoreDiameter
+            : traceInspectionVisualState.projectedDiameter;
+          recordPaperFlightTrace(
+            now,
+            inspectionProjectedDiameter,
+            actualBodyDiameterPx,
+            projectedPaper,
+            measurePaperVisibleCore(projectedPaper, inspectionProjectedDiameter),
+            {
+              ordinarySurfaceMorph: traceInspectionVisualState.ordinarySurfaceMorph,
+              ordinaryAtmosphereMorph: traceInspectionVisualState.ordinaryAtmosphereMorph,
+              handoffDiameterRatio: traceInspectionVisualState.handoffDiameterRatio,
+              representativeCarrierEdgeLeak: traceInspectionVisualState.representativeCarrierEdgeLeak,
+            },
+          );
+          if (pendingPaperFlightTracePhase && now >= paperFlightTracePublishAt) {
+            publishPaperFlightTrace(pendingPaperFlightTracePhase);
+            pendingPaperFlightTracePhase = null;
+            paperFlightTracePublishAt = 0;
+          }
+        }
         if (measurePerformance && bloomStartedAt > 0) {
           bloomSamples.push({ timestamp: now, value: performance.now() - bloomStartedAt });
         }
@@ -3773,14 +4332,14 @@ export function App17GalaxyCanvas({
           && exploration.state === "system"
           && !orbit.dragging
           && !orbit.transition
-          && !paperDirectFlight
+          && !paperJourney.isMoving()
           && !orbitZoomActive(orbit)
           && fullscreenTransition === null;
         const environmentSteadyActive = !reduceMotion
           && fullscreenBlend > 0.001
           && !orbit.dragging
           && !orbit.transition
-          && !paperDirectFlight
+          && !paperJourney.isMoving()
           && !orbitZoomActive(orbit)
           && fullscreenTransition === null;
         if (systemAmbientSteadyActive || environmentSteadyActive) {
@@ -3826,7 +4385,7 @@ export function App17GalaxyCanvas({
             payload.hotspots.find((hotspot) => hotspot.id === systemResources?.hotspotId)?.title ?? "热点星系",
             selectedPaperIdRef.current,
             hoveredSystemPaperId,
-            paperInspection.blend > 0.08,
+            paperJourneyFrame.visualOwnerOpacity > 0.08,
             width,
             height,
           );
@@ -3861,11 +4420,9 @@ export function App17GalaxyCanvas({
         || environmentAnimationActiveAfter
         || orbit.dragging
         || orbit.transition
-        || paperDirectFlight
+        || paperJourney.isMoving()
         || orbitZoomActive(orbit)
         || fullscreenTransition
-        || paperInspection.dockTransition
-        || paperInspection.panelTransition
         || labelDirty
       ) scheduleFrame();
     }
@@ -4131,30 +4688,6 @@ function cameraQuaternionForTarget(position: THREE.Vector3, target: THREE.Vector
   return new THREE.Quaternion().setFromRotationMatrix(matrix);
 }
 
-function cameraQuaternionForAnchoredTarget(
-  position: THREE.Vector3,
-  target: THREE.Vector3,
-  camera: THREE.PerspectiveCamera,
-  targetNdcX: number,
-  targetNdcY: number,
-) {
-  if (Math.abs(targetNdcX) < 0.0001 && Math.abs(targetNdcY) < 0.0001) {
-    return cameraQuaternionForTarget(position, target, camera.up);
-  }
-  const baseQuaternion = cameraQuaternionForTarget(position, target, camera.up);
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(baseQuaternion).normalize();
-  const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(baseQuaternion).normalize();
-  const distance = Math.max(0.0001, position.distanceTo(target));
-  const visibleWorldHeight = 2
-    * distance
-    * Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) * 0.5);
-  const visibleWorldWidth = visibleWorldHeight * camera.aspect;
-  const lookTarget = target.clone()
-    .addScaledVector(right, -targetNdcX * visibleWorldWidth * 0.5)
-    .addScaledVector(localUp, -targetNdcY * visibleWorldHeight * 0.5);
-  return cameraQuaternionForTarget(position, lookTarget, camera.up);
-}
-
 function syncOrbitFromCamera(
   orbit: App17OrbitState,
   camera: THREE.PerspectiveCamera,
@@ -4184,180 +4717,44 @@ function projectedWorldDiameterPixels(
   return worldDiameter * viewportHeight / Math.max(0.0001, visibleWorldHeight);
 }
 
-function segmentPointMinimumDistance(start: THREE.Vector3, end: THREE.Vector3, point: THREE.Vector3) {
-  const segment = end.clone().sub(start);
-  const lengthSq = segment.lengthSq();
-  if (lengthSq < 0.0000001) return start.distanceTo(point);
-  const progress = THREE.MathUtils.clamp(point.clone().sub(start).dot(segment) / lengthSq, 0, 1);
-  return start.clone().addScaledVector(segment, progress).distanceTo(point);
-}
-
-function quadraticBezierPoint(
-  start: THREE.Vector3,
-  control: THREE.Vector3,
-  end: THREE.Vector3,
-  progress: number,
-  target = new THREE.Vector3(),
-) {
-  const inverse = 1 - progress;
-  return target.copy(start).multiplyScalar(inverse * inverse)
-    .addScaledVector(control, 2 * inverse * progress)
-    .addScaledVector(end, progress * progress);
-}
-
-function buildQuadraticArcLengthTable(
-  start: THREE.Vector3,
-  control: THREE.Vector3,
-  end: THREE.Vector3,
-  samples: number,
-) {
-  const sampleCount = Math.max(8, samples);
-  const table = new Float32Array(sampleCount + 1);
-  const previous = start.clone();
-  const current = new THREE.Vector3();
-  let length = 0;
-  for (let index = 1; index <= sampleCount; index += 1) {
-    quadraticBezierPoint(start, control, end, index / sampleCount, current);
-    length += current.distanceTo(previous);
-    table[index] = length;
-    previous.copy(current);
-  }
-  if (length > 0.000001) {
-    for (let index = 1; index <= sampleCount; index += 1) table[index] /= length;
-  }
-  return table;
-}
-
-function sampleQuadraticByArcProgress(
-  start: THREE.Vector3,
-  control: THREE.Vector3,
-  end: THREE.Vector3,
-  table: Float32Array,
-  progress: number,
-) {
-  const clamped = THREE.MathUtils.clamp(progress, 0, 1);
-  let high = table.length - 1;
-  let low = 0;
-  while (low + 1 < high) {
-    const middle = Math.floor((low + high) * 0.5);
-    if (table[middle] < clamped) low = middle;
-    else high = middle;
-  }
-  const lowerLength = table[low];
-  const upperLength = table[high];
-  const segmentProgress = upperLength > lowerLength
-    ? (clamped - lowerLength) / (upperLength - lowerLength)
-    : 0;
-  const t = (low + segmentProgress) / Math.max(1, table.length - 1);
-  return quadraticBezierPoint(start, control, end, t);
-}
-
-function quadraticMinimumDistance(
-  start: THREE.Vector3,
-  control: THREE.Vector3,
-  end: THREE.Vector3,
-  point: THREE.Vector3,
-  samples: number,
-) {
-  const sample = new THREE.Vector3();
-  let minimum = Number.POSITIVE_INFINITY;
-  for (let index = 0; index <= samples; index += 1) {
-    quadraticBezierPoint(start, control, end, index / samples, sample);
-    minimum = Math.min(minimum, sample.distanceTo(point));
-  }
-  return minimum;
-}
-
-function createPaperAvoidancePath(
-  start: THREE.Vector3,
-  end: THREE.Vector3,
-  starCenter: THREE.Vector3,
-  safeRadius: number,
-  camera: THREE.PerspectiveCamera,
-  samples: number,
-) {
-  const directClearance = segmentPointMinimumDistance(start, end, starCenter);
-  if (safeRadius <= 0 || directClearance >= safeRadius) return null;
-  const segment = end.clone().sub(start);
-  const segmentLengthSq = Math.max(0.000001, segment.lengthSq());
-  const closestProgress = THREE.MathUtils.clamp(
-    starCenter.clone().sub(start).dot(segment) / segmentLengthSq,
-    0.08,
-    0.92,
+function resolvePaperReadingOpticalProfile(
+  representative: boolean,
+  viewportHeight: number,
+): PaperReadingOpticalProfile {
+  const targetBodyDiameterPx = THREE.MathUtils.clamp(
+    viewportHeight * APP17_PAPER_READING_BODY_VIEWPORT_RATIO,
+    APP17_REPRESENTATIVE_BODY_CORE_MIN_DIAMETER_PX,
+    APP17_REPRESENTATIVE_BODY_CORE_MAX_DIAMETER_PX,
   );
-  const closestPoint = start.clone().addScaledVector(segment, closestProgress);
-  const radial = closestPoint.clone().sub(starCenter);
-  if (radial.lengthSq() < 0.000001) radial.set(1, 0, 0).applyQuaternion(camera.quaternion);
-  radial.normalize();
-  const midpoint = start.clone().lerp(end, 0.5);
-  const influence = Math.max(0.12, 2 * closestProgress * (1 - closestProgress));
-  const requiredOffset = (safeRadius - directClearance + safeRadius * 0.035) / influence;
-  let fallbackControl = midpoint.clone().addScaledVector(radial, requiredOffset);
-  let fallbackClearance = quadraticMinimumDistance(start, fallbackControl, end, starCenter, samples);
-  let fallbackTable = buildQuadraticArcLengthTable(start, fallbackControl, end, samples);
-  let safestControl: THREE.Vector3 | null = null;
-  let safestClearance = 0;
-  let safestLength = Number.POSITIVE_INFINITY;
-  let safestTable: Float32Array | null = null;
-
-  for (const direction of [1, -1]) {
-    for (let step = 1; step <= 9; step += 1) {
-      const offset = requiredOffset * (1 + (step - 1) * 0.22);
-      const control = midpoint.clone().addScaledVector(radial, offset * direction);
-      const minimumClearance = quadraticMinimumDistance(start, control, end, starCenter, samples);
-      const table = buildQuadraticArcLengthTable(start, control, end, samples);
-      const approximateLength = table.length > 1
-        ? start.distanceTo(control) + control.distanceTo(end)
-        : Number.POSITIVE_INFINITY;
-      if (minimumClearance > fallbackClearance) {
-        fallbackControl = control;
-        fallbackClearance = minimumClearance;
-        fallbackTable = table;
-      }
-      if (minimumClearance >= safeRadius && approximateLength < safestLength) {
-        safestControl = control;
-        safestClearance = minimumClearance;
-        safestTable = table;
-        safestLength = approximateLength;
-      }
-    }
-  }
+  const representativeCarrierRatio = representative
+    ? APP17_PAPER_REPRESENTATIVE_CARRIER_VIEWPORT_RATIO
+    : 0;
   return {
-    controlPoint: safestControl ?? fallbackControl,
-    arcLengthTable: safestTable ?? fallbackTable,
-    minimumClearance: safestControl ? safestClearance : fallbackClearance,
+    targetBodyDiameterPx,
+    targetProjectedDiameterPx: representative
+      ? viewportHeight * representativeCarrierRatio
+      : targetBodyDiameterPx,
+    representativeCarrierRatio,
   };
 }
 
-function samplePaperDirectFlightPosition(flight: GalaxyPaperDirectFlight, progress: number) {
-  if (flight.pathMode === "avoidance" && flight.controlPoint && flight.arcLengthTable) {
-    return sampleQuadraticByArcProgress(
-      flight.startCameraPosition,
-      flight.controlPoint,
-      flight.endCameraPosition,
-      flight.arcLengthTable,
-      progress,
-    );
-  }
-  if (flight.kind === "focus") {
-    const direction = flight.startCameraPosition.clone().sub(flight.paperWorldPosition).normalize();
-    const distance = Math.exp(THREE.MathUtils.lerp(
-      Math.log(Math.max(0.0001, flight.startDistance)),
-      Math.log(Math.max(0.0001, flight.targetDistance)),
-      progress,
-    ));
-    return flight.paperWorldPosition.clone().addScaledVector(direction, distance);
-  }
-  return flight.startCameraPosition.clone().lerp(flight.endCameraPosition, progress);
-}
-
-function paperInspectionTargetDistance(camera: THREE.PerspectiveCamera, targetViewportRatio: number) {
+function paperInspectionTargetDistance(
+  camera: THREE.PerspectiveCamera,
+  targetViewportRatio: number,
+  worldDiameter = APP17_PAPER_INSPECTION_WORLD_DIAMETER,
+  minimumDistance = APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE,
+  targetAnchorNdcX = 0,
+) {
   const effectiveFov = THREE.MathUtils.degToRad(camera.getEffectiveFOV());
-  const distance = APP17_PAPER_INSPECTION_WORLD_DIAMETER
+  const targetViewDepth = worldDiameter
     / Math.max(0.001, 2 * Math.tan(effectiveFov * 0.5) * targetViewportRatio);
+  const anchorYaw = Math.atan(
+    targetAnchorNdcX * camera.aspect * Math.tan(effectiveFov * 0.5),
+  );
+  const distance = targetViewDepth / Math.max(0.001, Math.abs(Math.cos(anchorYaw)));
   return THREE.MathUtils.clamp(
     distance,
-    APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE,
+    minimumDistance,
     APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE,
   );
 }
@@ -4690,19 +5087,31 @@ function buildGalaxySystemResources(
   const minimumTopicYear = knownTopicYears.length > 0 ? Math.min(...knownTopicYears) : 0;
   const maximumTopicYear = knownTopicYears.length > 0 ? Math.max(...knownTopicYears) : 0;
   const cloudPoints: App17ParticlePoint[] = relativePoints
-    .map((item) => ({
-      paperId: item.paper.scopedPaperId || item.paper.rawPaperId,
-      topicKey: topicKeyFromHotspot(hotspot),
-      x: item.vector.x * coordinateScale,
-      y: item.vector.y * coordinateScale,
-      z: item.vector.z * coordinateScale,
-      color: representativeYearColor(item.paper.year, minimumTopicYear, maximumTopicYear),
-      haloColor: hotspot.color,
-      size: THREE.MathUtils.clamp(item.paper.size || 2.2, 2.2, 3.4),
-      alpha: 0.48,
-      year: item.paper.year,
-      ...paperVisualVariation(item.paper.scopedPaperId || item.paper.rawPaperId),
-    }));
+    .map((item) => {
+      const paperId = item.paper.scopedPaperId || item.paper.rawPaperId;
+      const position = item.vector.clone().multiplyScalar(coordinateScale);
+      if (position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
+        if (position.lengthSq() < 1e-12) {
+          const random = seededRandom(stableHash(`${paperId}:star-exclusion`));
+          position.set(random() - 0.5, random() - 0.5, random() - 0.5);
+          if (position.lengthSq() < 1e-12) position.set(1, 0, 0);
+        }
+        position.setLength(APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS);
+      }
+      return {
+        paperId,
+        topicKey: topicKeyFromHotspot(hotspot),
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        color: representativeYearColor(item.paper.year, minimumTopicYear, maximumTopicYear),
+        haloColor: hotspot.color,
+        size: THREE.MathUtils.clamp(item.paper.size || 2.2, 2.2, 3.4),
+        alpha: 0.48,
+        year: item.paper.year,
+        ...paperVisualVariation(paperId),
+      };
+    });
 
   const root = new THREE.Group();
   root.visible = false;
@@ -4997,6 +5406,8 @@ function createSystemPaperLayer(
     position: new THREE.Vector3(paper.x, paper.y, paper.z),
     color: paper.color,
     index,
+    displaySize: paper.size,
+    visualSizeVariation: paper.visualSizeVariation,
   }));
   const paperRecordById = new Map(paperRecords.map((paper) => [paper.id, paper]));
   const coreColor = new THREE.Color();
@@ -5348,7 +5759,11 @@ function createSystemRepresentativeBloomLayer(papers: App17ParticlePoint[], pixe
         focusTargets[rank] = representativeFocusTarget(rank, selectedRank, hoveredRank);
       }
     },
-    setPaperFocusBlend: (blend: number, inspectionBlend: number, targetRank: number) => {
+    setPaperFocusBlend: (
+      blend: number,
+      inspectionBlend: number,
+      targetRank: number,
+    ) => {
       material.uniforms.uPaperFocusBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
       material.uniforms.uPaperInspectionBlend.value = THREE.MathUtils.clamp(inspectionBlend, 0, 1);
       material.uniforms.uPaperInspectionTargetRank.value = targetRank;
@@ -5410,7 +5825,10 @@ function createSystemOrbitLayer(
     },
     transparent: true,
     depthWrite: false,
-    depthTest: true,
+    // The journey target is a dedicated reading foreground. Keeping it in the
+    // system depth buffer lets the (visually faded) central star erase it for
+    // several frames during return, which reads as a sudden model swap.
+    depthTest: false,
     blending: THREE.NormalBlending,
     toneMapped: false,
     vertexShader: `
@@ -5695,8 +6113,10 @@ type PaperInspectionVisualFrame = {
   viewportWidth: number;
   viewportHeight: number;
   inspectionBlend: number;
-  projectedDiameterOverride?: number;
-  dockBlend: number;
+  compactDiameter: number;
+  worldDiameter: number;
+  targetBodyDiameterPx: number;
+  compactLod: number;
   centered: boolean;
   fullscreen: boolean;
   wideLayout: boolean;
@@ -5767,6 +6187,10 @@ function createPaperInspectionVisual() {
               energyMicroCoreBlend: 0,
               energySoftCoreAttenuation: 1,
               energyMicroCoreBrightness: 0,
+              ordinarySurfaceMorph: 0,
+              ordinaryAtmosphereMorph: 0,
+              handoffDiameterRatio: 1,
+              representativeCarrierEdgeLeak: 0,
             };
       return { ...state, visualType };
     },
@@ -5798,6 +6222,7 @@ function createPaperInspectionEnergyCore() {
   let microCoreDiameter = 0;
   let microCoreBlend = 0;
   let softCoreAttenuation = 1;
+  let handoffDiameterRatio = 1;
   const microCoreBrightness = APP17_REPRESENTATIVE_MICRO_CORE_BRIGHTNESS;
   const geometry = new THREE.PlaneGeometry(
     APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE,
@@ -5833,6 +6258,7 @@ function createPaperInspectionEnergyCore() {
       uMicroCoreBlend: { value: 0 },
       uSoftCoreAttenuation: { value: 1 },
       uMicroCoreBrightness: { value: APP17_REPRESENTATIVE_MICRO_CORE_BRIGHTNESS },
+      uInspectionLod: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -5873,6 +6299,7 @@ function createPaperInspectionEnergyCore() {
       uniform float uMicroCoreBlend;
       uniform float uSoftCoreAttenuation;
       uniform float uMicroCoreBrightness;
+      uniform float uInspectionLod;
       varying vec2 vUv;
       ${REPRESENTATIVE_ENERGY_FIELD_GLSL}
       void main() {
@@ -6004,21 +6431,53 @@ function createPaperInspectionEnergyCore() {
         microColor *= mix(0.82, uMicroCoreBrightness, microFacing);
         microColor = min(vec3(1.0), microColor);
 
-        vec3 premultipliedColor = outerHaloColor * outerLayerAlpha;
-        float alpha = outerLayerAlpha;
-        premultipliedColor = bodyColor * bodyAlpha
-          + premultipliedColor * (1.0 - bodyAlpha);
-        alpha = bodyAlpha + alpha * (1.0 - bodyAlpha);
-        premultipliedColor = energyColor * energyAlpha
-          + premultipliedColor * (1.0 - energyAlpha);
-        alpha = energyAlpha + alpha * (1.0 - energyAlpha);
-        premultipliedColor = fresnelColor * fresnelLayerAlpha
-          + premultipliedColor * (1.0 - fresnelLayerAlpha);
-        alpha = fresnelLayerAlpha + alpha * (1.0 - fresnelLayerAlpha);
-        premultipliedColor = microColor * microAlpha
-          + premultipliedColor * (1.0 - microAlpha);
-        alpha = microAlpha + alpha * (1.0 - microAlpha);
-        if (alpha < 0.00025) discard;
+        vec3 closeupPremultiplied = outerHaloColor * outerLayerAlpha;
+        float closeupAlpha = outerLayerAlpha;
+        closeupPremultiplied = bodyColor * bodyAlpha
+          + closeupPremultiplied * (1.0 - bodyAlpha);
+        closeupAlpha = bodyAlpha + closeupAlpha * (1.0 - bodyAlpha);
+        closeupPremultiplied = energyColor * energyAlpha
+          + closeupPremultiplied * (1.0 - energyAlpha);
+        closeupAlpha = energyAlpha + closeupAlpha * (1.0 - energyAlpha);
+        closeupPremultiplied = fresnelColor * fresnelLayerAlpha
+          + closeupPremultiplied * (1.0 - fresnelLayerAlpha);
+        closeupAlpha = fresnelLayerAlpha + closeupAlpha * (1.0 - fresnelLayerAlpha);
+        closeupPremultiplied = microColor * microAlpha
+          + closeupPremultiplied * (1.0 - microAlpha);
+        closeupAlpha = microAlpha + closeupAlpha * (1.0 - microAlpha);
+
+        // Match the system representative point at the two static ownership
+        // boundaries. The journey blends this compact field to the established
+        // close-up field inside the same object, so no model is swapped while
+        // the camera is moving.
+        float readableCore = exp(-opticalRadius * opticalRadius * 54.0);
+        float readableInnerGlow = exp(-opticalRadius * opticalRadius * 12.0)
+          * (1.0 - smoothstep(0.58, 0.96, opticalRadius));
+        float readableEnergy = readableCore * 0.92 + readableInnerGlow * 0.13;
+        float compactAlpha = max(energy, readableEnergy) * uOpacity * uRankStrength;
+        vec3 compactColor = mix(
+          uHaloColor,
+          uCoreColor,
+          clamp(thermal * 0.78 + innerGlow * 0.1, 0.0, 1.0)
+        );
+        compactColor = mix(
+          compactColor,
+          hotWhite,
+          clamp(max(core * 0.72 + thermal * 0.16, readableCore * 0.88), 0.0, 0.88)
+        );
+        compactColor = min(vec3(1.0), compactColor + uHaloColor * wisps * 0.12);
+
+        float inspectionLod = smoothstep(0.0, 1.0, clamp(uInspectionLod, 0.0, 1.0));
+        float alpha = mix(compactAlpha, closeupAlpha, inspectionLod);
+        vec3 premultipliedColor = mix(
+          compactColor * compactAlpha,
+          closeupPremultiplied,
+          inspectionLod
+        );
+        float carrierEnvelope = representativeCarrierEnvelope(opticalRadius);
+        alpha *= carrierEnvelope;
+        premultipliedColor *= carrierEnvelope;
+        if (opticalRadius > 1.32 || alpha < 0.00025) discard;
         vec3 color = premultipliedColor / max(alpha, 0.0001);
         gl_FragColor = vec4(min(vec3(1.0), color), alpha);
       }
@@ -6058,6 +6517,7 @@ function createPaperInspectionEnergyCore() {
       uniform float uMicroCoreRadius;
       uniform float uMicroCoreBlend;
       varying vec2 vUv;
+      ${REPRESENTATIVE_ENERGY_FIELD_GLSL}
       void main() {
         vec2 point = (vUv - vec2(0.5)) * 2.0;
         float opticalRadius = length(point) * uCarrierScale;
@@ -6065,8 +6525,9 @@ function createPaperInspectionEnergyCore() {
         float microDistance = opticalRadius / max(uMicroCoreRadius, 0.0001);
         float microCore = exp(-microDistance * microDistance * 2.8);
         float core = mix(legacyCore, microCore, uMicroCoreBlend);
-        float alpha = core * 0.52 * uOpacity * uBloomWeight;
-        if (alpha < 0.00025) discard;
+        float alpha = core * 0.52 * uOpacity * uBloomWeight
+          * representativeCarrierEnvelope(opticalRadius);
+        if (opticalRadius > 1.32 || alpha < 0.00025) discard;
         gl_FragColor = vec4(mix(uColor, vec3(1.0, 0.98, 0.95), 0.82), alpha);
       }
     `,
@@ -6124,7 +6585,10 @@ function createPaperInspectionEnergyCore() {
       viewportWidth,
       viewportHeight,
       inspectionBlend,
-      projectedDiameterOverride,
+      compactDiameter,
+      worldDiameter,
+      targetBodyDiameterPx,
+      compactLod,
       timeSeconds,
       motionStrength,
     }: PaperInspectionVisualFrame) => {
@@ -6140,8 +6604,7 @@ function createPaperInspectionEnergyCore() {
         microCoreBlend = 0;
         return;
       }
-      const inspectionWorldDiameter = APP17_PAPER_INSPECTION_WORLD_DIAMETER
-        * APP17_REPRESENTATIVE_INSPECTION_SCALE;
+      const inspectionWorldDiameter = Math.max(0.0001, worldDiameter);
       viewPosition.copy(worldPosition).applyMatrix4(camera.matrixWorldInverse);
       const viewDepth = -viewPosition.z;
       if (viewDepth <= camera.near) {
@@ -6160,47 +6623,57 @@ function createPaperInspectionEnergyCore() {
       const visibleWorldHeight = 2 * viewDepth * Math.tan(effectiveFov * 0.5);
       const naturalProjectedDiameter = inspectionWorldDiameter
         * viewportHeight / Math.max(0.0001, visibleWorldHeight);
-      const renderedProjectedDiameter = Number.isFinite(projectedDiameterOverride)
-        && (projectedDiameterOverride ?? 0) > 0
-        ? (projectedDiameterOverride ?? naturalProjectedDiameter)
-        : naturalProjectedDiameter;
-      const projectionScale = renderedProjectedDiameter / Math.max(0.0001, naturalProjectedDiameter);
       object.position.copy(worldPosition);
       object.quaternion.copy(camera.quaternion);
-      object.scale.setScalar(inspectionWorldDiameter * projectionScale);
-      projectedDiameter = renderedProjectedDiameter;
+      object.scale.setScalar(inspectionWorldDiameter);
+      projectedDiameter = naturalProjectedDiameter;
       viewportRatio = projectedDiameter / Math.max(1, viewportHeight);
-      const opacity = smootherStep(inspectionBlend);
+      handoffDiameterRatio = projectedDiameter
+        / APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE
+        / Math.max(0.0001, compactDiameter);
+      const opacity = inspectionBlend;
+      const lockedProjectedDiameter = Math.max(1, projectedDiameter);
+      const inspectionLod = THREE.MathUtils.clamp(compactLod, 0, 1);
       detailBlend = smoothStepRange(
         APP17_REPRESENTATIVE_ENERGY_DETAIL_START_PX,
         APP17_REPRESENTATIVE_ENERGY_DETAIL_END_PX,
-        projectedDiameter,
-      );
+        lockedProjectedDiameter,
+      ) * inspectionLod;
       closeupCompactness = smoothStepRange(
         120,
         260,
-        projectedDiameter,
+        lockedProjectedDiameter,
       );
       bodyCoreBlend = smoothStepRange(
         APP17_REPRESENTATIVE_BODY_CORE_START_PX,
         APP17_REPRESENTATIVE_BODY_CORE_END_PX,
-        projectedDiameter,
+        lockedProjectedDiameter,
       );
-      bodyCoreDiameter = THREE.MathUtils.clamp(
-        projectedDiameter * APP17_REPRESENTATIVE_BODY_CORE_RATIO,
+      const referenceBodyCoreDiameter = THREE.MathUtils.clamp(
+        targetBodyDiameterPx,
         APP17_REPRESENTATIVE_BODY_CORE_MIN_DIAMETER_PX,
         APP17_REPRESENTATIVE_BODY_CORE_MAX_DIAMETER_PX,
       );
+      const bodyCoreRadius = referenceBodyCoreDiameter / lockedProjectedDiameter;
+      bodyCoreDiameter = projectedDiameter * bodyCoreRadius;
       fresnelWidth = THREE.MathUtils.clamp(bodyCoreDiameter * 0.045, 3, 6);
       outerGlowDiameter = bodyCoreDiameter * 3.2;
       microCoreBlend = bodyCoreBlend;
-      microCoreDiameter = THREE.MathUtils.clamp(
-        bodyCoreDiameter * APP17_REPRESENTATIVE_MICRO_CORE_RATIO,
+      const referenceMicroCoreDiameter = THREE.MathUtils.clamp(
+        referenceBodyCoreDiameter * APP17_REPRESENTATIVE_MICRO_CORE_RATIO,
         APP17_REPRESENTATIVE_MICRO_CORE_MIN_DIAMETER_PX,
         APP17_REPRESENTATIVE_MICRO_CORE_MAX_DIAMETER_PX,
       );
-      const bodyCoreRadius = bodyCoreDiameter / Math.max(1, projectedDiameter);
-      const microCoreRadius = microCoreDiameter / Math.max(1, projectedDiameter);
+      const naturalMicroCoreDiameter = projectedDiameter
+        * referenceMicroCoreDiameter
+        / lockedProjectedDiameter;
+      const systemMicroCoreDiameter = THREE.MathUtils.clamp(
+        compactDiameter * 0.096,
+        1.6,
+        3.0,
+      );
+      microCoreDiameter = Math.max(naturalMicroCoreDiameter, systemMicroCoreDiameter);
+      const microCoreRadius = microCoreDiameter / Math.max(projectedDiameter, 0.0001);
       softCoreAttenuation = THREE.MathUtils.lerp(1, 0.56, bodyCoreBlend);
       visibleRadius = THREE.MathUtils.lerp(1, 0.72, closeupCompactness);
       energyBodyStrength = THREE.MathUtils.lerp(1, 0.56, bodyCoreBlend);
@@ -6211,7 +6684,7 @@ function createPaperInspectionEnergyCore() {
         smoothStepRange(
           APP17_REPRESENTATIVE_ENERGY_DETAIL_START_PX,
           APP17_REPRESENTATIVE_ENERGY_NEAR_BLOOM_END_PX,
-          projectedDiameter,
+          lockedProjectedDiameter,
         ),
       );
       bloomOpacity = THREE.MathUtils.lerp(
@@ -6230,12 +6703,13 @@ function createPaperInspectionEnergyCore() {
       material.uniforms.uMicroCoreBlend.value = microCoreBlend;
       material.uniforms.uSoftCoreAttenuation.value = softCoreAttenuation;
       material.uniforms.uMicroCoreBrightness.value = microCoreBrightness;
+      material.uniforms.uInspectionLod.value = inspectionLod;
       material.uniforms.uOpacity.value = opacity;
       material.uniforms.uTime.value = (timeSeconds / flowPeriodSeconds) * Math.PI * 2;
       material.uniforms.uMotionStrength.value = motionStrength;
       material.uniforms.uDetailBlend.value = detailBlend;
       bloomMaterial.uniforms.uOpacity.value = opacity;
-      bloomMaterial.uniforms.uBloomWeight.value = bloomOpacity;
+      bloomMaterial.uniforms.uBloomWeight.value = THREE.MathUtils.lerp(0.18, bloomOpacity, inspectionLod);
       bloomMaterial.uniforms.uMicroCoreRadius.value = microCoreRadius;
       bloomMaterial.uniforms.uMicroCoreBlend.value = microCoreBlend;
       object.visible = true;
@@ -6261,6 +6735,10 @@ function createPaperInspectionEnergyCore() {
       energyMicroCoreBlend: microCoreBlend,
       energySoftCoreAttenuation: softCoreAttenuation,
       energyMicroCoreBrightness: microCoreBrightness,
+      ordinarySurfaceMorph: 0,
+      ordinaryAtmosphereMorph: 0,
+      handoffDiameterRatio,
+      representativeCarrierEdgeLeak: 0,
     }),
     dispose: () => {
       geometry.dispose();
@@ -6278,8 +6756,13 @@ function createPaperInspectionDataSphere() {
   let viewportRatio = 0;
   let currentPaperId = "";
   let rotationSpeed = 0.055;
+  let rotationAngle = 0;
+  let lastVisualTimeSeconds = Number.NaN;
+  let surfaceMorph = 0;
+  let atmosphereMorph = 0;
+  let handoffDiameterRatio = 1;
   let surfaceProfile = createPaperSurfaceProfile("paper-default");
-  const bodyGeometry = new THREE.SphereGeometry(0.5, 48, 32);
+  const bodyGeometry = new THREE.PlaneGeometry(1, 1);
   const bodyMaterial = new THREE.ShaderMaterial({
     uniforms: {
       uBodyColor: { value: new THREE.Color("#eef3ff") },
@@ -6288,22 +6771,22 @@ function createPaperInspectionDataSphere() {
       uAxisC: { value: surfaceProfile.axisC.clone() },
       uPhases: { value: surfaceProfile.phases.clone() },
       uFrequencies: { value: surfaceProfile.frequencies.clone() },
+      uRotationAxis: { value: surfaceProfile.rotationAxis.clone() },
+      uRotationAngle: { value: 0 },
       uOpacity: { value: 0 },
+      uSurfaceMorph: { value: 0 },
     },
     transparent: true,
-    depthWrite: true,
+    // The inspection object owns the target for the whole journey. It must not
+    // disappear behind system geometry while the camera follows that target.
+    depthWrite: false,
     depthTest: true,
     toneMapped: false,
     vertexShader: `
-      varying vec3 vLocalDirection;
-      varying vec3 vNormalView;
-      varying vec3 vViewDirection;
+      varying vec2 vUv;
       void main() {
-        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-        vLocalDirection = normalize(position);
-        vNormalView = normalize(normalMatrix * normal);
-        vViewDirection = normalize(-viewPosition.xyz);
-        gl_Position = projectionMatrix * viewPosition;
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: `
@@ -6313,14 +6796,30 @@ function createPaperInspectionDataSphere() {
       uniform vec3 uAxisC;
       uniform vec3 uPhases;
       uniform vec3 uFrequencies;
+      uniform vec3 uRotationAxis;
+      uniform float uRotationAngle;
       uniform float uOpacity;
-      varying vec3 vLocalDirection;
-      varying vec3 vNormalView;
-      varying vec3 vViewDirection;
+      uniform float uSurfaceMorph;
+      varying vec2 vUv;
+      vec3 rotateAroundAxis(vec3 value, vec3 axis, float angle) {
+        float cosine = cos(angle);
+        float sine = sin(angle);
+        return value * cosine
+          + cross(axis, value) * sine
+          + axis * dot(axis, value) * (1.0 - cosine);
+      }
       void main() {
-        vec3 direction = normalize(vLocalDirection);
-        vec3 normalView = normalize(vNormalView);
-        float facing = clamp(dot(normalView, normalize(vViewDirection)), 0.0, 1.0);
+        vec2 point = (vUv - vec2(0.5)) * 2.0;
+        float radiusSquared = dot(point, point);
+        float edgeWidth = max(fwidth(radiusSquared) * 1.35, 0.001);
+        if (radiusSquared > 1.0 + edgeWidth) discard;
+        vec3 normalView = normalize(vec3(point, sqrt(max(0.0, 1.0 - radiusSquared))));
+        float facing = clamp(normalView.z, 0.0, 1.0);
+        vec3 direction = rotateAroundAxis(
+          normalView,
+          normalize(uRotationAxis),
+          uRotationAngle
+        );
         float bandA = sin(dot(direction, uAxisA) * uFrequencies.x * 6.2831853 + uPhases.x);
         float bandB = sin(dot(direction, uAxisB) * uFrequencies.y * 6.2831853 + uPhases.y);
         float veinWave = sin(
@@ -6336,10 +6835,28 @@ function createPaperInspectionDataSphere() {
         vec3 highTemperature = mix(uBodyColor, vec3(1.0), 0.62);
         vec3 lowTemperature = uBodyColor * 0.72;
         float thermal = clamp(0.58 + broadField + vein, 0.38, 0.78);
-        vec3 body = mix(lowTemperature, highTemperature, thermal) * diffuse * limb;
-        body = vec3(1.0) - exp(-max(body, vec3(0.0)) * 1.18);
+        vec3 sphereBody = mix(lowTemperature, highTemperature, thermal) * diffuse * limb;
+        sphereBody = vec3(1.0) - exp(-max(sphereBody, vec3(0.0)) * 1.18);
+        float radius = sqrt(radiusSquared);
+        float pointEdge = 1.0 - smoothstep(0.72, 1.0, radius);
+        float pointCore = exp(-radiusSquared * 34.0);
+        float pointInnerGlow = exp(-radiusSquared * 8.0);
+        float pointHalo = exp(-radiusSquared * 2.35) * pointEdge;
+        float compactAlpha = min(
+          1.0,
+          pointCore * 0.90 + pointInnerGlow * 0.27 + pointHalo * 0.085
+        );
+        vec3 compactColor = mix(
+          uBodyColor,
+          vec3(1.0),
+          clamp(pointCore + pointInnerGlow * 0.72, 0.0, 1.0)
+        );
+        compactColor = mix(compactColor, vec3(1.0, 0.985, 0.95), pointCore * 0.67);
+        vec3 body = mix(compactColor, sphereBody, uSurfaceMorph);
         float edgeFade = smoothstep(0.018, 0.16, facing);
-        float alpha = uOpacity * edgeFade;
+        float circleMask = 1.0 - smoothstep(1.0 - edgeWidth, 1.0 + edgeWidth, radiusSquared);
+        float sphereAlpha = edgeFade * circleMask;
+        float alpha = uOpacity * mix(compactAlpha, sphereAlpha, uSurfaceMorph);
         if (alpha < 0.002) discard;
         gl_FragColor = vec4(body, alpha);
       }
@@ -6350,7 +6867,7 @@ function createPaperInspectionDataSphere() {
   body.frustumCulled = false;
   object.add(body);
 
-  const atmosphereGeometry = new THREE.SphereGeometry(0.525, 40, 28);
+  const atmosphereGeometry = new THREE.PlaneGeometry(1, 1);
   const atmosphereMaterial = new THREE.ShaderMaterial({
     uniforms: {
       uAtmosphereColor: { value: new THREE.Color("#b9c8dc") },
@@ -6362,24 +6879,25 @@ function createPaperInspectionDataSphere() {
     blending: THREE.AdditiveBlending,
     toneMapped: false,
     vertexShader: `
-      varying vec3 vNormalView;
-      varying vec3 vViewDirection;
+      varying vec2 vUv;
       void main() {
-        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-        vNormalView = normalize(normalMatrix * normal);
-        vViewDirection = normalize(-viewPosition.xyz);
-        gl_Position = projectionMatrix * viewPosition;
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: `
       uniform vec3 uAtmosphereColor;
       uniform float uOpacity;
-      varying vec3 vNormalView;
-      varying vec3 vViewDirection;
+      varying vec2 vUv;
       void main() {
-        float facing = clamp(dot(normalize(vNormalView), normalize(vViewDirection)), 0.0, 1.0);
+        vec2 point = (vUv - vec2(0.5)) * 2.0;
+        float radiusSquared = dot(point, point);
+        float edgeWidth = max(fwidth(radiusSquared) * 1.35, 0.001);
+        if (radiusSquared > 1.0 + edgeWidth) discard;
+        float facing = sqrt(max(0.0, 1.0 - radiusSquared));
         float rim = pow(1.0 - facing, 3.8);
-        float alpha = uOpacity * rim * smoothstep(0.0, 0.2, facing);
+        float circleMask = 1.0 - smoothstep(1.0 - edgeWidth, 1.0 + edgeWidth, radiusSquared);
+        float alpha = uOpacity * rim * smoothstep(0.0, 0.2, facing) * circleMask;
         if (alpha < 0.002) discard;
         gl_FragColor = vec4(uAtmosphereColor * (0.54 + rim * 0.28), alpha);
       }
@@ -6403,7 +6921,10 @@ function createPaperInspectionDataSphere() {
         bodyMaterial.uniforms.uAxisC.value.copy(surfaceProfile.axisC);
         bodyMaterial.uniforms.uPhases.value.copy(surfaceProfile.phases);
         bodyMaterial.uniforms.uFrequencies.value.copy(surfaceProfile.frequencies);
+        bodyMaterial.uniforms.uRotationAxis.value.copy(surfaceProfile.rotationAxis);
         rotationSpeed = THREE.MathUtils.lerp(0.042, 0.068, stableHash(`${paperId}:rotation-speed`) / 4294967295);
+        rotationAngle = (stableHash(`${paperId}:rotation-phase`) / 4294967295) * Math.PI * 2;
+        lastVisualTimeSeconds = Number.NaN;
       }
       bodyMaterial.uniforms.uBodyColor.value.set(bodyColor || "#eef3ff");
       atmosphereMaterial.uniforms.uAtmosphereColor.value.set(sourceOrbitColor(source || ""));
@@ -6414,26 +6935,18 @@ function createPaperInspectionDataSphere() {
       viewportWidth,
       viewportHeight,
       inspectionBlend,
-      projectedDiameterOverride,
+      worldDiameter,
+      compactDiameter,
       timeSeconds,
-    }: {
-      worldPosition: THREE.Vector3 | undefined;
-      camera: THREE.PerspectiveCamera;
-      viewportWidth: number;
-      viewportHeight: number;
-      inspectionBlend: number;
-      projectedDiameterOverride?: number;
-      dockBlend: number;
-      centered: boolean;
-      fullscreen: boolean;
-      wideLayout: boolean;
-      timeSeconds: number;
-      motionStrength: number;
-    }) => {
+      motionStrength,
+    }: PaperInspectionVisualFrame) => {
       if (!worldPosition || viewportWidth < 1 || viewportHeight < 1 || inspectionBlend <= 0.002) {
         object.visible = false;
         projectedDiameter = 0;
         viewportRatio = 0;
+        surfaceMorph = 0;
+        atmosphereMorph = 0;
+        handoffDiameterRatio = 1;
         return;
       }
       viewPosition.copy(worldPosition).applyMatrix4(camera.matrixWorldInverse);
@@ -6442,32 +6955,49 @@ function createPaperInspectionDataSphere() {
         object.visible = false;
         projectedDiameter = 0;
         viewportRatio = 0;
+        surfaceMorph = 0;
+        atmosphereMorph = 0;
+        handoffDiameterRatio = 1;
         return;
       }
       const effectiveFov = THREE.MathUtils.degToRad(camera.getEffectiveFOV());
       const visibleWorldHeight = 2 * viewDepth * Math.tan(effectiveFov * 0.5);
-      const naturalProjectedDiameter = APP17_PAPER_INSPECTION_WORLD_DIAMETER
+      const inspectionWorldDiameter = Math.max(0.0001, worldDiameter);
+      const naturalProjectedDiameter = inspectionWorldDiameter
         * viewportHeight / Math.max(0.0001, visibleWorldHeight);
-      const renderedProjectedDiameter = Number.isFinite(projectedDiameterOverride)
-        && (projectedDiameterOverride ?? 0) > 0
-        ? (projectedDiameterOverride ?? naturalProjectedDiameter)
-        : naturalProjectedDiameter;
-      const projectionScale = renderedProjectedDiameter / Math.max(0.0001, naturalProjectedDiameter);
       object.position.copy(worldPosition);
-      object.scale.setScalar(APP17_PAPER_INSPECTION_WORLD_DIAMETER * projectionScale);
-      projectedDiameter = renderedProjectedDiameter;
+      object.scale.setScalar(inspectionWorldDiameter);
+      const opacity = inspectionBlend;
+      projectedDiameter = naturalProjectedDiameter;
       viewportRatio = projectedDiameter / Math.max(1, viewportHeight);
-      const opacity = smootherStep(inspectionBlend);
+      surfaceMorph = smootherStep(THREE.MathUtils.clamp((projectedDiameter - 8) / (36 - 8), 0, 1));
+      atmosphereMorph = smootherStep(THREE.MathUtils.clamp((projectedDiameter - 28) / (56 - 28), 0, 1));
+      handoffDiameterRatio = projectedDiameter / Math.max(0.0001, compactDiameter);
       bodyMaterial.uniforms.uOpacity.value = opacity;
-      atmosphereMaterial.uniforms.uOpacity.value = opacity * 0.11;
-      object.quaternion.setFromAxisAngle(surfaceProfile.rotationAxis, timeSeconds * rotationSpeed);
+      bodyMaterial.uniforms.uSurfaceMorph.value = surfaceMorph;
+      if (Number.isFinite(lastVisualTimeSeconds)) {
+        const elapsed = THREE.MathUtils.clamp(timeSeconds - lastVisualTimeSeconds, 0, 0.1);
+        rotationAngle += elapsed * rotationSpeed * THREE.MathUtils.clamp(motionStrength, 0, 1);
+      }
+      lastVisualTimeSeconds = timeSeconds;
+      bodyMaterial.uniforms.uRotationAngle.value = rotationAngle;
+      atmosphereMaterial.uniforms.uOpacity.value = opacity * atmosphereMorph * 0.11;
+      body.visible = opacity > 0.002;
+      atmosphere.visible = opacity * atmosphereMorph > 0.002;
+      object.quaternion.copy(camera.quaternion);
+      body.scale.setScalar(1);
+      atmosphere.scale.setScalar(1.05);
+      body.quaternion.identity();
+      atmosphere.quaternion.identity();
       object.visible = true;
       object.updateMatrixWorld(true);
     },
     getVisualState: () => ({
       projectedDiameter,
       viewportRatio,
-      drawCalls: object.visible ? 2 : 0,
+      drawCalls: object.visible
+        ? Number(body.visible) + Number(atmosphere.visible)
+        : 0,
       bloomDrawCalls: 0,
       energyDetailBlend: 0,
       energyBloomOpacity: 0,
@@ -6484,6 +7014,10 @@ function createPaperInspectionDataSphere() {
       energyMicroCoreBlend: 0,
       energySoftCoreAttenuation: 1,
       energyMicroCoreBrightness: 0,
+      ordinarySurfaceMorph: surfaceMorph,
+      ordinaryAtmosphereMorph: atmosphereMorph,
+      handoffDiameterRatio,
+      representativeCarrierEdgeLeak: 0,
     }),
     dispose: () => {
       bodyGeometry.dispose();
@@ -6683,7 +7217,9 @@ function createSystemStar(hotspot: App17GalaxyHotspotPoint) {
     bloomCoreMaterial.uniforms.uSceneOpacity.value = opacity;
     photosphereMaterial.uniforms.uSceneOpacity.value = opacity;
     surfaceBloomMaterial.uniforms.uSceneOpacity.value = opacity;
-    depthOccluder.visible = depthOcclusionActive && sceneOpacity > 0.92;
+    depthOccluder.visible = depthOcclusionActive
+      && sceneOpacity > 0.92
+      && focusAttenuation > 0.9;
     magneticLayer.setOpacity(opacity);
   };
 
@@ -6790,12 +7326,15 @@ function createSystemStar(hotspot: App17GalaxyHotspotPoint) {
       photosphere.visible = bodyBlend > 0.001;
       bloomCore.visible = farCoreBlend > 0.001;
       surfaceBloom.visible = surfaceBloomBlend > 0.001 && sceneOpacity > 0.001;
-      depthOccluder.visible = depthOcclusionActive && sceneOpacity > 0.92;
+      depthOccluder.visible = depthOcclusionActive
+        && sceneOpacity > 0.92
+        && focusAttenuation > 0.9;
       return changed;
     },
     getVisualState: () => ({
       projectedDiameter,
       viewportRatio,
+      focusAttenuation,
       lod,
       bodyBlend,
       farCoreBlend,
@@ -7902,11 +8441,24 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
           + outerGlow * uOuterGlowStrength
           + wisps;
         float energy = representativeBoundedEnergy(rawEnergy);
-        float alpha = energy * vAlpha * rankStrength;
-        if (alpha < 0.00025) discard;
+        // Keep a crisp, size-stable identity at system scale. The shared soft
+        // energy field is tuned for close inspection and otherwise becomes
+        // too diffuse to distinguish from the ordinary paper cloud.
+        float opticalRadius = length(point) * uCarrierScale;
+        float readableCore = exp(-opticalRadius * opticalRadius * 54.0);
+        float readableInnerGlow = exp(-opticalRadius * opticalRadius * 12.0)
+          * (1.0 - smoothstep(0.58, 0.96, opticalRadius));
+        float readableEnergy = readableCore * 0.92 + readableInnerGlow * 0.13;
+        float alpha = max(energy, readableEnergy) * vAlpha * rankStrength
+          * representativeCarrierEnvelope(opticalRadius);
+        if (opticalRadius > 1.32 || alpha < 0.00025) discard;
         vec3 warmWhite = vec3(1.0, 0.985, 0.95);
         vec3 color = mix(vHaloColor, vCoreColor, clamp(thermal * 0.78 + innerGlow * 0.1, 0.0, 1.0));
-        color = mix(color, warmWhite, clamp(core * 0.72 + thermal * 0.16, 0.0, 0.82));
+        color = mix(
+          color,
+          warmWhite,
+          clamp(max(core * 0.72 + thermal * 0.16, readableCore * 0.88), 0.0, 0.88)
+        );
         color = min(vec3(1.0), color + vHaloColor * wisps * 0.12);
         gl_FragColor = vec4(color, alpha);
       }
@@ -7985,6 +8537,7 @@ function createSystemRepresentativeBloomMaterial(pixelRatio: number) {
       attribute float representativeRank;
       uniform float uPixelRatio;
       uniform float uCarrierScale;
+      uniform float uPaperInspectionTargetRank;
       varying vec3 vColor;
       varying float vBloomStrength;
       varying float vFocusIntensity;
@@ -8022,6 +8575,7 @@ function createSystemRepresentativeBloomMaterial(pixelRatio: number) {
       varying float vRepresentativeRank;
       varying float vBloomWeight;
       uniform float uCarrierScale;
+      ${REPRESENTATIVE_ENERGY_FIELD_GLSL}
       void main() {
         vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
         float opticalRadius = length(point) * uCarrierScale;
@@ -8030,8 +8584,9 @@ function createSystemRepresentativeBloomMaterial(pixelRatio: number) {
         float targetMask = 1.0 - step(0.45, abs(vRepresentativeRank - uPaperInspectionTargetRank));
         float inspectionVisibility = 1.0 - targetMask * uPaperInspectionBlend;
         float alpha = core * 0.46 * uSceneOpacity * vBloomStrength * vBloomWeight
-          * vFocusIntensity * focusAttenuation * inspectionVisibility;
-        if (alpha < 0.00025) discard;
+          * vFocusIntensity * focusAttenuation * inspectionVisibility
+          * representativeCarrierEnvelope(opticalRadius);
+        if (opticalRadius > 1.32 || alpha < 0.00025) discard;
         vec3 lightColor = mix(vColor, vec3(1.0, 0.975, 0.94), 0.88);
         gl_FragColor = vec4(lightColor, alpha);
       }

@@ -15,6 +15,7 @@ import type {
   PaperQueryInput,
   PaperQueryResult,
   SearchResultPaper,
+  V20HotspotSnapshot,
 } from "../types";
 
 export type DesktopHealthResult = {
@@ -111,6 +112,79 @@ export type PaperLibraryRestoreResult = {
   previousBackupPath?: string;
   sizeBytes: number;
   paperCount: number;
+  restoredSnapshotId?: string;
+  validationStatus: string;
+  rollbackPerformed: boolean;
+  summary: string;
+};
+
+export type PaperLibraryBackupInspection = {
+  backupPath: string;
+  schemaVersion: number;
+  paperCount: number;
+  projectCount: number;
+  snapshotId?: string;
+  hotspotCount: number;
+  membershipCount: number;
+  validationStatus: string;
+};
+
+export type LibrarySetupMode = "seed" | "empty" | "existing";
+
+export type LibrarySetupState = {
+  configured: boolean;
+  databaseDir?: string;
+  databasePath?: string;
+  databaseExists: boolean;
+  databaseValid: boolean;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  snapshotId?: string;
+  databaseSchemaVersion?: number;
+  requiresModeling: boolean;
+  seedAvailable: boolean;
+  seedSizeBytes?: number;
+  seedPaperCount?: number;
+  seedHotspotCount?: number;
+  seedMembershipCount?: number;
+  seedSnapshotId?: string;
+  seedDatabaseSchemaVersion?: number;
+  seedVersion?: string;
+  message: string;
+};
+
+export type LibraryLocationValidation = {
+  valid: boolean;
+  databaseDir: string;
+  databasePath: string;
+  writable: boolean;
+  availableSpaceBytes: number;
+  requiredSpaceBytes: number;
+  existingDatabase: boolean;
+  existingDatabaseValid: boolean;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  snapshotId?: string;
+  databaseSchemaVersion?: number;
+  requiresModeling: boolean;
+  message: string;
+};
+
+export type InitializeLibraryResult = {
+  mode: LibrarySetupMode;
+  databaseDir: string;
+  databasePath: string;
+  sizeBytes: number;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  snapshotId?: string;
+  databaseSchemaVersion: number;
+  requiresModeling: boolean;
+  sha256: string;
+  integrityCheck: string;
   summary: string;
 };
 
@@ -146,14 +220,23 @@ const loadGalaxyVisualReviewProvider: () => Promise<typeof import("./galaxyVisua
 export async function openExternalUrl(url: string) {
   const value = url.trim();
   if (!value) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("外部链接格式无效。");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("仅允许打开 http 或 https 外部链接。");
+  }
 
   if (isDesktopRuntime()) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(value);
+    await openUrl(parsed.toString());
     return;
   }
 
-  window.open(value, "_blank", "noopener,noreferrer");
+  window.open(parsed.toString(), "_blank", "noopener,noreferrer");
 }
 
 export async function chooseExportDirectory(title = "选择目录") {
@@ -189,6 +272,15 @@ export async function chooseSqliteBackupFile(title = "选择 SQLite 论文库备
     filters: [{ name: "SQLite 数据库", extensions: ["sqlite", "db", "sqlite3"] }],
   });
   return Array.isArray(selected) ? selected[0] : selected ?? undefined;
+}
+
+export async function confirmDesktopAction(message: string, title = "确认操作") {
+  if (!isDesktopRuntime()) return window.confirm(message);
+  // Native file pickers resolve on the activation key-down event. Let that input
+  // finish before opening the next native dialog so Enter/Space cannot confirm it.
+  await new Promise((resolve) => window.setTimeout(resolve, 120));
+  const { confirm } = await import("@tauri-apps/plugin-dialog");
+  return confirm(message, { title, kind: "warning" });
 }
 
 export async function chooseChromeDriverFile(title = "选择 ChromeDriver 可执行文件") {
@@ -232,6 +324,50 @@ export async function getPaperLibraryStatus(databaseDir?: string, projectId?: st
     } satisfies PaperLibraryStatus;
   }
   return invoke<PaperLibraryStatus>("paper_library_status", { databaseDir, projectId });
+}
+
+export async function getLibrarySetupState(databaseDir?: string) {
+  if (!isDesktopRuntime()) {
+    return {
+      configured: true,
+      databaseDir: databaseDir || "browser-preview",
+      databasePath: "IndexedDB preview",
+      databaseExists: true,
+      databaseValid: true,
+      paperCount: 0,
+      hotspotCount: 0,
+      membershipCount: 0,
+      requiresModeling: true,
+      seedAvailable: false,
+      message: "Browser preview",
+    } satisfies LibrarySetupState;
+  }
+  return invoke<LibrarySetupState>("get_library_setup_state", { databaseDir });
+}
+
+export async function validateLibraryLocation(databaseDir: string, mode: LibrarySetupMode) {
+  if (!isDesktopRuntime()) {
+    return {
+      valid: true,
+      databaseDir,
+      databasePath: `${databaseDir}/research-hotspots-v7.sqlite`,
+      writable: true,
+      availableSpaceBytes: 0,
+      requiredSpaceBytes: 0,
+      existingDatabase: mode === "existing",
+      existingDatabaseValid: mode === "existing",
+      paperCount: 0,
+      hotspotCount: 0,
+      membershipCount: 0,
+      requiresModeling: mode !== "existing",
+      message: "Browser preview",
+    } satisfies LibraryLocationValidation;
+  }
+  return invoke<LibraryLocationValidation>("validate_library_location", { input: { databaseDir, mode } });
+}
+
+export async function initializeLibrary(databaseDir: string, mode: LibrarySetupMode) {
+  return invoke<InitializeLibraryResult>("initialize_library", { input: { databaseDir, mode } });
 }
 
 export async function queryPaperLibrary(input: PaperQueryInput) {
@@ -370,6 +506,56 @@ export async function getApp17GalaxyPayload(input: { databaseDir?: string; proje
   return invoke<App17GalaxyPayload>("get_app17_galaxy_payload", { input });
 }
 
+export async function getV20AnalysisState(input: { databaseDir?: string; projectId?: string }) {
+  if (!isDesktopRuntime()) return undefined;
+  return invoke<import("../types").V20AnalysisState | null>("get_v20_analysis_state", { input });
+}
+
+export async function getV20HotspotSnapshot(input: { databaseDir?: string; projectId?: string }) {
+  if (!isDesktopRuntime()) return undefined;
+  return invoke<V20HotspotSnapshot>("get_v20_hotspot_snapshot", { input });
+}
+
+export async function getV20GalaxyPayload(input: { databaseDir?: string; projectId?: string; mode?: string }) {
+  if (!isDesktopRuntime()) return getApp17GalaxyPayload(input);
+  return invoke<App17GalaxyPayload>("get_v20_galaxy_payload", { input });
+}
+
+export async function setAppCredential(projectId: string, service: string, secret: string) {
+  if (!isDesktopRuntime()) return { configured: Boolean(secret.trim()) };
+  return invoke<{ configured: boolean }>("set_app_credential", { projectId, service, secret });
+}
+
+export async function getAppCredentialStatus(projectId: string, service: string) {
+  if (!isDesktopRuntime()) return { configured: false };
+  return invoke<{ configured: boolean }>("get_app_credential_status", { projectId, service });
+}
+
+export async function deleteAppCredential(projectId: string, service: string) {
+  if (!isDesktopRuntime()) return { configured: false };
+  return invoke<{ configured: boolean }>("delete_app_credential", { projectId, service });
+}
+
+export async function runAiChat(input: {
+  taskKey: string;
+  projectId: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  useEnvKey: boolean;
+  mode: "test" | "simple" | "deep" | "revised" | "keyword";
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+}) {
+  if (!isDesktopRuntime()) throw new Error("AI 请求仅在桌面应用中可用。");
+  return invoke<{ content: string; retryCount: number; elapsedMs: number }>("ai_chat", { input });
+}
+
+export async function cancelAiTask(taskKey: string) {
+  if (!isDesktopRuntime()) return false;
+  return invoke<boolean>("cancel_ai_task", { taskKey });
+}
+
 export async function getDemoPaperSamplePath() {
   if (!isDesktopRuntime()) {
     throw new Error("演示数据一键导入仅桌面端可用。");
@@ -426,6 +612,13 @@ export async function backupPaperLibrary(input: { databaseDir?: string; backupDi
     throw new Error("SQLite 论文库备份只在桌面端可用。");
   }
   return invoke<PaperLibraryBackupResult>("backup_paper_library", input);
+}
+
+export async function inspectPaperLibraryBackup(input: { backupPath: string; projectId?: string }) {
+  if (!isDesktopRuntime()) {
+    throw new Error("SQLite 论文库备份检查只在桌面端可用。");
+  }
+  return invoke<PaperLibraryBackupInspection>("inspect_paper_library_backup", input);
 }
 
 export async function restorePaperLibrary(input: { databaseDir?: string; backupPath: string; projectId?: string }) {

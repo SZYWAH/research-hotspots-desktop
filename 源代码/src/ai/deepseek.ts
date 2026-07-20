@@ -1,55 +1,17 @@
 import type { AiSettings, Hotspot, Paper, ReportGenerationOptions, ReportEvidenceProfile, ResearchReport } from "../types";
 import { buildEvidenceProfileMarkdown, buildReportEvidenceProfile, evaluateReportQuality, normalizeReportOutput } from "../lib/references";
+import { runAiChat } from "../lib/desktop";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
-type ChatCompletionResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
-type EffectiveAiSettings = AiSettings & {
-  apiKey: string;
-  keySource: "env" | "manual" | "missing";
-};
-
-export function hasEnvApiKey() {
-  return Boolean(import.meta.env.VITE_DEEPSEEK_API_KEY?.trim());
-}
-
-export function getEffectiveAiSettings(settings: AiSettings): EffectiveAiSettings {
-  const envKey = settings.provider === "deepseek" && settings.useEnvKey ? import.meta.env.VITE_DEEPSEEK_API_KEY?.trim() : "";
-  const manualKey = settings.manualApiKey.trim();
-  const apiKey = envKey || manualKey || "";
-  return {
-    ...settings,
-    baseUrl:
-      settings.provider === "deepseek" && settings.useEnvKey
-        ? import.meta.env.VITE_DEEPSEEK_BASE_URL || settings.baseUrl
-        : settings.baseUrl,
-    model:
-      settings.provider === "deepseek" && settings.useEnvKey
-        ? import.meta.env.VITE_DEEPSEEK_MODEL || settings.model
-        : settings.model,
-    apiKey,
-    keySource: envKey ? "env" : apiKey ? "manual" : "missing",
-  };
-}
-
 export async function testAiConnection(settings: AiSettings) {
   return callChat(settings, [
     { role: "system", content: "你是 API 连通性测试助手，只输出简短中文。" },
     { role: "user", content: "请只回复：连接正常" },
-  ]);
+  ], "test");
 }
 
 export async function generateBilingualKeyword(topic: string, settings: AiSettings) {
@@ -62,7 +24,7 @@ export async function generateBilingualKeyword(topic: string, settings: AiSettin
       role: "user",
       content: `请把这个中文或混合主题转换为适合 arXiv / OpenAlex 的英文核心检索词：${topic}`,
     },
-  ]);
+  ], "keyword");
   return content.replace(/["'`[\]()]/g, "").trim() || topic;
 }
 
@@ -74,8 +36,9 @@ export async function generateResearchReport(input: {
   settings: AiSettings;
   options?: ReportGenerationOptions;
   hotspot?: Hotspot;
+  onTaskStarted?: (taskKey: string) => void;
 }) {
-  const { topic, papers, mode, discipline, settings, options, hotspot } = input;
+  const { topic, papers, mode, discipline, settings, options, hotspot, onTaskStarted } = input;
   const evidenceProfile = buildReportEvidenceProfile(papers, hotspot);
   const content = await callChat(settings, [
     {
@@ -87,7 +50,7 @@ export async function generateResearchReport(input: {
       role: "user",
       content: buildReportPrompt(topic, papers, mode, discipline, options, evidenceProfile),
     },
-  ]);
+  ], mode === "deep" ? "deep" : "simple", onTaskStarted);
   const normalized = normalizeReportOutput(content, topic, papers, evidenceProfile);
   return {
     content: normalized,
@@ -124,7 +87,7 @@ export async function reviseResearchReport(input: {
         formatPapers(input.papers),
       ].join("\n\n"),
     },
-  ]);
+  ], "revised");
   const normalized = normalizeReportOutput(content, input.topic, input.papers, evidenceProfile);
   return {
     content: normalized,
@@ -133,51 +96,40 @@ export async function reviseResearchReport(input: {
   };
 }
 
-async function callChat(settings: AiSettings, messages: ChatMessage[]) {
-  const effective = getEffectiveAiSettings(settings);
-  if (!effective.apiKey) {
-    throw new Error("缺少 API Key。请在设置页填写，或配置 VITE_DEEPSEEK_API_KEY。");
+async function callChat(
+  settings: AiSettings,
+  messages: ChatMessage[],
+  mode: "test" | "simple" | "deep" | "revised" | "keyword",
+  onTaskStarted?: (taskKey: string) => void,
+) {
+  if (!settings.apiCredentialConfigured && !settings.manualApiKey.trim() && !settings.useEnvKey) {
+    throw new Error("缺少安全凭据。请在设置页保存 API Key。");
   }
-
-  let lastError = "";
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const response = await fetch(buildEndpoint(effective.baseUrl), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${effective.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: effective.model,
-          messages,
-          temperature: effective.temperature,
-        }),
-      });
-
-      const payload = (await response.json().catch(() => ({}))) as ChatCompletionResponse;
-      if (!response.ok) {
-        lastError = payload.error?.message || `AI 请求失败：HTTP ${response.status}`;
-        if (attempt === 1 && response.status >= 500) continue;
-        throw new Error(lastError);
-      }
-
-      const content = payload.choices?.[0]?.message?.content?.trim();
-      if (!content) throw new Error("AI 返回为空。");
-      return content;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "AI 请求失败。";
-      if (attempt === 2) break;
-    }
-  }
-  throw new Error(`${lastError}（已自动重试 1 次）`);
+  const projectId = settings.projectId || "project-default";
+  const taskIdentity = `${projectId}:${mode}:${messages.at(-1)?.content.slice(0, 96) ?? "request"}`;
+  const taskKey = `${projectId}:${mode}:${stableTaskHash(taskIdentity)}`;
+  onTaskStarted?.(taskKey);
+  const result = await runAiChat({
+    taskKey,
+    projectId,
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    temperature: settings.temperature,
+    useEnvKey: settings.useEnvKey,
+    mode,
+    messages,
+  });
+  return result.content;
 }
 
-function buildEndpoint(baseUrl: string) {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
-  if (normalized.endsWith("/chat/completions")) return normalized;
-  if (normalized.endsWith("/v1")) return `${normalized}/chat/completions`;
-  return `${normalized}/v1/chat/completions`;
+function stableTaskHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
 }
 
 function buildReportPrompt(topic: string, papers: Paper[], mode: ResearchReport["mode"], discipline: string, options: ReportGenerationOptions | undefined, evidenceProfile: ReportEvidenceProfile) {

@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Activity,
   AlertTriangle,
@@ -75,6 +84,7 @@ threeConsole?.((type, message, ...args) => {
 
 import {
   clearTaskLogs,
+  approveReport,
   countIndexedDbPapers,
   createProject,
   deleteProject,
@@ -90,12 +100,15 @@ import {
   getTaskLogs,
   importMarkdownReports,
   replaceHotspots,
+  replaceV20HotspotCache,
   replacePaperLibrary,
+  reconcileInterruptedAiTaskLogs,
   renameProject,
   restoreBackupData,
   saveAiSettings,
   saveHotspot,
   saveReport,
+  saveReportWithTaskLog,
   saveTaskLog,
   seedResearchDataIfEmpty,
   setActiveProject as activateProject,
@@ -104,28 +117,40 @@ import {
 import {
   generateBilingualKeyword,
   generateResearchReport,
-  hasEnvApiKey,
   reviseResearchReport,
   testAiConnection,
 } from "./ai/deepseek";
 import { searchAcademicSources } from "./lib/searchSources";
+import { deriveAnalysisProgress } from "./lib/analysisProgress";
 import { buildOfflineHotspotReport, formatHotspotEvidenceMarkdown, hotspotEvidenceToPapers } from "./lib/hotspotEvidenceReport";
 import {
+  loadPersistedHotspotEvidence,
+  type HotspotEvidenceDiagnostics,
+  type HotspotEvidenceLoadStatus,
+} from "./lib/hotspotEvidenceLoader";
+import {
   backupPaperLibrary,
+  cancelAiTask,
   chooseChromeDriverFile,
   chooseExportDirectory,
   choosePaperImportFile,
   chooseSqliteBackupFile,
+  confirmDesktopAction,
   controlPaperFileImport,
   deletePapersFromLibrary,
-  exportHotspotEvidence,
   getApp17GalaxyPayload,
-  getApp17HotspotEvidence,
+  getV20GalaxyPayload,
+  getV20HotspotSnapshot,
+  getLibrarySetupState,
   getPaperLibraryFacets,
   getPaperLibraryStatus,
+  getAppCredentialStatus,
   getPapersByIds,
   getDemoPaperSamplePath,
   isGalaxyVisualReviewMode,
+  isDesktopRuntime,
+  initializeLibrary,
+  inspectPaperLibraryBackup,
   loadApp17Galaxy,
   openExternalUrl,
   queryPaperLibrary,
@@ -135,14 +160,19 @@ import {
   runDesktopHealthCheck,
   runLibraryCleanerWorker,
   runLibraryClusterWorker,
+  setAppCredential,
   runLibraryPressureTest,
   startPaperFileImport,
   startMysqlPaperImport,
   restorePaperLibrary,
+  validateLibraryLocation,
   upsertPaperLibrary,
   writeTextFile,
   type DesktopHealthResult,
   type LibraryPressureTestResult,
+  type LibrarySetupMode,
+  type LibrarySetupState,
+  type InitializeLibraryResult,
   type PaperFileImportProgress,
 } from "./lib/desktop";
 import { formatDateTime, nowIso } from "./lib/dates";
@@ -171,6 +201,7 @@ import type {
   SearchOptions,
   SourceKind,
   TaskLog,
+  V20HotspotSnapshot,
 } from "./types";
 import { DISCIPLINES } from "./types";
 
@@ -306,11 +337,6 @@ function galaxySessionCacheKey(databaseDir: string, projectId: string) {
   return `${databaseDir.trim().toLowerCase()}::${projectId}`;
 }
 
-function galaxyPasswordCacheKey(settings: AiSettings) {
-  const mysql = settings.mysql;
-  return `${mysql.host.trim().toLowerCase()}:${mysql.port}:${mysql.user.trim().toLowerCase()}:${mysql.database.trim().toLowerCase()}`;
-}
-
 export default function App() {
   const galaxyVisualReview = isGalaxyVisualReviewMode();
   const galaxyVisualReviewIntent = useMemo(readGalaxyVisualReviewIntent, []);
@@ -321,8 +347,11 @@ export default function App() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [libraryStatus, setLibraryStatus] = useState<PaperLibraryStatus | null>(null);
+  const [librarySetupState, setLibrarySetupState] = useState<LibrarySetupState | null>(null);
+  const [librarySetupRequired, setLibrarySetupRequired] = useState(false);
   const [libraryFacets, setLibraryFacets] = useState<PaperLibraryFacets | null>(null);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
+  const [v20Snapshot, setV20Snapshot] = useState<V20HotspotSnapshot | null>(null);
   const [reports, setReports] = useState<ResearchReport[]>([]);
   const [jobs, setJobs] = useState<PipelineJob[]>([]);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
@@ -334,7 +363,7 @@ export default function App() {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const galaxySessionsRef = useRef(new Map<string, GalaxySessionState>());
   const galaxyRequestsRef = useRef(new Map<string, Promise<void>>());
-  const galaxyPasswordsRef = useRef(new Map<string, string>());
+  const refreshRequestSequenceRef = useRef(0);
   const [, refreshGalaxySessions] = useState(0);
 
   function updateGalaxySession(key: string, next: GalaxySessionState) {
@@ -351,7 +380,6 @@ export default function App() {
 
     const task = (async () => {
       let previous = galaxySessionsRef.current.get(key) ?? EMPTY_GALAXY_SESSION;
-      let cacheError = "";
 
       if (galaxyVisualReview) {
         updateGalaxySession(key, {
@@ -385,91 +413,19 @@ export default function App() {
         return;
       }
 
-      if (!forceMysqlRefresh) {
-        updateGalaxySession(key, { ...previous, loading: true, error: "", notice: "正在读取 SQLite 星图缓存…", phase: "cache" });
-        try {
-          const cachedPayload = await getApp17GalaxyPayload({
-            databaseDir: nextSettings.databaseDir,
-            projectId: project.id,
-            mode: "nebula",
-          });
-          if (cachedPayload.ready && cachedPayload.hotspots.length > 0) {
-            updateGalaxySession(key, {
-              payload: cachedPayload,
-              loading: false,
-              error: "",
-              notice: cachedPayload.message || "已从 SQLite 缓存加载 app17 星图。",
-              phase: "ready",
-            });
-            return;
-          }
-        } catch (error) {
-          cacheError = error instanceof Error ? error.message : String(error || "SQLite 星图缓存读取失败。");
-        }
-        previous = galaxySessionsRef.current.get(key) ?? previous;
-      }
-
-      const configured = nextSettings.mysql;
-      const passwordKey = galaxyPasswordCacheKey(nextSettings);
-      const savedPassword = configured.password.trim();
-      let promptedForPassword = false;
-      let password = savedPassword || galaxyPasswordsRef.current.get(passwordKey);
-      if (password === undefined) {
-        promptedForPassword = true;
-        password = window.prompt("请输入本地 MySQL 密码；留空/取消则尝试 MYSQL_PASSWORD 或 DB_PASSWORD 环境变量。") || "";
-        galaxyPasswordsRef.current.set(passwordKey, password);
-      }
-
-      updateGalaxySession(key, {
-        ...previous,
-        loading: true,
-        error: "",
-        notice: "正在连接 MySQL、读取坐标并更新 SQLite 缓存…",
-        phase: "mysql",
-      });
-
+      updateGalaxySession(key, { ...previous, loading: true, error: "", notice: "正在读取统一 V20 星图快照…", phase: "cache" });
       try {
-        const payload = await loadApp17Galaxy({
-          databaseDir: nextSettings.databaseDir,
-          projectId: project.id,
-          workerTempDir: nextSettings.workerTempDir,
-          host: configured.host,
-          port: configured.port,
-          user: configured.user,
-          password,
-          database: configured.database,
-          mode: "nebula",
-        });
-        if (payload.ready && payload.source === "mysql") {
-          updateGalaxySession(key, {
-            payload,
-            loading: false,
-            error: "",
-            notice: payload.message || "MySQL 星图数据已刷新并写入 SQLite 缓存。",
-            phase: "ready",
-          });
-          return;
-        }
-
-        const errorMessage = payload.message || cacheError || "未能加载 app17 星图数据。";
-        if (promptedForPassword && password) galaxyPasswordsRef.current.delete(passwordKey);
+        const payload = await getV20GalaxyPayload({ databaseDir: nextSettings.databaseDir, projectId: project.id, mode: "nebula" });
         updateGalaxySession(key, {
-          payload: previous.payload?.ready ? previous.payload : payload,
+          payload,
           loading: false,
-          error: errorMessage,
-          notice: previous.payload?.ready ? "刷新失败，继续使用当前 SQLite 缓存。" : "",
-          phase: previous.payload?.ready ? "ready" : "error",
+          error: payload.ready ? "" : payload.message,
+          notice: payload.message,
+          phase: payload.ready ? "ready" : "error",
         });
       } catch (error) {
-        if (promptedForPassword && password) galaxyPasswordsRef.current.delete(passwordKey);
-        const errorMessage = error instanceof Error ? error.message : String(error || "app17 星图加载失败。");
-        updateGalaxySession(key, {
-          ...previous,
-          loading: false,
-          error: errorMessage,
-          notice: previous.payload?.ready ? "刷新失败，继续使用当前 SQLite 缓存。" : "",
-          phase: previous.payload?.ready ? "ready" : "error",
-        });
+        const errorMessage = error instanceof Error ? error.message : String(error || "统一 V20 星图快照读取失败。");
+        updateGalaxySession(key, { ...previous, loading: false, error: errorMessage, notice: "", phase: "error" });
       }
     })();
 
@@ -482,16 +438,35 @@ export default function App() {
   }
 
   async function refreshAll() {
-    const [nextProjects, nextProject, nextHotspots, nextReports, nextJobs, nextTaskLogs, nextAllTaskLogs, nextSettings] = await Promise.all([
+    const requestSequence = refreshRequestSequenceRef.current + 1;
+    refreshRequestSequenceRef.current = requestSequence;
+    const [nextProjects, nextProject, nextReports, nextJobs, nextTaskLogs, nextAllTaskLogs, nextSettings] = await Promise.all([
       getProjects(),
       getActiveProject(),
-      getHotspots(),
       getReports(),
       getPipelineJobs(),
       getTaskLogs(),
       getAllTaskLogs(),
       getAiSettings(),
     ]);
+    let nextV20Snapshot: V20HotspotSnapshot | null = null;
+    if (isDesktopRuntime() && !galaxyVisualReview) {
+      const snapshot = await getV20HotspotSnapshot({ databaseDir: nextSettings.databaseDir, projectId: nextProject.id });
+      nextV20Snapshot = snapshot ?? null;
+      if (requestSequence !== refreshRequestSequenceRef.current) return;
+      if (snapshot) {
+        await replaceV20HotspotCache(snapshot);
+        const sessionKey = galaxySessionCacheKey(nextSettings.databaseDir, nextProject.id);
+        const currentSession = galaxySessionsRef.current.get(sessionKey);
+        if (currentSession?.payload?.snapshotId !== snapshot.snapshotId) {
+          galaxySessionsRef.current.delete(sessionKey);
+          galaxyRequestsRef.current.delete(sessionKey);
+          refreshGalaxySessions((revision) => revision + 1);
+        }
+      }
+    }
+    if (requestSequence !== refreshRequestSequenceRef.current) return;
+    const nextHotspots = await getHotspots();
     const nextStatus = await ensurePaperLibraryReady(nextSettings, nextProject);
     const [nextFacets, paperPage] = await Promise.all([
       getPaperLibraryFacets(nextSettings.databaseDir, nextProject.id),
@@ -503,6 +478,7 @@ export default function App() {
         sort: "newest",
       }),
     ]);
+    if (requestSequence !== refreshRequestSequenceRef.current) return;
     setProjects(nextProjects);
     setActiveProject(nextProject);
     setDashboard(buildDashboardFromLibrary(nextStatus, nextFacets, nextHotspots, nextReports, nextJobs));
@@ -510,6 +486,7 @@ export default function App() {
     setLibraryStatus(nextStatus);
     setLibraryFacets(nextFacets);
     setHotspots(nextHotspots);
+    setV20Snapshot(nextV20Snapshot);
     setReports(nextReports);
     setJobs(nextJobs);
     setTaskLogs(nextTaskLogs);
@@ -520,6 +497,8 @@ export default function App() {
   async function ensurePaperLibraryReady(nextSettings: AiSettings, nextProject: Project) {
     let status = await getPaperLibraryStatus(nextSettings.databaseDir, nextProject.id);
     if (status.paperCount > 0) return status;
+
+    if (nextSettings.librarySetupCompleted) return status;
 
     const legacyCount = await countIndexedDbPapers();
     if (legacyCount === 0) return status;
@@ -540,6 +519,47 @@ export default function App() {
     async function boot() {
       try {
         await seedResearchDataIfEmpty();
+        await reconcileInterruptedAiTaskLogs();
+        let nextSettings = await getAiSettings();
+        const nextProject = await getActiveProject();
+        if (isDesktopRuntime()) {
+          let migrated = false;
+          let apiCredentialConfigured = nextSettings.apiCredentialConfigured ?? false;
+          let mysqlCredentialConfigured = nextSettings.mysql.credentialConfigured ?? false;
+          if (nextSettings.manualApiKey.trim()) {
+            apiCredentialConfigured = (await setAppCredential(nextProject.id, `ai-${nextSettings.provider}`, nextSettings.manualApiKey)).configured;
+            migrated = true;
+          } else {
+            apiCredentialConfigured = (await getAppCredentialStatus(nextProject.id, `ai-${nextSettings.provider}`)).configured;
+          }
+          if (nextSettings.mysql.password.trim()) {
+            mysqlCredentialConfigured = (await setAppCredential(nextProject.id, "mysql", nextSettings.mysql.password)).configured;
+            migrated = true;
+          } else {
+            mysqlCredentialConfigured = (await getAppCredentialStatus(nextProject.id, "mysql")).configured;
+          }
+          if (migrated || apiCredentialConfigured !== nextSettings.apiCredentialConfigured || mysqlCredentialConfigured !== nextSettings.mysql.credentialConfigured) {
+            nextSettings = await saveAiSettings({ ...nextSettings, manualApiKey: "", apiCredentialConfigured, mysql: { ...nextSettings.mysql, password: "", credentialConfigured: mysqlCredentialConfigured } });
+          }
+        }
+        if (isDesktopRuntime() && !galaxyVisualReview) {
+          const nextSetupState = await getLibrarySetupState(nextSettings.databaseDir);
+          if (!nextSetupState.configured || (!import.meta.env.DEV && !nextSettings.librarySetupCompleted && !nextSettings.databaseDir.trim())) {
+            if (mounted) {
+              setSettings(nextSettings);
+              setLibrarySetupState(nextSetupState);
+              setLibrarySetupRequired(true);
+            }
+            return;
+          }
+          if (!nextSettings.librarySetupCompleted && nextSettings.databaseDir.trim()) {
+            await saveAiSettings({
+              ...nextSettings,
+              librarySetupCompleted: true,
+              librarySetupMode: "existing",
+            });
+          }
+        }
         if (mounted) await refreshAll();
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "桌面端初始化失败。");
@@ -562,6 +582,32 @@ export default function App() {
   useEffect(() => {
     if (activeView === "galaxy") setGalaxyVisited(true);
   }, [activeView]);
+
+  if (librarySetupRequired && settings && librarySetupState) {
+    return (
+      <LibrarySetupView
+        state={librarySetupState}
+        onComplete={async (result) => {
+          await saveAiSettings({
+            ...settings,
+            databaseDir: result.databaseDir,
+            dataDir: result.databaseDir,
+            librarySetupCompleted: true,
+            librarySetupMode: result.mode,
+          });
+          setLoading(true);
+          try {
+            await refreshAll();
+            setLibrarySetupRequired(false);
+            setLibrarySetupState(null);
+            setNotice(result.summary);
+          } finally {
+            setLoading(false);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -611,7 +657,7 @@ export default function App() {
 
       <section ref={workspaceRef} className="workspace">
         {activeView === "dashboard" && (
-          <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} libraryStatus={libraryStatus} loading={loading} onNavigate={setActiveView} />
+          <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
         )}
         {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {(activeView === "galaxy" || galaxyVisited) && settings && activeProject && (
@@ -624,12 +670,14 @@ export default function App() {
               settings={settings}
               activeProject={activeProject}
               libraryStatus={libraryStatus}
+              v20Snapshot={v20Snapshot}
               app17Session={galaxySessionsRef.current.get(galaxySessionCacheKey(settings.databaseDir, activeProject.id)) ?? EMPTY_GALAXY_SESSION}
               app17SessionKey={galaxySessionCacheKey(settings.databaseDir, activeProject.id)}
               visualReview={galaxyVisualReview}
               visualReviewIntent={galaxyVisualReviewIntent}
               onEnsureApp17={() => ensureGalaxySession(settings, activeProject)}
               onRefreshApp17={() => ensureGalaxySession(settings, activeProject, true)}
+              onOpenPipeline={() => setActiveView("pipeline")}
               onOpenPaperList={(hotspot) => {
                 setSearchFocusIntent({ query: hotspot.keywords[0] || hotspot.title, field: hotspot.field, timestamp: Date.now() });
                 setActiveView("search");
@@ -641,9 +689,9 @@ export default function App() {
             />
           </div>
         )}
-        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "about" && <AboutView settings={settings} libraryStatus={libraryStatus} hotspots={hotspots} reports={reports} />}
@@ -671,7 +719,51 @@ export default function App() {
   );
 
   async function saveSettings(next: AiSettings) {
-    await saveAiSettings(next);
+    let effectiveSettings = next;
+    if (activeProject && isDesktopRuntime()) {
+      const apiCredentialConfigured = next.manualApiKey.trim()
+        ? (await setAppCredential(activeProject.id, `ai-${next.provider}`, next.manualApiKey)).configured
+        : (await getAppCredentialStatus(activeProject.id, `ai-${next.provider}`)).configured;
+      const mysqlCredentialConfigured = next.mysql.password.trim()
+        ? (await setAppCredential(activeProject.id, "mysql", next.mysql.password)).configured
+        : (await getAppCredentialStatus(activeProject.id, "mysql")).configured;
+      effectiveSettings = {
+        ...next,
+        manualApiKey: "",
+        apiCredentialConfigured,
+        mysql: { ...next.mysql, password: "", credentialConfigured: mysqlCredentialConfigured },
+      };
+    }
+    if (settings && next.databaseDir.trim() !== settings.databaseDir.trim()) {
+      const nextDir = next.databaseDir.trim();
+      if (!nextDir) throw new Error("SQLite 论文库目录不能为空。");
+      const useExisting = await validateLibraryLocation(nextDir, "existing");
+      if (!useExisting.valid) {
+        const canMigrate = await validateLibraryLocation(nextDir, "empty");
+        if (!canMigrate.valid) throw new Error(canMigrate.message);
+        if (!window.confirm("新目录中没有现有论文库。是否将当前 SQLite 论文库复制到新目录？原目录数据会保留。")) {
+          throw new Error("已取消论文库目录迁移。");
+        }
+        const backup = await backupPaperLibrary({
+          databaseDir: settings.databaseDir,
+          backupDir: nextDir,
+          projectId: settings.projectId,
+        });
+        await restorePaperLibrary({
+          databaseDir: nextDir,
+          backupPath: backup.backupPath,
+          projectId: settings.projectId,
+        });
+      }
+      effectiveSettings = {
+        ...effectiveSettings,
+        dataDir: nextDir,
+        databaseDir: nextDir,
+        librarySetupCompleted: true,
+        librarySetupMode: "existing",
+      };
+    }
+    await saveAiSettings(effectiveSettings);
     await refreshAll();
     setNotice("设置已保存。");
   }
@@ -710,6 +802,125 @@ export default function App() {
       setNotice(error instanceof Error ? error.message : "项目删除失败。");
     }
   }
+}
+
+function LibrarySetupView({
+  state,
+  onComplete,
+}: {
+  state: LibrarySetupState;
+  onComplete: (result: InitializeLibraryResult) => Promise<void>;
+}) {
+  const [databaseDir, setDatabaseDir] = useState(state.databaseDir ?? "");
+  const [mode, setMode] = useState<LibrarySetupMode>(state.seedAvailable ? "seed" : "empty");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(state.message);
+  const [error, setError] = useState("");
+
+  const options: Array<{ id: LibrarySetupMode; title: string; description: string; disabled?: boolean }> = [
+    {
+      id: "seed",
+      title: "安装默认论文数据",
+      description: state.seedAvailable
+        ? `V20 快照包含 ${state.seedPaperCount?.toLocaleString("zh-CN") ?? "-"} 篇论文、${state.seedHotspotCount?.toLocaleString("zh-CN") ?? "-"} 个热点与 ${state.seedMembershipCount?.toLocaleString("zh-CN") ?? "-"} 条归属，约 ${formatBytes(state.seedSizeBytes ?? 0)}。`
+        : "当前 Lite 安装包未包含默认数据。",
+      disabled: !state.seedAvailable,
+    },
+    { id: "empty", title: "空白开始", description: "创建完整但不含论文的本地 SQLite 库，稍后自行导入数据。" },
+    { id: "existing", title: "使用现有 SQLite 论文库", description: "所选目录必须包含 research-hotspots-v7.sqlite。合法旧库可接入，但没有 V20 快照时需稍后显式运行热点建模。" },
+  ];
+
+  async function chooseDirectory() {
+    const selected = await chooseExportDirectory("选择论文数据库目录");
+    if (!selected) return;
+    setDatabaseDir(selected);
+    setError("");
+    setMessage("目录已选择，开始前会检查写入权限、剩余空间与现有数据库。 ");
+  }
+
+  async function submit() {
+    if (!databaseDir.trim()) {
+      setError("请先选择数据库目录。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("正在检查目录与论文库状态...");
+    try {
+      const validation = await validateLibraryLocation(databaseDir, mode);
+      if (!validation.valid) throw new Error(validation.message);
+      setMessage(mode === "seed" ? "正在复制并校验默认论文库，请勿关闭应用..." : mode === "empty" ? "正在创建空白论文库..." : "正在验证并接入现有论文库...");
+      const result = await initializeLibrary(databaseDir, mode);
+      setMessage(result.summary);
+      await onComplete(result);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setMessage("初始化未完成。数据目录中的已有论文库不会被覆盖。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="library-setup-shell">
+      <section className="library-setup-workspace" aria-labelledby="library-setup-title">
+        <header className="library-setup-header">
+          <div className="brand-mark"><BrainCircuit size={24} /></div>
+          <div>
+            <div className="text-xs font-semibold uppercase text-cyan/80">Research Hotspots Desktop</div>
+            <h1 id="library-setup-title">配置本地论文库</h1>
+            <p>论文数据存放在您选择的目录中。升级或卸载应用不会删除该目录。</p>
+          </div>
+          <span className="library-setup-edition">{state.seedAvailable ? "Full" : "Lite"} · v{__APP_VERSION__}</span>
+        </header>
+
+        <div className="library-setup-section">
+          <div className="library-setup-section-title">
+            <span>1</span>
+            <div><strong>选择数据库目录</strong><small>建议选择空间充足、长期保留且当前用户可写的目录。</small></div>
+          </div>
+          <div className="library-setup-path-row">
+            <div className="library-setup-path" title={databaseDir}>{databaseDir || "尚未选择目录"}</div>
+            <button className="icon-text-button" type="button" onClick={chooseDirectory} disabled={busy}>
+              <FolderKanban size={16} /> 选择目录
+            </button>
+          </div>
+        </div>
+
+        <div className="library-setup-section">
+          <div className="library-setup-section-title">
+            <span>2</span>
+            <div><strong>选择初始化方式</strong><small>已有同名数据库时，应用始终拒绝覆盖。</small></div>
+          </div>
+          <div className="library-setup-options">
+            {options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                disabled={busy || option.disabled}
+                className={`library-setup-option ${mode === option.id ? "library-setup-option-active" : ""}`}
+                onClick={() => { setMode(option.id); setError(""); }}
+              >
+                <span className="library-setup-radio">{mode === option.id ? <Check size={14} /> : null}</span>
+                <span><strong>{option.title}</strong><small>{option.description}</small></span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <footer className="library-setup-footer">
+          <div className={`library-setup-message ${error ? "library-setup-error" : ""}`}>
+            {error ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />}
+            <span>{error || message}</span>
+          </div>
+          <button className="primary-button" type="button" disabled={busy || !databaseDir.trim()} onClick={submit}>
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Database size={16} />}
+            {busy ? "正在初始化" : "完成配置并进入应用"}
+          </button>
+        </footer>
+      </section>
+    </main>
+  );
 }
 
 function buildDashboardFromLibrary(status: PaperLibraryStatus, facets: PaperLibraryFacets, hotspots: Hotspot[], reports: ResearchReport[], jobs: PipelineJob[]): DashboardData {
@@ -956,6 +1167,17 @@ function dashboardSourceLabel(source: SourceKind) {
   return "本地导入";
 }
 
+function reportReviewGate(content: string, papers: Paper[]) {
+  const auditSnapshot = auditReport(content, papers);
+  const approved = auditSnapshot.riskLevel !== "high";
+  return {
+    reviewStatus: approved ? "approved" as const : "needs-review" as const,
+    auditSnapshot,
+    reviewedAt: approved ? nowIso() : undefined,
+    reviewedBy: approved ? "system-quality-gate" : undefined,
+  };
+}
+
 function dashboardReportModeLabel(mode: ResearchReport["mode"]) {
   if (mode === "deep") return "深版";
   if (mode === "revised") return "修订版";
@@ -970,6 +1192,7 @@ function DashboardView({
   jobs,
   taskLogs,
   libraryStatus,
+  v20Snapshot,
   loading,
   onNavigate,
 }: {
@@ -980,16 +1203,22 @@ function DashboardView({
   jobs: PipelineJob[];
   taskLogs: TaskLog[];
   libraryStatus: PaperLibraryStatus | null;
+  v20Snapshot: V20HotspotSnapshot | null;
   loading: boolean;
   onNavigate: (view: ActiveView) => void;
 }) {
   const paperCount = libraryStatus?.paperCount ?? dashboard?.paperCount ?? papers.length;
-  const cleanJob = jobs.find((job) => job.stage === "clean");
-  const clusterJob = jobs.find((job) => job.stage === "cluster");
-  const cleanRunning = cleanJob?.status === "queued" || cleanJob?.status === "running";
-  const clusterRunning = clusterJob?.status === "queued" || clusterJob?.status === "running";
-  const cleanDone = cleanJob?.status === "done";
-  const clusterDone = clusterJob?.status === "done" && hotspots.length > 0;
+  const analysisProgress = useMemo(() => deriveAnalysisProgress({
+    paperCount,
+    hotspotCount: hotspots.length,
+    jobs,
+    snapshot: v20Snapshot,
+  }), [hotspots.length, jobs, paperCount, v20Snapshot]);
+  const { cleanJob, clusterJob } = analysisProgress;
+  const cleanRunning = analysisProgress.cleanState === "running";
+  const clusterRunning = analysisProgress.clusterState === "running";
+  const cleanDone = analysisProgress.cleanState === "done";
+  const clusterDone = analysisProgress.clusterState === "done";
   const latestTaskLog = useMemo(
     () => taskLogs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
     [taskLogs],
@@ -1009,24 +1238,8 @@ function DashboardView({
   const latestYear = yearRows.at(-1);
   const yearRange = firstYear && latestYear ? `${firstYear.year}-${latestYear.year}` : "暂无年份";
 
-  const cleanStepState: DashboardStepState = paperCount === 0
-    ? "pending"
-    : cleanRunning
-      ? "running"
-      : cleanJob?.status === "failed"
-        ? "failed"
-        : cleanDone
-          ? "done"
-          : "pending";
-  const clusterStepState: DashboardStepState = !cleanDone
-    ? "pending"
-    : clusterRunning
-      ? "running"
-      : clusterJob?.status === "failed"
-        ? "failed"
-        : clusterDone
-          ? "done"
-          : "pending";
+  const cleanStepState: DashboardStepState = analysisProgress.cleanState;
+  const clusterStepState: DashboardStepState = analysisProgress.clusterState;
   const progressSteps: DashboardProgressStep[] = [
     {
       id: "prepare",
@@ -1043,7 +1256,11 @@ function DashboardView({
     {
       id: "cluster",
       title: "热点建模",
-      detail: clusterDone ? `${hotspots.length} 个热点` : clusterJob?.detail || "生成热点与演化趋势",
+      detail: clusterDone
+        ? `${hotspots.length} 个热点 · V20 快照已同步`
+        : analysisProgress.snapshotStale
+          ? "论文库已变化，需要重新运行热点建模"
+          : clusterJob?.detail || "生成热点与演化趋势",
       state: clusterStepState,
     },
     {
@@ -1079,12 +1296,12 @@ function DashboardView({
       icon: Loader2,
       tone: "running",
     };
-  } else if (cleanJob?.status === "failed") {
+  } else if (cleanStepState === "failed") {
     primaryAction = {
       stage: "clean",
       stageLabel: "清洗去重",
       title: "上次清洗未完成",
-      description: cleanJob.detail || "进入分析流水线查看失败原因并重试当前步骤。",
+      description: cleanJob?.detail || "进入分析流水线查看失败原因并重试当前步骤。",
       buttonLabel: "处理清洗问题",
       target: "pipeline",
       icon: RefreshCw,
@@ -1112,12 +1329,12 @@ function DashboardView({
       icon: Loader2,
       tone: "running",
     };
-  } else if (clusterJob?.status === "failed") {
+  } else if (clusterStepState === "failed") {
     primaryAction = {
       stage: "cluster",
       stageLabel: "热点建模",
       title: "上次热点建模未完成",
-      description: clusterJob.detail || "进入分析流水线查看失败原因并重新运行热点建模。",
+      description: clusterJob?.detail || "进入分析流水线查看失败原因并重新运行热点建模。",
       buttonLabel: "处理建模问题",
       target: "pipeline",
       icon: Network,
@@ -1330,6 +1547,10 @@ function SearchWorkspace({
   const [pageJump, setPageJump] = useState("1");
   const [pageSize, setPageSize] = useState(20);
   const [selectedPaperId, setSelectedPaperId] = useState("");
+  const [libraryDiagnosticsOpen, setLibraryDiagnosticsOpen] = useState(false);
+  const [paperDetailDirty, setPaperDetailDirty] = useState(false);
+  const [pendingPaperSelectionId, setPendingPaperSelectionId] = useState("");
+  const [pendingPaperSave, setPendingPaperSave] = useState(false);
   const [pendingFocusPaperId, setPendingFocusPaperId] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedPapers, setSelectedPapers] = useState<Paper[]>([]);
@@ -1349,6 +1570,8 @@ function SearchWorkspace({
   const literaturePageRef = useRef<HTMLDivElement | null>(null);
   const paperListScrollRef = useRef<HTMLDivElement | null>(null);
   const paperDetailScrollRef = useRef<HTMLElement | null>(null);
+  const paperDetailEditorRef = useRef<PaperDetailEditorHandle | null>(null);
+  const unsavedPaperDialogRef = useRef<HTMLDialogElement | null>(null);
   const importControlRef = useRef({ paused: false, cancelled: false });
   const desktopImportTaskIdRef = useRef("");
 
@@ -1369,6 +1592,8 @@ function SearchWorkspace({
   const pageStart = libraryPage.total === 0 ? 0 : libraryPage.offset + 1;
   const pageEnd = Math.min(libraryPage.offset + visibleLibraryPapers.length, libraryPage.total);
   const selectedOnPageCount = visibleLibraryPapers.filter((paper) => selectedIds.includes(paper.id)).length;
+  const allVisiblePapersSelected = visibleLibraryPapers.length > 0
+    && selectedOnPageCount === visibleLibraryPapers.length;
   const activeFilterLabels = useMemo(
     () =>
       [
@@ -1503,6 +1728,16 @@ function SearchWorkspace({
   }, [activeWorkspaceTab]);
 
   useEffect(() => {
+    const dialog = unsavedPaperDialogRef.current;
+    if (!dialog) return;
+    if (pendingPaperSelectionId) {
+      if (!dialog.open) dialog.showModal();
+      return;
+    }
+    if (dialog.open) dialog.close();
+  }, [pendingPaperSelectionId]);
+
+  useEffect(() => {
     let mounted = true;
     async function loadSelectedPapers() {
       if (selectedIds.length === 0) {
@@ -1612,7 +1847,7 @@ function SearchWorkspace({
     setBusy("正在检索文献...");
     try {
       let searchQuery = query.trim();
-      if (settings.manualApiKey || hasEnvApiKey()) {
+      if (settings.apiCredentialConfigured || settings.useEnvKey) {
         searchQuery = await generateBilingualKeyword(query, settings);
       }
       const options: SearchOptions = {
@@ -1719,7 +1954,6 @@ function SearchWorkspace({
 
   async function importMysqlPapers() {
     const configured = settings.mysql;
-    const password = configured.password.trim() || window.prompt("请输入本地 MySQL 密码；留空/取消则尝试 MYSQL_PASSWORD 或 DB_PASSWORD 环境变量。") || "";
     setBusy("正在从本地 MySQL 分批导入 SQLite...");
     setImportPreview(null);
     setImportProgress("正在启动 MySQL 后台导入任务...");
@@ -1731,7 +1965,7 @@ function SearchWorkspace({
         host: configured.host,
         port: configured.port,
         user: configured.user,
-        password,
+        password: undefined,
         database: configured.database,
         batchSize: configured.batchSize,
       });
@@ -1865,28 +2099,20 @@ function SearchWorkspace({
     setBusy(mode === "deep" ? "正在生成深版综述..." : "正在生成简版综述...");
     try {
       const generated = await generateResearchReport({ topic: query, papers: reportPapers, mode, discipline, settings, options: reportOptions });
-      const saved = await saveReport({
-        topic: query,
-        mode,
-        discipline,
-        content: generated.content,
-        paperIds: reportPapers.map((paper) => paper.id),
-        metrics: generated.metrics,
-        evidenceProfile: generated.evidenceProfile,
-      });
-      await saveTaskLog({
-        stage: "review",
-        title: "AI 综述生成",
-        status: "done",
+      const reviewGate = reportReviewGate(generated.content, reportPapers);
+      const { report: saved } = await saveReportWithTaskLog({
+        topic: query, mode, discipline, content: generated.content,
+        paperIds: reportPapers.map((paper) => paper.id), metrics: generated.metrics,
+        evidenceProfile: generated.evidenceProfile, ...reviewGate,
+      }, {
+        stage: "review", title: "AI 综述生成", status: "done",
         inputSummary: `${query} / ${mode} / ${reportPapers.length} 篇文献`,
-        outputSummary: `已生成并保存报告：${saved.topic}`,
-        rawInput,
-        rawOutput: generated.content,
-        durationMs: Math.round(performance.now() - started),
+        outputSummary: reviewGate.reviewStatus === "needs-review" ? "报告已保存为待复核草稿。" : `已生成并保存报告：${query}`,
+        rawInput, rawOutput: generated.content, durationMs: Math.round(performance.now() - started),
       });
       setCurrentReport(saved);
       await onRefresh();
-      onNotice("综述已保存到报告库。");
+      onNotice(reviewGate.reviewStatus === "needs-review" ? "综述风险较高，已保存为待复核草稿并禁止正式导出。" : "综述已保存到报告库。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "报告生成失败。";
       await saveTaskLog({
@@ -1926,6 +2152,7 @@ function SearchWorkspace({
         paperIds: reportPapers.map((paper) => paper.id),
         metrics: generated.metrics,
         evidenceProfile: generated.evidenceProfile,
+        ...reportReviewGate(generated.content, reportPapers),
       });
       setCurrentReport(saved);
       await onRefresh();
@@ -1939,6 +2166,44 @@ function SearchWorkspace({
 
   function toggleSelected(id: string) {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  function requestPaperSelection(id: string) {
+    if (!id || id === selectedPaper?.id) return;
+    if (paperDetailDirty) {
+      setPendingPaperSelectionId(id);
+      return;
+    }
+    setSelectedPaperId(id);
+  }
+
+  function cancelPendingPaperSelection() {
+    if (pendingPaperSave) return;
+    setPendingPaperSelectionId("");
+  }
+
+  async function saveAndSelectPendingPaper() {
+    const nextPaperId = pendingPaperSelectionId;
+    if (!nextPaperId || pendingPaperSave) return;
+    setPendingPaperSave(true);
+    try {
+      const saved = await paperDetailEditorRef.current?.save();
+      if (!saved) return;
+      setPaperDetailDirty(false);
+      setPendingPaperSelectionId("");
+      setSelectedPaperId(nextPaperId);
+    } finally {
+      setPendingPaperSave(false);
+    }
+  }
+
+  function discardAndSelectPendingPaper() {
+    const nextPaperId = pendingPaperSelectionId;
+    if (!nextPaperId || pendingPaperSave) return;
+    paperDetailEditorRef.current?.discard();
+    setPaperDetailDirty(false);
+    setPendingPaperSelectionId("");
+    setSelectedPaperId(nextPaperId);
   }
 
   function selectCurrentPage() {
@@ -2118,12 +2383,33 @@ function SearchWorkspace({
                   <BookOpen size={17} />
                   本地文献库
                 </div>
-                <label className="flex items-center gap-2 text-xs text-ink/45">
-                  每页
-                  <div className="w-20">
-                    <SelectControl className="h-8 text-xs" value={String(pageSize)} options={[12, 20, 40, 80].map((count) => ({ value: String(count), label: String(count) }))} onChange={(value) => setPageSize(Number(value))} />
-                  </div>
-                </label>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="secondary-action h-8 gap-2 px-3"
+                    aria-expanded={libraryDiagnosticsOpen}
+                    aria-controls="library-diagnostics-panel"
+                    onClick={() => setLibraryDiagnosticsOpen((current) => !current)}
+                  >
+                    库诊断
+                    <ChevronDown className={`transition-transform ${libraryDiagnosticsOpen ? "rotate-180" : ""}`} size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action h-8 gap-2 px-3"
+                    onClick={allVisiblePapersSelected ? deselectCurrentPage : selectCurrentPage}
+                    disabled={visibleLibraryPapers.length === 0}
+                  >
+                    {allVisiblePapersSelected ? <Square size={14} /> : <CheckSquare size={14} />}
+                    {allVisiblePapersSelected ? "取消本页" : "选中本页"}
+                  </button>
+                  <label className="flex items-center gap-2 text-xs text-ink/45">
+                    每页
+                    <div className="w-20">
+                      <SelectControl className="h-8 text-xs" value={String(pageSize)} options={[12, 20, 40, 80].map((count) => ({ value: String(count), label: String(count) }))} onChange={(value) => setPageSize(Number(value))} />
+                    </div>
+                  </label>
+                </div>
               </div>
 
               <div className="library-toolbar-sticky">
@@ -2141,7 +2427,7 @@ function SearchWorkspace({
                 </div>
               </div>
 
-              <FoldSection title="库诊断" compact>
+              {libraryDiagnosticsOpen && <div id="library-diagnostics-panel" className="library-diagnostics-panel">
                 <div className="library-diagnostics">
                   <span>查询耗时：{libraryLoading ? "查询中" : `${libraryPage.queryMs} ms`}</span>
                   <span>来源索引：{filterIndex.sources}</span>
@@ -2150,30 +2436,31 @@ function SearchWorkspace({
                   <span>关键词估算：{filterIndex.keywords}</span>
                 </div>
                 <DataQualityPanel hints={qualityHints} />
-              </FoldSection>
+              </div>}
 
-              {selectedIds.length === 0 && (
-                <div className="mt-3">
-                  <button className="secondary-action h-9 gap-2" onClick={selectCurrentPage} disabled={visibleLibraryPapers.length === 0}>
-                    <CheckSquare size={15} />
-                    选中本页
-                  </button>
-                </div>
-              )}
-
-              <div ref={paperListScrollRef} className="library-paper-scroll space-y-3">
+              <div ref={paperListScrollRef} className="library-paper-scroll space-y-2">
                 {visibleLibraryPapers.map((paper, index) => (
-                  <article key={paper.id} className="paper-row">
-                    <button className={`paper-index ${selectedIds.includes(paper.id) ? "paper-index-active" : ""}`} onClick={() => toggleSelected(paper.id)}>
+                  <article key={paper.id} className={`paper-row ${selectedPaper?.id === paper.id ? "paper-row-active" : ""}`}>
+                    <button
+                      type="button"
+                      className={`paper-index ${selectedIds.includes(paper.id) ? "paper-index-active" : ""}`}
+                      aria-label={selectedIds.includes(paper.id) ? `取消批量选择：${paper.title}` : `加入批量选择：${paper.title}`}
+                      aria-pressed={selectedIds.includes(paper.id)}
+                      onClick={() => toggleSelected(paper.id)}
+                    >
                       {selectedIds.includes(paper.id) ? <CheckSquare size={14} /> : (page - 1) * pageSize + index + 1}
                     </button>
-                    <div className="min-w-0">
-                      <button className="text-left text-sm font-medium text-ink hover:text-cyan" onClick={() => setSelectedPaperId(paper.id)}>
-                        {paper.title}
-                      </button>
-                      <div className="mt-1 text-xs text-ink/40">{paper.source} | {paper.year ?? "未知年份"} | {paper.field}</div>
-                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/55">{paper.abstract}</p>
-                    </div>
+                    <button
+                      type="button"
+                      className="paper-row-main"
+                      aria-controls="paper-detail-panel"
+                      aria-pressed={selectedPaper?.id === paper.id}
+                      onClick={() => requestPaperSelection(paper.id)}
+                    >
+                      <span className="paper-row-title">{paper.title}</span>
+                      <span className="mt-1 block text-xs text-ink/40">{paper.source} | {paper.year ?? "未知年份"} | {paper.field}</span>
+                      <span className="paper-row-abstract">{paper.abstract}</span>
+                    </button>
                   </article>
                 ))}
                 {!libraryLoading && visibleLibraryPapers.length === 0 && <EmptyState title="没有匹配文献" description="调整筛选条件，或前往“检索与导入”添加文献。" />}
@@ -2182,10 +2469,6 @@ function SearchWorkspace({
               {selectedIds.length > 0 && (
                 <div className="library-bulk-bar">
                   <strong>已选 {selectedIds.length} 篇</strong>
-                  <button className="secondary-action h-8 gap-2 px-3" onClick={deselectCurrentPage} disabled={selectedOnPageCount === 0}>
-                    <Square size={14} />
-                    取消本页
-                  </button>
                   <button className="secondary-action h-8 gap-2 px-3" onClick={() => setSelectedIds([])}>
                     <X size={14} />
                     清空选择
@@ -2219,17 +2502,57 @@ function SearchWorkspace({
               </div>
             </section>
 
-            <section ref={paperDetailScrollRef} className="panel-card literature-detail-panel">
-              <PaperDetailEditor paper={selectedPaper} qualityHints={qualityHints.filter((hint) => !hint.paperId || hint.paperId === selectedPaper?.id)} onSave={async (paper) => {
-                await upsertPaperLibrary(settings.databaseDir, activeProject.id, [paper]);
-                await loadLibraryPage();
-                await onRefresh();
-                onNotice("文献详情已保存。");
-              }} />
+            <section id="paper-detail-panel" ref={paperDetailScrollRef} className="panel-card literature-detail-panel">
+              <PaperDetailEditor
+                ref={paperDetailEditorRef}
+                paper={selectedPaper}
+                qualityHints={qualityHints.filter((hint) => !hint.paperId || hint.paperId === selectedPaper?.id)}
+                onDirtyChange={setPaperDetailDirty}
+                onSave={async (paper) => {
+                  try {
+                    await upsertPaperLibrary(settings.databaseDir, activeProject.id, [paper]);
+                    await loadLibraryPage();
+                    await onRefresh();
+                    onNotice("文献详情已保存。");
+                  } catch (error) {
+                    onNotice(error instanceof Error ? error.message : "文献保存失败。");
+                    throw error;
+                  }
+                }}
+              />
             </section>
           </div>
         </>
       )}
+
+      <dialog
+        ref={unsavedPaperDialogRef}
+        className="unsaved-paper-dialog"
+        aria-labelledby="unsaved-paper-dialog-title"
+        aria-describedby="unsaved-paper-dialog-description"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelPendingPaperSelection();
+        }}
+        onClose={() => {
+          if (!pendingPaperSave) setPendingPaperSelectionId("");
+        }}
+      >
+        <div className="unsaved-paper-dialog-body">
+          <div>
+            <h2 id="unsaved-paper-dialog-title">当前修改尚未保存</h2>
+            <p id="unsaved-paper-dialog-description">切换论文前，请选择保存当前修改、放弃修改，或继续编辑。</p>
+          </div>
+          <div className="unsaved-paper-dialog-actions">
+            <button type="button" className="secondary-action h-9 px-3" onClick={cancelPendingPaperSelection} disabled={pendingPaperSave}>继续编辑</button>
+            <button type="button" className="danger-action h-9 px-3" onClick={discardAndSelectPendingPaper} disabled={pendingPaperSave}>放弃修改</button>
+            <button type="button" className="primary-action h-9 gap-2 px-3" onClick={() => void saveAndSelectPendingPaper()} disabled={pendingPaperSave}>
+              {pendingPaperSave && <Loader2 className="animate-spin" size={14} />}
+              {pendingPaperSave ? "正在保存" : "保存并切换"}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       {activeWorkspaceTab === "analysis" && (
         <section className="panel-card literature-analysis">
@@ -2614,12 +2937,14 @@ function GalaxyView({
   settings,
   activeProject,
   libraryStatus,
+  v20Snapshot,
   app17Session,
   app17SessionKey,
   visualReview,
   visualReviewIntent,
   onEnsureApp17,
   onRefreshApp17,
+  onOpenPipeline,
   onOpenPaperList,
   onOpenPaper,
 }: {
@@ -2629,12 +2954,14 @@ function GalaxyView({
   settings: AiSettings;
   activeProject: Project;
   libraryStatus: PaperLibraryStatus | null;
+  v20Snapshot: V20HotspotSnapshot | null;
   app17Session: GalaxySessionState;
   app17SessionKey: string;
   visualReview: boolean;
   visualReviewIntent?: GalaxyVisualReviewIntent;
   onEnsureApp17: () => Promise<void>;
   onRefreshApp17: () => Promise<void>;
+  onOpenPipeline: () => void;
   onOpenPaperList: (hotspot: Hotspot) => void;
   onOpenPaper: (paper: { id: string; title: string; field: string }) => void;
 }) {
@@ -2678,8 +3005,15 @@ function GalaxyView({
   const galaxyPaperDetailRequestSequenceRef = useRef(0);
   const visualReviewAutomationRef = useRef({ key: "", hotspotSelected: false, systemRequested: false, paperSelected: false, paperRequested: false });
   const galaxyInspectorScrollRef = useRef<HTMLDivElement>(null);
-  const app17Available = Boolean(app17Payload?.ready && app17Payload.hotspots.length > 0);
-  const app17Hotspots = useMemo(() => (app17Payload?.ready ? app17Payload.hotspots.map(app17HotspotToHotspot) : []), [app17Payload]);
+  const cachedSnapshotIds = useMemo(() => Array.from(new Set(hotspots.map((hotspot) => hotspot.snapshotId).filter(Boolean))), [hotspots]);
+  const cachedSnapshotId = v20Snapshot?.snapshotId ?? (cachedSnapshotIds.length === 1 ? cachedSnapshotIds[0] : undefined);
+  const v20SnapshotConsistent = visualReview || !app17Payload?.ready || Boolean(
+    app17Payload.snapshotId && cachedSnapshotId && app17Payload.snapshotId === cachedSnapshotId,
+  );
+  const app17Available = Boolean(app17Payload?.ready && app17Payload.hotspots.length > 0 && v20SnapshotConsistent);
+  const app17Hotspots = useMemo(() => (app17Payload?.ready && v20SnapshotConsistent
+    ? (app17Payload.hotspotRecords?.length ? app17Payload.hotspotRecords : app17Payload.hotspots.map(app17HotspotToHotspot))
+    : []), [app17Payload, v20SnapshotConsistent]);
   const displayHotspots = app17Available ? app17Hotspots : [];
   const visualReviewTargetHotspot = useMemo(() => {
     if (!visualReview || !visualReviewIntent || app17Hotspots.length === 0) return undefined;
@@ -2704,7 +3038,7 @@ function GalaxyView({
       }),
     [displayHotspots, field, minConfidence, minPaperCount],
   );
-  const app17FilteredPayload = useMemo(() => filterApp17Payload(app17Payload, filteredHotspots), [app17Payload, filteredHotspots]);
+  const app17FilteredPayload = useMemo(() => v20SnapshotConsistent ? filterApp17Payload(app17Payload, filteredHotspots) : null, [app17Payload, filteredHotspots, v20SnapshotConsistent]);
   const nodes = useMemo(() => buildGalaxyNodes(filteredHotspots, layoutMode, visualMode, GALAXY_FIELD_COLORS), [filteredHotspots, layoutMode, visualMode]);
   const links = useMemo(() => buildHotspotLinks(nodes), [nodes]);
   const galaxyBounds = useMemo(() => calculateGalaxyBounds(nodes), [nodes]);
@@ -3060,7 +3394,7 @@ function GalaxyView({
       ?? topicPoints[0]?.scopedPaperId
       ?? "";
     if (!targetPaperId) return;
-    if (!automation.paperSelected || selectedGalaxyPaperId !== targetPaperId) {
+    if (!automation.paperSelected) {
       automation.paperSelected = true;
       setSelectedGalaxyPaperId(targetPaperId);
       return;
@@ -3121,17 +3455,20 @@ function GalaxyView({
       const queryStartedAt = performance.now();
       evidencePendingRequestsRef.current.add(requestSequence);
       setGalaxyEvidencePerformance((current) => ({ ...current, cacheState: "miss", pendingQueries: evidencePendingRequestsRef.current.size }));
-      void getApp17HotspotEvidence({
+      void loadPersistedHotspotEvidence({
         databaseDir: settings.databaseDir,
         projectId: activeProject.id,
-        field: selected.field,
-        topicId: selected.topicId,
+        hotspot: selected,
+        hotspots: displayHotspots,
+        requestSequence,
         maxPapers: 12,
+        fetchPapersByIds: (ids) => getPapersByIds(settings.databaseDir, activeProject.id, ids),
       })
-        .then((bundle) => {
+        .then((result) => {
           if (requestSequence !== evidenceRequestSequenceRef.current) return;
           const queryMs = performance.now() - queryStartedAt;
-          if (!bundle || bundle.selectedHotspotId !== selected.id) {
+          const bundle = result.bundle;
+          if (!bundle || result.status !== "ready" || bundle.selectedHotspotId !== selected.id) {
             setHotspotEvidence(null);
             setHotspotEvidenceStatus("unavailable");
             setGalaxyEvidencePerformance((current) => ({ ...current, cacheState: "error", queryMs }));
@@ -3155,7 +3492,7 @@ function GalaxyView({
     }, APP17_EVIDENCE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeProject.id, app17Payload?.generatedAt, selected, settings.databaseDir]);
+  }, [activeProject.id, app17Payload?.generatedAt, displayHotspots, selected, settings.databaseDir]);
 
   useEffect(() => {
     if (!galaxyFullscreen) return;
@@ -3174,7 +3511,7 @@ function GalaxyView({
           {visualReview && (
             <div className="mb-3 mt-2 inline-flex items-center gap-2 rounded-[6px] border border-cyan/20 bg-cyan/[0.06] px-3 py-2 text-xs text-cyan/80">
               <Database size={13} />
-              浏览器视觉快照 · 生成于 {formatVisualReviewTimestamp(app17Payload?.generatedAt)}
+              浏览器视觉快照 · 数据 {formatVisualReviewTimestamp(app17Payload?.generatedAt)} · 构建 {formatVisualReviewTimestamp(__BUILD_TIME__)} · {__BUILD_REVISION__}
             </div>
           )}
           <h1>科研星图</h1>
@@ -3191,7 +3528,7 @@ function GalaxyView({
               className="secondary-action h-8 gap-1.5 px-3"
               disabled={app17Loading}
               onClick={() => void onRefreshApp17()}
-              title="从本地 MySQL 重新读取 app17 星图数据并更新 SQLite 缓存"
+              title="重新读取当前统一 V20 星图快照"
             >
               <RefreshCw className={app17Loading && app17Session.phase === "mysql" ? "animate-spin" : ""} size={14} />
               刷新星图数据
@@ -3200,10 +3537,10 @@ function GalaxyView({
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
           {app17Available ? (
-            <span className="quiet-chip">app17 {app17Payload?.source === "mysql" ? "MySQL" : "SQLite 缓存"}：{(app17FilteredPayload?.paperCount ?? app17Payload?.paperCount ?? 0).toLocaleString()} 论文星 / {(app17FilteredPayload?.hotspotCount ?? app17Payload?.hotspotCount ?? 0).toLocaleString()} 热点</span>
+            <span className="quiet-chip">V20 SQLite 快照：{(app17FilteredPayload?.paperCount ?? app17Payload?.paperCount ?? 0).toLocaleString()} 论文星 / {(app17FilteredPayload?.hotspotCount ?? app17Payload?.hotspotCount ?? 0).toLocaleString()} 热点</span>
           ) : (
             <>
-              <span className="quiet-chip">{app17Loading ? galaxyLoadPhaseLabel(app17Session.phase) : "app17 星图未就绪"}</span>
+              <span className="quiet-chip">{!v20SnapshotConsistent ? "正在同步 V20 快照，暂不渲染混合数据" : app17Loading ? galaxyLoadPhaseLabel(app17Session.phase) : "统一 V20 星图未就绪"}</span>
             </>
           )}
           {app17Notice && <span className="text-ink/45">{app17Notice}</span>}
@@ -3271,8 +3608,16 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="论文拾取 当前 / P95 / 候选" value={`${formatPerformanceMs(galaxyPerformance.systemPaperPickMs)} / ${formatPerformanceMs(galaxyPerformance.systemPaperPickP95Ms)} / ${galaxyPerformance.systemPaperPickCandidateCount}`} />
                 <GalaxyDiagnosticMetric label="当前论文 / 详情缓存" value={`${galaxyPerformance.systemSelectedPaperType === "representative" ? "代表论文" : galaxyPerformance.systemSelectedPaperType === "ordinary" ? "普通论文" : "未选择"} / ${galaxyPaperDetailCacheStateLabel(galaxyPerformance.systemPaperDetailCacheState)}`} />
                 <GalaxyDiagnosticMetric label="论文详情查询" value={galaxyPerformance.systemPaperDetailQueryMs > 0 ? formatPerformanceMs(galaxyPerformance.systemPaperDetailQueryMs) : "未查询"} />
-                <GalaxyDiagnosticMetric label="论文飞行 / 进度" value={`${galaxyPaperFocusStateLabel(galaxyPerformance.systemPaperFocusState)} / ${Math.round(galaxyPerformance.systemPaperFocusProgress * 100)}% / ${galaxyPerformance.systemPaperFocusTransitionMs > 0 ? formatPerformanceMs(galaxyPerformance.systemPaperFocusTransitionMs) : "未执行"}`} />
+                <GalaxyDiagnosticMetric label="论文旅程 / 进度 / 路径" value={`${galaxyPerformance.systemPaperJourneyState} / ${Math.round(galaxyPerformance.systemPaperJourneyProgress * 100)}% / ${galaxyPerformance.systemPaperJourneyPathMode}`} />
+                <GalaxyDiagnosticMetric label="兼容飞行状态 / 补间" value={`${galaxyPaperFocusStateLabel(galaxyPerformance.systemPaperFocusState)} / ${galaxyPerformance.systemPaperFocusTransitionMs > 0 ? formatPerformanceMs(galaxyPerformance.systemPaperFocusTransitionMs) : "未执行"}`} />
                 <GalaxyDiagnosticMetric label="起始 / 目标距离 / 目标尺寸" value={`${galaxyPerformance.systemPaperFocusStartDistance > 0 ? galaxyPerformance.systemPaperFocusStartDistance.toFixed(2) : "-"} / ${galaxyPerformance.systemPaperFocusTargetDistance > 0 ? galaxyPerformance.systemPaperFocusTargetDistance.toFixed(2) : "-"} / ${galaxyPerformance.systemPaperFocusTargetScreenSize > 0 ? `${galaxyPerformance.systemPaperFocusTargetScreenSize.toFixed(1)} px` : "-"}`} />
+                <GalaxyDiagnosticMetric label="相机真实位移 / 到目标 / 投影直径" value={`${galaxyPerformance.systemPaperCameraTravelDistance.toFixed(3)} / ${galaxyPerformance.systemPaperCameraDistanceToTarget.toFixed(3)} / ${galaxyPerformance.systemPaperProjectedTargetDiameter.toFixed(2)} px`} />
+                <GalaxyDiagnosticMetric label="目标坐标漂移 / 平滑延长" value={`${galaxyPerformance.systemPaperTargetWorldPositionDrift.toExponential(2)} / ${formatPerformanceMs(galaxyPerformance.systemPaperSmoothnessExtensionMs)}`} />
+                <GalaxyDiagnosticMetric label="返回位置 / 角度误差" value={`${galaxyPerformance.systemPaperReturnPositionError.toExponential(2)} / ${galaxyPerformance.systemPaperReturnAngleErrorDegrees.toFixed(4)}°`} />
+                <GalaxyDiagnosticMetric label="主星最小净空 / 视锥 / 绘制" value={`${galaxyPerformance.systemPaperMinimumStarClearance.toFixed(3)} / ${galaxyPerformance.systemPaperStarInFrustum ? "视锥内" : "视锥外"} / ${galaxyPerformance.systemPaperStarDrawCalls}`} />
+                <GalaxyDiagnosticMetric label="主体目标 / 实际直径" value={`${galaxyPerformance.systemPaperTargetBodyDiameterPx.toFixed(1)} px / ${galaxyPerformance.systemPaperActualBodyDiameterPx.toFixed(1)} px`} />
+                <GalaxyDiagnosticMetric label="代表载体 / 主星退出边距" value={`${(galaxyPerformance.systemPaperRepresentativeCarrierRatio * 100).toFixed(1)}% / ${galaxyPerformance.systemPaperEndpointStarExitMarginPx.toFixed(1)} px`} />
+                <GalaxyDiagnosticMetric label="终点候选 / 方向偏转 / 拒绝" value={`${galaxyPerformance.systemPaperEndpointCandidateCount} / ${galaxyPerformance.systemPaperEndpointDirectionDeviationDegrees.toFixed(1)}° / ${galaxyPerformance.systemPaperEndpointCompositionRejected ? "是" : "否"}`} />
                 <GalaxyDiagnosticMetric label="邻域 / 远景亮度" value={`${Math.round(galaxyPerformance.systemPaperFocusNeighborBrightness * 100)}% / ${Math.round(galaxyPerformance.systemPaperFocusContextBrightness * 100)}%${galaxyPerformance.systemPaperFocusCanceled ? " · 已取消" : ""}`} />
                 <GalaxyDiagnosticMetric label="论文阅读空间" value={`${galaxyPaperInspectionModeLabel(galaxyPerformance.systemPaperInspectionMode)} / ${galaxyPerformance.systemPaperInspectionVisualType === "energy-core" ? "能量光核" : galaxyPerformance.systemPaperInspectionVisualType === "data-sphere" ? "数据球" : "未建立"} / ${Math.round(galaxyPerformance.systemPaperInspectionBlend * 100)}%`} />
                 <GalaxyDiagnosticMetric label="停靠 / 球面 / 批次" value={`${Math.round(galaxyPerformance.systemPaperInspectionDockBlend * 100)}% / ${galaxyPerformance.systemPaperInspectionDiameter > 0 ? `${galaxyPerformance.systemPaperInspectionDiameter.toFixed(1)} px` : "-"} / ${galaxyPerformance.systemPaperInspectionDrawCalls}`} />
@@ -3280,6 +3625,12 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="面板标题 / 正文" value={`${Math.round(galaxyPerformance.systemPaperPanelHeaderProgress * 100)}% / ${Math.round(galaxyPerformance.systemPaperPanelBodyProgress * 100)}%`} />
                 <GalaxyDiagnosticMetric label="阅读锚点 / 偏差" value={`${galaxyPerformance.systemPaperTargetAnchorX.toFixed(2)} / ${galaxyPerformance.systemPaperAnchorErrorPx.toFixed(1)} px`} />
                 <GalaxyDiagnosticMetric label="相机写入源 / 返回反转" value={`${galaxyPerformance.systemPaperCameraWriter} / ${galaxyPerformance.systemPaperReturnHorizontalReversals}`} />
+                <GalaxyDiagnosticMetric label="相机切换 / 四元数 / 锚点位移" value={`${galaxyPerformance.systemPaperCameraWriterChanges} / ${galaxyPerformance.systemPaperQuaternionDeltaDegrees.toFixed(3)}° / ${galaxyPerformance.systemPaperAnchorDeltaPx.toFixed(2)}px`} />
+                <GalaxyDiagnosticMetric label="论文视觉所有权 / 专用对象" value={`${galaxyPerformance.systemPaperVisualOwnerState} / ${Math.round(galaxyPerformance.systemPaperVisualOwnerOpacity * 100)}%`} />
+                <GalaxyDiagnosticMetric label="紧凑 / 近景 LOD / 可见能量" value={`${Math.round(galaxyPerformance.systemPaperVisualCompactLod * 100)}% / ${galaxyPerformance.systemPaperVisibleEnergyRatio.toFixed(2)}×`} />
+                <GalaxyDiagnosticMetric label="光学尺寸 Point / 专用对象" value={`${galaxyPerformance.systemPaperHandoffPointDiameter.toFixed(1)}px / ${galaxyPerformance.systemPaperHandoffCloseupDiameter.toFixed(1)}px`} />
+                <GalaxyDiagnosticMetric label="光学重心差" value={`${galaxyPerformance.systemPaperHandoffPositionDeltaPx.toFixed(2)}px`} />
+                <GalaxyDiagnosticMetric label="视觉所有权 Point / 专用对象 / 总和" value={`${galaxyPerformance.systemPaperHandoffPointAlpha.toFixed(3)} / ${galaxyPerformance.systemPaperHandoffCloseupAlpha.toFixed(3)} / ${galaxyPerformance.systemPaperHandoffAlphaSum.toFixed(3)}`} />
                 <GalaxyDiagnosticMetric label="代表能量核 / 近景辉光" value={`${galaxyPerformance.systemRepresentativeEnergyCoreDrawCalls} / ${galaxyPerformance.systemPaperInspectionBloomDrawCalls}`} />
                 <GalaxyDiagnosticMetric label="能量核细节 / Bloom / 能量丝" value={`${Math.round(galaxyPerformance.systemRepresentativeEnergyDetailBlend * 100)}% / ${Math.round(galaxyPerformance.systemRepresentativeEnergyBloomOpacity * 100)}% / ${galaxyPerformance.systemRepresentativeEnergyWispCount}`} />
                 <GalaxyDiagnosticMetric label="能量核承载范围" value={`${galaxyPerformance.systemRepresentativeEnergyCarrierScale.toFixed(2)}×`} />
@@ -3370,9 +3721,10 @@ function GalaxyView({
             ) : (
               <div className="absolute inset-0 z-[3] flex items-center justify-center px-6 text-center">
                 <div className="max-w-xl rounded-[8px] border border-white/10 bg-black/45 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
-                  <p className="eyebrow">{app17Loading ? "Loading App17 Galaxy" : "App17 Galaxy Unavailable"}</p>
-                  <h2 className="mt-2 text-xl font-semibold text-ink">{app17Loading ? "正在读取 app17 星图数据" : "未能加载 app17 星图"}</h2>
-                  <p className="mt-3 text-sm leading-6 text-ink/55">{app17Error || app17Notice || "请确认本地 MySQL 已启动、密码正确，并且 app17 所需表存在。"}</p>
+                  <p className="eyebrow">{app17Loading ? "Loading V20 Snapshot" : "V20 Snapshot Required"}</p>
+                  <h2 className="mt-2 text-xl font-semibold text-ink">{app17Loading ? "正在读取统一 V20 星图快照" : "需要生成统一星图快照"}</h2>
+                  <p className="mt-3 text-sm leading-6 text-ink/55">{app17Error || app17Notice || "页面不会自动聚类。请前往分析流水线显式运行热点建模。"}</p>
+                  {!app17Loading && <button type="button" className="primary-action mt-4" onClick={onOpenPipeline}>前往热点建模</button>}
                 </div>
               </div>
             )}
@@ -3441,6 +3793,7 @@ function GalaxyView({
                 className="secondary-action h-8 gap-1.5 px-3"
                 data-galaxy-fullscreen-toggle
                 onClick={() => setGalaxyFullscreen((value) => !value)}
+                disabled={galaxyPaperFocusState === "entering" || galaxyPaperFocusState === "exiting"}
                 aria-pressed={galaxyFullscreen}
                 title={galaxyFullscreen ? "退出星图全屏" : "星图全屏"}
               >
@@ -3645,13 +3998,23 @@ function GalaxyView({
                   <div className="inspector-section-title">代表论文</div>
                   <div className="mt-2 min-h-[76px] space-y-2">
                     {hotspotEvidenceStatus === "loading" && inspectorRelatedPapers.length === 0 && (
-                      <div className="mini-card flex min-h-[76px] items-center text-sm leading-6 text-ink/45">正在读取 app17 热点证据与代表论文…</div>
+                      <div className="mini-card flex min-h-[76px] items-center text-sm leading-6 text-ink/45">正在读取 V20 热点证据与代表论文…</div>
                     )}
                     {inspectorRelatedPapers.slice(0, 6).map((paper) => (
-                      <button key={paper.id} className="mini-card w-full text-left text-sm leading-6 text-ink/65" onClick={() => paper.url && void openExternalUrl(paper.url)}>
-                        <div className="font-medium text-ink">{paper.title}</div>
-                        <div className="text-xs text-ink/40">{paper.source} | {paper.year ?? "未知年份"} | {paper.field}</div>
-                      </button>
+                      <div key={paper.id} className="mini-card flex items-start gap-2 text-sm leading-6 text-ink/65">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => {
+                            setSelectedGalaxyPaperId(paper.id);
+                            if (galaxyExplorationState === "system") window.requestAnimationFrame(() => commandCamera("focus-paper"));
+                          }}
+                        >
+                          <div className="font-medium text-ink">{paper.title}</div>
+                          <div className="text-xs text-ink/40">{paper.source} | {paper.year ?? "未知年份"} | {paper.field}</div>
+                        </button>
+                        {paper.url && <button type="button" className="secondary-action h-7 shrink-0 px-2 text-xs" onClick={() => void openExternalUrl(paper.url!)}>打开原文</button>}
+                      </div>
                     ))}
                     {hotspotEvidenceStatus !== "loading" && inspectorRelatedPapers.length === 0 && <div className="text-sm leading-6 text-ink/45">暂无可直接读取的代表论文，进入文献列表可按关键词继续筛选。</div>}
                   </div>
@@ -3716,7 +4079,7 @@ function writeApp17EvidenceCache(cache: Map<string, HotspotEvidenceBundle>, key:
 
 function hotspotEvidenceStatusLabel(status: "idle" | "loading" | "ready" | "unavailable") {
   if (status === "loading") return "证据包加载中";
-  if (status === "ready") return "app17 快照证据";
+  if (status === "ready") return "V20 快照证据";
   if (status === "unavailable") return "领域回退数据";
   return "证据待选择";
 }
@@ -3949,13 +4312,25 @@ function formatGalaxyPerformanceSummary(snapshot: GalaxyPerformanceSnapshot, evi
     `论文拾取当前/P95/候选: ${formatPerformanceMs(snapshot.systemPaperPickMs)} / ${formatPerformanceMs(snapshot.systemPaperPickP95Ms)} / ${snapshot.systemPaperPickCandidateCount}`,
     `当前论文/详情缓存: ${snapshot.systemSelectedPaperType} / ${galaxyPaperDetailCacheStateLabel(snapshot.systemPaperDetailCacheState)}`,
     `论文详情查询: ${snapshot.systemPaperDetailQueryMs > 0 ? formatPerformanceMs(snapshot.systemPaperDetailQueryMs) : "未查询"}`,
-    `论文飞行/进度/补间: ${galaxyPaperFocusStateLabel(snapshot.systemPaperFocusState)} / ${Math.round(snapshot.systemPaperFocusProgress * 100)}% / ${formatPerformanceMs(snapshot.systemPaperFocusTransitionMs)}`,
+    `论文旅程/进度/路径: ${snapshot.systemPaperJourneyState} / ${Math.round(snapshot.systemPaperJourneyProgress * 100)}% / ${snapshot.systemPaperJourneyPathMode}`,
+    `兼容飞行状态/补间: ${galaxyPaperFocusStateLabel(snapshot.systemPaperFocusState)} / ${formatPerformanceMs(snapshot.systemPaperFocusTransitionMs)}`,
     `论文飞行起始/目标距离/目标尺寸: ${snapshot.systemPaperFocusStartDistance.toFixed(2)} / ${snapshot.systemPaperFocusTargetDistance.toFixed(2)} / ${snapshot.systemPaperFocusTargetScreenSize.toFixed(1)}px`,
+    `论文相机真实位移/到目标距离/投影直径: ${snapshot.systemPaperCameraTravelDistance.toFixed(3)} / ${snapshot.systemPaperCameraDistanceToTarget.toFixed(3)} / ${snapshot.systemPaperProjectedTargetDiameter.toFixed(2)}px`,
+    `论文目标世界坐标漂移/平滑延长: ${snapshot.systemPaperTargetWorldPositionDrift.toExponential(2)} / ${formatPerformanceMs(snapshot.systemPaperSmoothnessExtensionMs)}`,
+    `论文返回位置/角度误差: ${snapshot.systemPaperReturnPositionError.toExponential(2)} / ${snapshot.systemPaperReturnAngleErrorDegrees.toFixed(4)}deg`,
+    `论文主星最小净空/视锥/绘制批次: ${snapshot.systemPaperMinimumStarClearance.toFixed(3)} / ${snapshot.systemPaperStarInFrustum ? "in" : "out"} / ${snapshot.systemPaperStarDrawCalls}`,
+    `论文主体目标/实际直径: ${snapshot.systemPaperTargetBodyDiameterPx.toFixed(1)}px / ${snapshot.systemPaperActualBodyDiameterPx.toFixed(1)}px`,
+    `论文代表载体/主星退出边距: ${(snapshot.systemPaperRepresentativeCarrierRatio * 100).toFixed(1)}% / ${snapshot.systemPaperEndpointStarExitMarginPx.toFixed(1)}px`,
+    `论文终点候选/方向偏转/构图拒绝: ${snapshot.systemPaperEndpointCandidateCount} / ${snapshot.systemPaperEndpointDirectionDeviationDegrees.toFixed(1)}deg / ${snapshot.systemPaperEndpointCompositionRejected ? "是" : "否"}`,
     `论文飞行邻域/远景亮度/取消: ${Math.round(snapshot.systemPaperFocusNeighborBrightness * 100)}% / ${Math.round(snapshot.systemPaperFocusContextBrightness * 100)}% / ${snapshot.systemPaperFocusCanceled ? "是" : "否"}`,
     `论文阅读空间/类型/实体化/停靠: ${galaxyPaperInspectionModeLabel(snapshot.systemPaperInspectionMode)} / ${snapshot.systemPaperInspectionVisualType} / ${Math.round(snapshot.systemPaperInspectionBlend * 100)}% / ${Math.round(snapshot.systemPaperInspectionDockBlend * 100)}%`,
     `论文近景直径/基础+辉光批次: ${snapshot.systemPaperInspectionDiameter.toFixed(1)}px / ${snapshot.systemPaperInspectionDrawCalls}+${snapshot.systemPaperInspectionBloomDrawCalls}`,
     `详情面板/外壳/标题/正文: ${snapshot.systemPaperPanelState} / ${Math.round(snapshot.systemPaperPanelProgress * 100)}% / ${Math.round(snapshot.systemPaperPanelHeaderProgress * 100)}% / ${Math.round(snapshot.systemPaperPanelBodyProgress * 100)}%`,
     `阅读锚点/偏差/相机写入源: ${snapshot.systemPaperTargetAnchorX.toFixed(2)} / ${snapshot.systemPaperAnchorErrorPx.toFixed(1)}px / ${snapshot.systemPaperCameraWriter}`,
+    `相机切换/四元数变化/锚点位移: ${snapshot.systemPaperCameraWriterChanges} / ${snapshot.systemPaperQuaternionDeltaDegrees.toFixed(3)}deg / ${snapshot.systemPaperAnchorDeltaPx.toFixed(2)}px`,
+    `论文视觉所有权/专用对象/紧凑LOD: ${snapshot.systemPaperVisualOwnerState} / ${Math.round(snapshot.systemPaperVisualOwnerOpacity * 100)}% / ${Math.round(snapshot.systemPaperVisualCompactLod * 100)}%`,
+    `论文光学尺寸 Point/专用对象/重心差: ${snapshot.systemPaperHandoffPointDiameter.toFixed(1)}px / ${snapshot.systemPaperHandoffCloseupDiameter.toFixed(1)}px / ${snapshot.systemPaperHandoffPositionDeltaPx.toFixed(2)}px`,
+    `论文视觉所有权 Point/专用对象/总和/能量: ${snapshot.systemPaperHandoffPointAlpha.toFixed(3)} / ${snapshot.systemPaperHandoffCloseupAlpha.toFixed(3)} / ${snapshot.systemPaperHandoffAlphaSum.toFixed(3)} / ${snapshot.systemPaperVisibleEnergyRatio.toFixed(2)}x`,
     `返回水平反转/代表能量核批次: ${snapshot.systemPaperReturnHorizontalReversals} / ${snapshot.systemRepresentativeEnergyCoreDrawCalls}`,
     `代表能量核细节/Bloom/能量丝/承载: ${Math.round(snapshot.systemRepresentativeEnergyDetailBlend * 100)}% / ${Math.round(snapshot.systemRepresentativeEnergyBloomOpacity * 100)}% / ${snapshot.systemRepresentativeEnergyWispCount} / ${snapshot.systemRepresentativeEnergyCarrierScale.toFixed(2)}x`,
     `代表能量核近景压缩/可见半径/轨道: ${Math.round(snapshot.systemRepresentativeEnergyCloseupCompactness * 100)}% / ${Math.round(snapshot.systemRepresentativeEnergyVisibleRadius * 100)}% / ${Math.round(snapshot.systemRepresentativeEnergyOrbitAttenuation * 100)}%`,
@@ -4095,12 +4470,29 @@ function hotspotSourceLabel(source: Hotspot["source"]) {
   return "来源待定";
 }
 
-function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, onNotice }: { hotspots: Hotspot[]; papers: Paper[]; settings: AiSettings; activeProject: Project; onRefresh: () => Promise<void>; onNotice: (value: string) => void }) {
+function HotspotLibrary({
+  hotspots,
+  settings,
+  activeProject,
+  onNavigate,
+  onRefresh,
+  onNotice,
+}: {
+  hotspots: Hotspot[];
+  settings: AiSettings;
+  activeProject: Project;
+  onNavigate: (view: ActiveView) => void;
+  onRefresh: () => Promise<void>;
+  onNotice: (value: string) => void;
+}) {
   const [selectedId, setSelectedId] = useState(hotspots[0]?.id ?? "");
   const [hotspotQuery, setHotspotQuery] = useState("");
   const [hotspotField, setHotspotField] = useState("all");
   const [hotspotTrend, setHotspotTrend] = useState<Hotspot["trend"] | "all">("all");
   const hotspotFields = useMemo(() => Array.from(new Set(hotspots.map((hotspot) => hotspot.field))).sort(), [hotspots]);
+  const seedHotspotCount = useMemo(() => hotspots.filter((hotspot) => hotspot.source === "seed").length, [hotspots]);
+  const hasSeedHotspots = seedHotspotCount > 0;
+  const onlySeedHotspots = hasSeedHotspots && seedHotspotCount === hotspots.length;
   const filteredHotspots = useMemo(() => {
     const normalizedQuery = hotspotQuery.trim().toLowerCase();
     return hotspots.filter((hotspot) => {
@@ -4113,33 +4505,39 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
   const selected = filteredHotspots.find((hotspot) => hotspot.id === selectedId) ?? filteredHotspots[0];
   const [draft, setDraft] = useState<Hotspot | null>(selected ?? null);
   const [busy, setBusy] = useState("");
+  const [activeAiTaskKey, setActiveAiTaskKey] = useState("");
   const [reportMode, setReportMode] = useState<HotspotReportMode>("offline");
   const [reportOptions, setReportOptions] = useState<ReportGenerationOptions>(defaultReportOptions);
   const [hotspotEvidence, setHotspotEvidence] = useState<HotspotEvidenceBundle | null>(null);
-  const [hotspotEvidenceStatus, setHotspotEvidenceStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [hotspotEvidenceStatus, setHotspotEvidenceStatus] = useState<"idle" | "loading" | HotspotEvidenceLoadStatus>("idle");
+  const [hotspotEvidenceDiagnostics, setHotspotEvidenceDiagnostics] = useState<HotspotEvidenceDiagnostics | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
-  const related = useMemo(() => relatedPapers(selected, papers), [papers, selected]);
+  const evidenceRequestSequenceRef = useRef(0);
+  const hotspotsRef = useRef(hotspots);
+  hotspotsRef.current = hotspots;
   const activeHotspotEvidence = hotspotEvidence?.selectedHotspotId === selected?.id ? hotspotEvidence : null;
   const evidencePapers = useMemo(() => hotspotEvidenceToPapers(activeHotspotEvidence), [activeHotspotEvidence]);
-  const reportPapers = evidencePapers.length > 0 ? evidencePapers : related;
+  const reportPapers = evidencePapers;
   const workload = useMemo(() => estimateReportWorkload(reportPapers.length, reportOptions), [reportOptions, reportPapers.length]);
   const displayEvolution = activeHotspotEvidence?.yearEvolution ?? selected?.evolution ?? [];
   const displaySources = activeHotspotEvidence?.sourceDistribution ?? selected?.sourceDistribution ?? [];
   const evolutionMax = Math.max(1, ...displayEvolution.map((item) => item.count));
   const sourceMax = Math.max(1, ...displaySources.map((item) => item.count));
-  const reportModeReady = reportMode === "offline" ? hotspotEvidenceStatus === "ready" && Boolean(activeHotspotEvidence) : reportPapers.length > 0;
+  const reportModeReady = hotspotEvidenceStatus === "ready" && Boolean(activeHotspotEvidence) && reportPapers.length > 0;
   const reportGenerationBusy = busy === "offline-report" || busy === "simple" || busy === "deep";
   const reportModeHint = reportMode === "offline"
     ? hotspotEvidenceStatus === "loading"
-      ? "正在加载 SQLite 证据包，加载完成后可生成离线报告。"
+      ? "正在按持久化代表论文 ID 读取 SQLite 证据，完成后可生成离线报告。"
       : hotspotEvidenceStatus === "ready" && activeHotspotEvidence
-        ? "使用 SQLite 代表论文生成，无需 AI API key。"
-        : "当前热点没有可用的 SQLite 证据包。"
-    : reportPapers.length > 0
-      ? `将使用 ${reportPapers.length} 篇证据文献生成 AI ${reportMode === "deep" ? "深版" : "简版"}报告。`
-      : "当前热点没有可用的代表文献。";
+        ? "使用 SQLite 中按代表 ID 精确读取的论文生成，无需 AI API key。"
+        : hotspotEvidenceStatus === "missing-evidence"
+          ? "当前热点没有持久化代表论文 ID，请先在流水线中重新运行热点聚类。"
+          : "当前热点的持久化 SQLite 证据不可用，请检查论文库或重新运行热点聚类。"
+    : hotspotEvidenceStatus === "ready" && reportPapers.length > 0
+      ? `将使用 ${reportPapers.length} 篇真实代表论文生成 AI ${reportMode === "deep" ? "深版" : "简版"}报告。`
+      : "当前热点没有可验证的代表论文，AI 报告已禁用。";
 
   useEffect(() => {
     setDraft(selected ? { ...selected, keywords: [...selected.keywords] } : null);
@@ -4176,41 +4574,50 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
   }, [editorOpen, moreMenuOpen]);
 
   useEffect(() => {
-    let mounted = true;
-    async function loadEvidenceBundle() {
-      if (!selected) {
-        setHotspotEvidence(null);
-        setHotspotEvidenceStatus("idle");
-        return;
-      }
+    const requestSequence = evidenceRequestSequenceRef.current + 1;
+    evidenceRequestSequenceRef.current = requestSequence;
+    const selectedHotspot = selected;
+    if (!selectedHotspot) {
       setHotspotEvidence(null);
-      setHotspotEvidenceStatus("loading");
-      try {
-        const bundle = await exportHotspotEvidence({
-          databaseDir: settings.databaseDir,
-          projectId: activeProject.id,
-          hotspotId: selected.id,
-          maxPapers: 18,
-        });
-        if (!mounted) return;
-        if (bundle && bundle.selectedHotspotId === selected.id && bundle.representativePapers.length > 0) {
-          setHotspotEvidence(bundle);
-          setHotspotEvidenceStatus("ready");
-        } else {
-          setHotspotEvidenceStatus("unavailable");
-        }
-      } catch {
-        if (mounted) {
-          setHotspotEvidence(null);
-          setHotspotEvidenceStatus("unavailable");
-        }
-      }
+      setHotspotEvidenceDiagnostics(null);
+      setHotspotEvidenceStatus("idle");
+      return;
     }
-    void loadEvidenceBundle();
+
+    let active = true;
+    setHotspotEvidence(null);
+    setHotspotEvidenceDiagnostics(null);
+    setHotspotEvidenceStatus("loading");
+    void loadPersistedHotspotEvidence({
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+      hotspot: selectedHotspot,
+      hotspots: hotspotsRef.current,
+      requestSequence,
+      maxPapers: 18,
+      fetchPapersByIds: (ids) => getPapersByIds(settings.databaseDir, activeProject.id, ids),
+    }).then((result) => {
+      if (!active || requestSequence !== evidenceRequestSequenceRef.current) return;
+      setHotspotEvidence(result.bundle);
+      setHotspotEvidenceDiagnostics(result.diagnostics);
+      setHotspotEvidenceStatus(result.status);
+      if (import.meta.env.DEV) {
+        console.info("[hotspot-evidence]", {
+          hotspotId: selectedHotspot.id,
+          cacheState: result.diagnostics.evidenceCacheState,
+          queryMs: Number(result.diagnostics.evidenceLoadMs.toFixed(2)),
+          requested: result.diagnostics.requestedRepresentativeCount,
+          found: result.diagnostics.foundRepresentativeCount,
+          missing: result.diagnostics.missingRepresentativeCount,
+          requestSequence,
+          fullReclusterTriggeredByNavigation: false,
+        });
+      }
+    });
     return () => {
-      mounted = false;
+      active = false;
     };
-  }, [activeProject.id, selected, settings.databaseDir]);
+  }, [activeProject.id, selected?.id, selected?.updatedAt, settings.databaseDir]);
 
   async function saveDraft() {
     if (!draft) return;
@@ -4227,38 +4634,62 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
       return;
     }
     const started = performance.now();
-    const evidenceSource = activeHotspotEvidence ? "sqlite-hotspot-evidence" : "frontend-related-papers";
+    const evidenceSource = "sqlite-persisted-hotspot-ids";
     const rawInput = JSON.stringify({ topic: selected.title, mode, discipline: selected.field, options: reportOptions, evidenceSource, paperIds: reportPapers.map((paper) => paper.id) }, null, 2);
+    const taskLogId = crypto.randomUUID();
+    let taskKey = "";
+    let runningLogPromise: Promise<unknown> | null = null;
     setBusy(mode);
     try {
-      const generated = await generateResearchReport({ topic: selected.title, papers: reportPapers, mode, discipline: selected.field, settings, options: reportOptions, hotspot: selected });
-      await saveReport({
+      const generated = await generateResearchReport({
         topic: selected.title,
+        papers: reportPapers,
         mode,
         discipline: selected.field,
-        content: generated.content,
-        paperIds: reportPapers.map((paper) => paper.id),
-        metrics: generated.metrics,
-        evidenceProfile: generated.evidenceProfile,
+        settings,
+        options: reportOptions,
+        hotspot: selected,
+        onTaskStarted: (startedTaskKey) => {
+          taskKey = startedTaskKey;
+          setActiveAiTaskKey(startedTaskKey);
+          runningLogPromise = saveTaskLog({
+            id: taskLogId,
+            stage: "review",
+            title: "热点 AI 综述生成",
+            status: "running",
+            taskKey: startedTaskKey,
+            inputSummary: `${selected.title} / ${mode} / ${reportPapers.length} 篇文献 / ${evidenceSource}`,
+            outputSummary: "AI 后台任务正在运行，可在任务日志中取消。",
+            rawInput,
+            durationMs: 0,
+          }).then(() => onRefresh());
+        },
       });
-      await saveTaskLog({
-        stage: "review",
-        title: "热点 AI 综述生成",
-        status: "done",
+      await runningLogPromise;
+      const reviewGate = reportReviewGate(generated.content, reportPapers);
+      await saveReportWithTaskLog({
+        topic: selected.title, mode, discipline: selected.field, content: generated.content,
+        paperIds: reportPapers.map((paper) => paper.id), metrics: generated.metrics,
+        evidenceProfile: generated.evidenceProfile, ...reviewGate,
+      }, {
+        id: taskLogId,
+        stage: "review", title: "热点 AI 综述生成", status: "done",
         inputSummary: `${selected.title} / ${mode} / ${reportPapers.length} 篇文献 / ${evidenceSource}`,
-        outputSummary: "热点综述已保存到报告库。",
-        rawInput,
-        rawOutput: generated.content,
-        durationMs: Math.round(performance.now() - started),
+        outputSummary: reviewGate.reviewStatus === "needs-review" ? "热点综述已保存为待复核草稿。" : "热点综述已保存到报告库。",
+        rawInput, rawOutput: generated.content, durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(`已按热点生成 ${mode === "deep" ? "深版" : "简版"}综述。`);
+      onNotice(reviewGate.reviewStatus === "needs-review" ? "报告风险较高，已保存为待复核草稿。" : `已按热点生成 ${mode === "deep" ? "深版" : "简版"}综述。`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "热点综述生成失败。";
+      await runningLogPromise;
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "热点综述生成失败。";
+      const cancelled = message.includes("AI_TASK_CANCELLED");
       await saveTaskLog({
+        id: taskLogId,
         stage: "review",
         title: "热点 AI 综述生成",
-        status: "failed",
+        status: cancelled ? "cancelled" : "failed",
+        taskKey: taskKey || undefined,
         inputSummary: `${selected.title} / ${mode} / ${reportPapers.length} 篇文献`,
         outputSummary: "",
         rawInput,
@@ -4266,10 +4697,17 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(error instanceof Error ? error.message : "热点综述生成失败。");
+      onNotice(cancelled ? "AI 报告任务已取消。" : error instanceof Error ? error.message : "热点综述生成失败。");
     } finally {
+      setActiveAiTaskKey("");
       setBusy("");
     }
+  }
+
+  async function cancelActiveAiReport() {
+    if (!activeAiTaskKey) return;
+    const cancelled = await cancelAiTask(activeAiTaskKey);
+    onNotice(cancelled ? "已请求取消 AI 报告任务。" : "AI 任务已经结束或不再运行。");
   }
 
   async function exportSelectedEvidenceBundle() {
@@ -4277,14 +4715,9 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
     setBusy("evidence-export");
     const started = performance.now();
     try {
-      const bundle = activeHotspotEvidence ?? await exportHotspotEvidence({
-        databaseDir: settings.databaseDir,
-        projectId: activeProject.id,
-        hotspotId: selected.id,
-        maxPapers: 18,
-      });
+      const bundle = activeHotspotEvidence;
       if (!bundle || bundle.representativePapers.length === 0) {
-        onNotice("当前热点还没有可导出的 SQLite 证据包。请先确认真实论文库已完成聚类。");
+        onNotice("当前热点没有可导出的持久化代表论文证据，请先在流水线中重新运行热点聚类。");
         return;
       }
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -4343,6 +4776,7 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
         paperIds: papersFromEvidence.map((paper) => paper.id),
         metrics: evaluateReportQuality(content, papersFromEvidence),
         evidenceProfile,
+        ...reportReviewGate(content, papersFromEvidence),
       });
       await saveTaskLog({
         stage: "review",
@@ -4391,8 +4825,39 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
             <Atom size={17} />
             热点库
           </div>
-          <span className="text-xs text-ink/45">{filteredHotspots.length} / {hotspots.length}</span>
+          <span className="text-xs text-ink/45">
+            {onlySeedHotspots
+              ? `样例热点 ${filteredHotspots.length} / ${hotspots.length}`
+              : hasSeedHotspots
+                ? `${filteredHotspots.length} / ${hotspots.length}（样例 ${seedHotspotCount}）`
+                : `${filteredHotspots.length} / ${hotspots.length}`}
+          </span>
         </div>
+        {hasSeedHotspots && (
+          <div className="mx-3 mt-3 rounded-[10px] border border-amber/20 bg-amber/[0.055] p-3" role="note" aria-label="样例热点说明">
+            <div className="flex items-start gap-2.5">
+              <FlaskConical className="mt-0.5 shrink-0 text-amber/80" size={16} />
+              <div className="min-w-0 flex-1">
+                <strong className="block text-xs font-semibold text-amber/90">
+                  {onlySeedHotspots ? "当前展示的是内置样例热点" : `当前包含 ${seedHotspotCount} 个样例热点`}
+                </strong>
+                <p className="mt-1 text-xs leading-5 text-ink/55">
+                  {onlySeedHotspots
+                    ? `这 ${seedHotspotCount} 个热点用于演示界面，并非基于当前 SQLite 论文库生成。运行“热点建模”后，样例会由真实聚类结果替换。`
+                    : "带“样例”标记的内容仅用于演示，不代表本地论文聚类结果。"}
+                </p>
+                <button
+                  type="button"
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-[6px] text-xs font-medium text-cyan/85 transition hover:text-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan/45"
+                  onClick={() => onNavigate("pipeline")}
+                >
+                  前往热点建模
+                  <ArrowRight size={13} />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="space-y-2 p-3">
           <input className="field-control h-10 w-full px-3 text-sm" value={hotspotQuery} onChange={(event) => setHotspotQuery(event.target.value)} placeholder="搜索标题、摘要、关键词" />
           <div className="grid grid-cols-2 gap-2">
@@ -4413,8 +4878,21 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
         </div>
         <div className="space-y-2 px-3 pb-4">
           {filteredHotspots.map((hotspot) => (
-            <button key={hotspot.id} className={`hotspot-row ${selected?.id === hotspot.id ? "hotspot-row-active" : ""}`} onClick={() => setSelectedId(hotspot.id)}>
-              <span>{hotspot.title}</span>
+            <button
+              key={hotspot.id}
+              type="button"
+              className={`hotspot-row ${selected?.id === hotspot.id ? "hotspot-row-active" : ""}`}
+              data-hotspot-source={hotspot.source ?? "unknown"}
+              onClick={() => setSelectedId(hotspot.id)}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span>{hotspot.title}</span>
+                {hotspot.source === "seed" && (
+                  <em className="shrink-0 rounded-[6px] border border-amber/25 bg-amber/[0.08] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-amber/85 not-italic">
+                    样例
+                  </em>
+                )}
+              </div>
               <small>{hotspotTrendLabel(hotspot.trend)} · {hotspot.paperCount} 篇 · {Math.round((hotspot.confidence ?? 0) * 100)}%</small>
             </button>
           ))}
@@ -4424,7 +4902,15 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
 
       <section className="detail-panel hotspot-detail-panel">
         {selected && draft ? (
-          <div className={`hotspot-detail-shell ${editorOpen ? "hotspot-editor-active" : ""}`}>
+          <div
+            className={`hotspot-detail-shell ${editorOpen ? "hotspot-editor-active" : ""}`}
+            data-evidence-cache-state={hotspotEvidenceDiagnostics?.evidenceCacheState ?? "none"}
+            data-evidence-request-sequence={hotspotEvidenceDiagnostics?.requestSequence ?? 0}
+            data-evidence-requested={hotspotEvidenceDiagnostics?.requestedRepresentativeCount ?? 0}
+            data-evidence-found={hotspotEvidenceDiagnostics?.foundRepresentativeCount ?? 0}
+            data-evidence-missing={hotspotEvidenceDiagnostics?.missingRepresentativeCount ?? 0}
+            data-evidence-full-recluster="false"
+          >
             <main className="hotspot-results-pane">
               <div className="hotspot-results-inner">
                 <div className="hotspot-result-header">
@@ -4462,7 +4948,13 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                   <span><strong>{selected.paperCount}</strong> 篇论文</span>
                   <span>置信度 <strong>{Math.round((selected.confidence ?? 0) * 100)}%</strong></span>
                   <span className={hotspotEvidenceStatus === "ready" && activeHotspotEvidence ? "text-cyan/80" : hotspotEvidenceStatus === "loading" ? "text-ink/55" : "text-amber/80"}>
-                    {hotspotEvidenceStatus === "loading" ? "SQLite 证据加载中" : hotspotEvidenceStatus === "ready" && activeHotspotEvidence ? `SQLite 证据已就绪 · ${activeHotspotEvidence.representativePapers.length} 篇` : "使用领域相关论文"}
+                    {hotspotEvidenceStatus === "loading"
+                      ? "正在按代表 ID 查询"
+                      : hotspotEvidenceStatus === "ready" && activeHotspotEvidence
+                        ? `代表 ID 证据就绪 · ${activeHotspotEvidence.representativePapers.length} 篇 · ${hotspotEvidenceDiagnostics?.evidenceCacheState ?? "miss"} ${Math.round(hotspotEvidenceDiagnostics?.evidenceLoadMs ?? 0)}ms`
+                        : hotspotEvidenceStatus === "missing-evidence"
+                          ? "缺少持久化代表 ID"
+                          : "持久化证据不可用"}
                   </span>
                 </div>
                 <div className="hotspot-keyword-line">
@@ -4471,8 +4963,10 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                   <small>{hotspotSourceLabel(selected.source)}</small>
                 </div>
 
-                {hotspotEvidenceStatus === "loading" && <div className="hotspot-evidence-notice">正在读取 SQLite 热点证据，代表论文区将在加载完成后更新。</div>}
-                {hotspotEvidenceStatus === "unavailable" && <div className="hotspot-evidence-notice hotspot-evidence-warning">SQLite 证据包不可用，当前展示前端领域相关论文，离线证据报告已禁用。</div>}
+                {hotspotEvidenceStatus === "loading" && <div className="hotspot-evidence-notice">正在按持久化代表论文 ID 精确读取 SQLite，页面导航不会触发全库聚类。</div>}
+                {hotspotEvidenceStatus === "missing-evidence" && <div className="hotspot-evidence-notice hotspot-evidence-warning">当前热点没有持久化代表论文 ID。请前往流水线重新运行热点聚类；报告和证据导出已禁用。</div>}
+                {hotspotEvidenceStatus === "unavailable" && <div className="hotspot-evidence-notice hotspot-evidence-warning">持久化代表论文在 SQLite 中不可用。请检查论文库或重新运行热点聚类；不会使用同领域论文替代。</div>}
+                {hotspotEvidenceStatus === "ready" && (hotspotEvidenceDiagnostics?.missingRepresentativeCount ?? 0) > 0 && <div className="hotspot-evidence-notice hotspot-evidence-warning">已按 ID 找到 {hotspotEvidenceDiagnostics?.foundRepresentativeCount} 篇代表论文，另有 {hotspotEvidenceDiagnostics?.missingRepresentativeCount} 个持久化 ID 在当前 SQLite 中缺失。</div>}
 
                 <div className="hotspot-result-grid">
                   <section className="hotspot-result-block">
@@ -4535,7 +5029,7 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                           </div>
                         </article>
                       ))}
-                      {reportPapers.length === 0 && <div className="hotspot-result-empty">暂无可用于报告的代表论文，请先运行热点聚类或检查热点关键词。</div>}
+                      {reportPapers.length === 0 && <div className="hotspot-result-empty">暂无可验证的持久化代表论文，请先在流水线中重新运行热点聚类。</div>}
                     </div>
                   )}
                 </section>
@@ -4565,10 +5059,17 @@ function HotspotLibrary({ hotspots, papers, settings, activeProject, onRefresh, 
                     </>
                   )}
 
-                  <button className="primary-action mt-4 h-10 gap-2" onClick={() => void generateSelectedHotspotReport()} disabled={Boolean(busy) || !reportModeReady}>
-                    {reportGenerationBusy ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
-                    生成报告
-                  </button>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button className="primary-action h-10 gap-2" onClick={() => void generateSelectedHotspotReport()} disabled={Boolean(busy) || !reportModeReady}>
+                      {reportGenerationBusy ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
+                      生成报告
+                    </button>
+                    {activeAiTaskKey && (
+                      <button className="secondary-action h-10 gap-2" onClick={() => void cancelActiveAiReport()}>
+                        <Square size={14} />取消 AI 任务
+                      </button>
+                    )}
+                  </div>
                 </section>
               </div>
             </main>
@@ -4633,7 +5134,8 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
   }, [mode, query, reports, sort]);
   const selected = filteredReports.find((report) => report.id === selectedId) ?? filteredReports[0] ?? reports[0];
   const canUseEvidence = Boolean(selected && !bindingLoading && selectedPapers.length > 0 && missingPaperIds.length === 0);
-  const audit = useMemo<ReportAudit | null>(() => (selected ? auditReport(selected.content, selectedPapers) : null), [selected, selectedPapers]);
+  const audit = useMemo<ReportAudit | null>(() => (selected ? selected.auditSnapshot ?? auditReport(selected.content, selectedPapers) : null), [selected, selectedPapers]);
+  const formalExportAllowed = selected?.reviewStatus === "approved";
   const evidenceProfile = useMemo(() => (selected ? selected.evidenceProfile ?? buildReportEvidenceProfile(selectedPapers) : null), [selected, selectedPapers]);
   const selectedModeLabel = selected ? ({ simple: "简版", deep: "深版", revised: "修订版" } as Record<ResearchReport["mode"], string>)[selected.mode] : "";
   const boundPaperIdCount = selected ? new Set(selected.paperIds ?? []).size : 0;
@@ -4710,6 +5212,10 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
 
   async function exportSelected(format: "md" | "html") {
     if (!selected) return;
+    if (!formalExportAllowed) {
+      onNotice("该报告仍是待复核草稿，人工确认或修订后才能正式导出。");
+      return;
+    }
     if (format === "html" && !canUseEvidence) {
       onNotice("HTML 证据导出需要完整绑定文献；可先导出 Markdown 原文。");
       return;
@@ -4720,6 +5226,13 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
     const content = format === "html" ? reportToHtml(selected, selectedPapers) : selected.content;
     await writeTextFile(dir ? `${dir}\\${fileName}` : fileName, content);
     onNotice(format === "html" ? "HTML 报告已导出。" : "Markdown 报告已导出。");
+  }
+
+  async function approveSelectedReport() {
+    if (!selected) return;
+    await approveReport(selected.id, "local-user");
+    await onRefresh();
+    onNotice("已人工确认报告，可进行正式导出。");
   }
 
   async function regenerateSection() {
@@ -4750,6 +5263,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
         paperIds: selectedPapers.map((paper) => paper.id),
         metrics: generated.metrics,
         evidenceProfile: generated.evidenceProfile,
+        ...reportReviewGate(generated.content, selectedPapers),
       });
       await onRefresh();
       onNotice("指定章节重写版已保存为修订报告。");
@@ -4801,7 +5315,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
           {filteredReports.map((report) => (
             <button key={report.id} className={`hotspot-row ${selected?.id === report.id ? "hotspot-row-active" : ""}`} onClick={() => setSelectedId(report.id)}>
               <span>{report.topic}</span>
-              <small>{report.mode === "simple" ? "简版" : report.mode === "deep" ? "深版" : "修订版"} | {formatDateTime(report.createdAt)}</small>
+              <small>{report.mode === "simple" ? "简版" : report.mode === "deep" ? "深版" : "修订版"} | {report.reviewStatus === "approved" ? "已批准" : "待复核"} | {formatDateTime(report.createdAt)}</small>
             </button>
           ))}
           {filteredReports.length === 0 && <div className="px-2 py-8 text-center text-sm text-ink/45">没有匹配的报告。</div>}
@@ -4824,7 +5338,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
                       报告工具
                     </button>
                     <div className="report-export-control" ref={exportMenuRef}>
-                      <button className="primary-action h-10 gap-2" onClick={() => setExportMenuOpen((value) => !value)} aria-expanded={exportMenuOpen} aria-haspopup="menu">
+                      <button className="primary-action h-10 gap-2" disabled={!formalExportAllowed} onClick={() => setExportMenuOpen((value) => !value)} aria-expanded={exportMenuOpen} aria-haspopup="menu" title={formalExportAllowed ? "导出正式报告" : "待复核草稿禁止正式导出"}>
                         <Download size={15} />
                         导出报告
                         <ChevronDown className={exportMenuOpen ? "rotate-180 transition" : "transition"} size={14} />
@@ -4919,8 +5433,10 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
                         </div>
                         <p className="mt-3 text-sm leading-6 text-ink/55">{audit.coverageExplanation}</p>
                         <div className="report-audit-line">证据概览：{audit.evidenceProfilePresent ? "已写入" : "缺失"} · 缺失章节 {audit.missingRequiredSections.length}</div>
+                        <div className="report-audit-line">复核状态：{selected.reviewStatus === "approved" ? `已批准${selected.reviewedBy ? ` · ${selected.reviewedBy}` : ""}` : "待人工复核，正式导出已锁定"}</div>
                         {audit.missingRequiredSections.length > 0 && <div className="report-tool-warning">缺少核心章节：{audit.missingRequiredSections.join("、")}。</div>}
                         {audit.unreferencedParagraphs.length > 0 && <div className="report-tool-warning">有 {audit.unreferencedParagraphs.length} 段可能缺少引用或证据支撑，建议人工确认。</div>}
+                        {selected.reviewStatus !== "approved" && <button type="button" className="secondary-action mt-3 h-9 w-full" onClick={() => void approveSelectedReport()}>人工确认并允许导出</button>}
                       </>
                     )}
                   </FoldSection>
@@ -4977,6 +5493,7 @@ function taskStatusLabel(status: TaskLog["status"]) {
   const labels: Record<TaskLog["status"], string> = {
     queued: "等待中",
     running: "进行中",
+    cancelled: "已取消",
     done: "已完成",
     failed: "失败",
   };
@@ -4996,6 +5513,7 @@ function PipelineView({
   settings,
   activeProject,
   libraryStatus,
+  v20Snapshot,
   onNavigate,
   onRefresh,
   onNotice,
@@ -5007,6 +5525,7 @@ function PipelineView({
   settings: AiSettings;
   activeProject: Project;
   libraryStatus: PaperLibraryStatus | null;
+  v20Snapshot: V20HotspotSnapshot | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
   onNotice: (value: string) => void;
@@ -5014,22 +5533,20 @@ function PipelineView({
   const [busyStage, setBusyStage] = useState<string>("");
   const hotspotQuality = useMemo(() => buildHotspotQualitySummary(hotspots), [hotspots]);
   const paperCount = libraryStatus?.paperCount ?? papers.length;
-  const cleanJob = jobs.find((item) => item.stage === "clean");
-  const clusterJob = jobs.find((item) => item.stage === "cluster");
-  const cleanState: PipelineStepState = cleanJob?.status === "running"
-    ? "running"
-    : cleanJob?.status === "failed"
-      ? "failed"
-      : cleanJob?.status === "done"
-        ? "done"
-        : "pending";
-  const clusterState: PipelineStepState = clusterJob?.status === "running"
-    ? "running"
-    : clusterJob?.status === "failed"
-      ? "failed"
-      : clusterJob?.status === "done" && hotspots.length > 0
-        ? "done"
-        : "pending";
+  const modeledHotspotCount = hotspots.filter((hotspot) => (
+    hotspot.source === "worker"
+    || (hotspot.source !== "seed" && Boolean(hotspot.analysis?.evidencePaperIds.length))
+  )).length;
+  const hasModeledHotspotResult = modeledHotspotCount > 0;
+  const analysisProgress = useMemo(() => deriveAnalysisProgress({
+    paperCount,
+    hotspotCount: hotspots.length,
+    jobs,
+    snapshot: v20Snapshot,
+  }), [hotspots.length, jobs, paperCount, v20Snapshot]);
+  const { cleanJob, clusterJob } = analysisProgress;
+  const cleanState: PipelineStepState = analysisProgress.cleanState;
+  const clusterState: PipelineStepState = analysisProgress.clusterState;
   const currentStepId: PipelineStepId = paperCount === 0
     ? "prepare"
     : cleanState !== "done"
@@ -5052,7 +5569,7 @@ function PipelineView({
       ? cleanState
       : currentStepId === "cluster"
         ? clusterState
-        : (hotspots.length > 0 ? "done" : "pending");
+        : (hasModeledHotspotResult ? "done" : "pending");
 
   const stepStateLabels: Record<PipelineStepState, string> = {
     pending: "未开始",
@@ -5092,8 +5609,12 @@ function PipelineView({
     {
       id: "result",
       title: "查看结果",
-      description: hotspots.length > 0 ? `已生成 ${hotspots.length} 个热点` : "建模完成后查看热点证据",
-      state: hotspots.length > 0 ? "done" : "pending",
+      description: hasModeledHotspotResult
+        ? `已生成 ${modeledHotspotCount} 个热点${analysisProgress.snapshotCurrent ? "，V20 快照已同步" : ""}`
+        : hotspots.length > 0
+          ? "当前仅有样例热点，请先运行热点建模"
+          : "建模完成后查看热点证据",
+      state: hasModeledHotspotResult ? "done" : "pending",
       icon: Atom,
     },
   ];
@@ -5290,7 +5811,7 @@ function LogsView({
   const selectedProjectName = selected ? projectName(selected.projectId, projects) : "";
   const selectedBelongsToActiveProject = Boolean(selected && activeProject && selected.projectId === activeProject.id);
   const selectedSupportsRerun = Boolean(selected && (["clean", "cluster", "review", "export"] as TaskLog["stage"][]).includes(selected.stage));
-  const selectedCanRerun = Boolean(selected && selectedSupportsRerun && selectedBelongsToActiveProject && (selected.status === "done" || selected.status === "failed"));
+  const selectedCanRerun = Boolean(selected && selectedSupportsRerun && selectedBelongsToActiveProject && (selected.status === "done" || selected.status === "failed" || selected.status === "cancelled"));
   const showPrimaryRerun = Boolean(selectedCanRerun && selected?.status === "failed");
   const showSecondaryRerun = Boolean(selectedCanRerun && selected?.status === "done");
   const suggestions = selected?.status === "failed" ? buildLogFixSuggestions(selected.error || selected.outputSummary) : [];
@@ -5301,9 +5822,11 @@ function LogsView({
         ? selected.outputSummary || "任务正在运行，完成后会在这里显示结果。"
         : selected.status === "queued"
           ? "任务正在等待执行。"
+          : selected.status === "cancelled"
+            ? selected.outputSummary || "任务已由用户取消。"
           : selected.outputSummary || "任务已完成，但没有输出摘要。"
     : "";
-  const ResultIcon = selected?.status === "failed" ? AlertTriangle : selected?.status === "done" ? CheckCircle2 : selected?.status === "running" ? Loader2 : Square;
+  const ResultIcon = selected?.status === "failed" ? AlertTriangle : selected?.status === "done" ? CheckCircle2 : selected?.status === "running" ? Loader2 : selected?.status === "cancelled" ? X : Square;
 
   useEffect(() => {
     if (!filteredLogs.some((log) => log.id === selectedId)) setSelectedId(filteredLogs[0]?.id ?? "");
@@ -5348,6 +5871,19 @@ function LogsView({
     setSelectedId("");
     await onRefresh();
     onNotice("当前项目的任务日志已清空。");
+  }
+
+  async function cancelSelectedTask() {
+    if (!selected?.taskKey || selected.status !== "running" || busy) return;
+    setBusy(true);
+    try {
+      const cancelled = await cancelAiTask(selected.taskKey);
+      onNotice(cancelled ? "已请求取消 AI 任务。" : "AI 任务已经结束或不再运行。");
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      await onRefresh();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function rerunSelected() {
@@ -5415,6 +5951,7 @@ function LogsView({
           paperIds: reviewPapers.map((paper) => paper.id),
           metrics: generated.metrics,
           evidenceProfile: generated.evidenceProfile,
+          ...reportReviewGate(generated.content, reviewPapers),
         });
         await saveTaskLog({
           stage: "review",
@@ -5480,7 +6017,7 @@ function LogsView({
           <SelectControl className="h-10 text-sm" value={projectFilter} options={[{ value: "current", label: `当前项目：${activeProject?.name ?? "未命名"}` }, { value: "all", label: "全部项目" }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} onChange={setProjectFilter} />
           <div className="grid grid-cols-2 gap-2">
             <SelectControl className="h-10 text-sm" value={stageFilter} options={[{ value: "all", label: "全部类型" }, ...(["crawl", "clean", "cluster", "name", "review", "export", "backup", "restore", "health"] as TaskLog["stage"][]).map((stage) => ({ value: stage, label: taskStageLabel(stage) }))]} onChange={(value) => setStageFilter(value as TaskLog["stage"] | "all")} />
-            <SelectControl className="h-10 text-sm" value={statusFilter} options={[{ value: "all", label: "全部状态" }, ...(["queued", "running", "done", "failed"] as TaskLog["status"][]).map((status) => ({ value: status, label: taskStatusLabel(status) }))]} onChange={(value) => setStatusFilter(value as TaskLog["status"] | "all")} />
+            <SelectControl className="h-10 text-sm" value={statusFilter} options={[{ value: "all", label: "全部状态" }, ...(["queued", "running", "cancelled", "done", "failed"] as TaskLog["status"][]).map((status) => ({ value: status, label: taskStatusLabel(status) }))]} onChange={(value) => setStatusFilter(value as TaskLog["status"] | "all")} />
           </div>
         </div>
         <div className="log-list-actions">
@@ -5534,6 +6071,12 @@ function LogsView({
                 <button className="primary-action h-10 shrink-0 gap-2" onClick={() => void rerunSelected()} disabled={busy}>
                   {busy ? <Loader2 className="animate-spin" size={15} /> : <RefreshCw size={15} />}
                   {busy ? "正在重新运行" : "重新运行"}
+                </button>
+              )}
+              {selected.status === "running" && selected.taskKey && (
+                <button className="secondary-action h-10 shrink-0 gap-2" onClick={() => void cancelSelectedTask()} disabled={busy}>
+                  {busy ? <Loader2 className="animate-spin" size={15} /> : <Square size={14} />}
+                  取消 AI 任务
                 </button>
               )}
             </div>
@@ -5646,7 +6189,7 @@ function HealthView({
   const [checkError, setCheckError] = useState("");
   const [pressureError, setPressureError] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState("");
-  const aiReady = hasEnvApiKey() || Boolean(settings.manualApiKey.trim());
+  const aiReady = Boolean(settings.apiCredentialConfigured || settings.useEnvKey);
   const libraryPaperCount = libraryStatus?.paperCount ?? papers.length;
 
   async function runCheck() {
@@ -5993,7 +6536,13 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     setTesting(true);
     setMessage("");
     try {
-      setMessage(await testAiConnection(draft));
+      let effective = draft;
+      if (draft.manualApiKey.trim() && draft.projectId && isDesktopRuntime()) {
+        const status = await setAppCredential(draft.projectId, `ai-${draft.provider}`, draft.manualApiKey);
+        effective = { ...draft, manualApiKey: "", apiCredentialConfigured: status.configured };
+        setDraft(effective);
+      }
+      setMessage(await testAiConnection(effective));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "连接失败。");
     } finally {
@@ -6081,6 +6630,16 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     if (!backupPath) return;
     const started = performance.now();
     try {
+      onNotice("正在检查 SQLite 备份完整性…");
+      const inspection = await inspectPaperLibraryBackup({ backupPath, projectId: draft.projectId });
+      const snapshotSummary = inspection.snapshotId
+        ? `${inspection.hotspotCount} 个热点、${inspection.membershipCount} 条归属`
+        : "无 V20 快照；恢复后需要重新运行热点建模";
+      onNotice(`SQLite 备份检查通过：${inspection.paperCount.toLocaleString()} 篇论文，${snapshotSummary}。`);
+      if (!(await confirmDesktopAction(
+        `确认恢复这个 SQLite 备份？\n\n论文：${inspection.paperCount.toLocaleString()} 篇\n项目：${inspection.projectCount}\n快照：${snapshotSummary}\n\n当前论文库会先保留为安全副本。`,
+        "确认恢复 SQLite 主库",
+      ))) return;
       const result = await restorePaperLibrary({ databaseDir: draft.databaseDir, backupPath, projectId: draft.projectId });
       await saveTaskLog({
         stage: "restore",
@@ -6094,7 +6653,8 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
       await onRefresh();
       onNotice(result.previousBackupPath ? `${result.summary} 恢复前副本：${result.previousBackupPath}` : result.summary);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "SQLite 论文库恢复失败。";
+      const rawMessage = error instanceof Error ? error.message : "SQLite 论文库恢复失败。";
+      const errorMessage = rawMessage.includes("LIBRARY_BUSY") ? "论文库正在执行导入、清洗或聚类，请任务完成后再恢复。" : rawMessage;
       await saveTaskLog({ stage: "restore", title: "SQLite 论文库恢复", status: "failed", inputSummary: backupPath, outputSummary: "", error: errorMessage, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
       onNotice(errorMessage);
@@ -6106,7 +6666,27 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     const started = performance.now();
     try {
       const backup = JSON.parse(await file.text()) as DataBackup;
+      const projectCount = Array.isArray(backup.projects) ? backup.projects.length : 1;
+      const paperCount = Array.isArray(backup.papers) ? backup.papers.length : 0;
+      const reportCount = Array.isArray(backup.reports) ? backup.reports.length : 0;
+      if (!(await confirmDesktopAction(
+        `确认用这个 JSON 备份替换当前工作台数据？\n\n项目：${projectCount}\n文献：${paperCount.toLocaleString()}\n报告：${reportCount}\n\n恢复采用原子事务；V20 热点缓存将从 SQLite 重新同步。`,
+        "确认恢复 JSON 备份",
+      ))) return;
       const result = await restoreBackupData(backup);
+      if (isDesktopRuntime()) {
+        const restoredSettings = await getAiSettings();
+        const restoredProjectId = restoredSettings.projectId || draft.projectId || "project-default";
+        const [apiStatus, mysqlStatus] = await Promise.all([
+          getAppCredentialStatus(restoredProjectId, `ai-${restoredSettings.provider}`),
+          getAppCredentialStatus(restoredProjectId, "mysql"),
+        ]);
+        await saveAiSettings({
+          ...restoredSettings,
+          apiCredentialConfigured: apiStatus.configured,
+          mysql: { ...restoredSettings.mysql, credentialConfigured: mysqlStatus.configured, password: "" },
+        });
+      }
       await saveTaskLog({ stage: "restore", title: "IndexedDB JSON 恢复", status: "done", inputSummary: file.name, outputSummary: `文献=${result.paperCount}，热点=${result.hotspotCount}，报告=${result.reportCount}，日志=${result.taskLogCount}`, rawInput: file.name, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
       onNotice("JSON 备份已恢复。");
@@ -6120,7 +6700,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     }
   }
 
-  const aiReady = hasEnvApiKey() || Boolean(draft.manualApiKey.trim());
+  const aiReady = Boolean(draft.apiCredentialConfigured || draft.manualApiKey.trim() || draft.useEnvKey);
   const directoryCount = [draft.databaseDir, draft.exportDir, draft.workerTempDir, draft.backupDir].filter(Boolean).length;
   const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(settings);
 
@@ -6162,9 +6742,9 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
               </label>
               <label className="field-label">模型名称<input className="field-control h-11 px-3" value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label>
               <label className="field-label lg:col-span-2">服务地址（Base URL）<input className="field-control h-11 px-3" value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /></label>
-              <label className="field-label lg:col-span-2">API 密钥<input className="field-control h-11 px-3" type="password" value={draft.manualApiKey} onChange={(event) => setDraft({ ...draft, manualApiKey: event.target.value })} placeholder={hasEnvApiKey() ? "已检测到环境变量密钥" : "填入 API 密钥"} /></label>
+              <label className="field-label lg:col-span-2">API 密钥<input className="field-control h-11 px-3" type="password" value={draft.manualApiKey} onChange={(event) => setDraft({ ...draft, manualApiKey: event.target.value })} placeholder={draft.apiCredentialConfigured ? "已安全保存到 Windows 凭据管理器；输入新值可替换" : "输入后保存到 Windows 凭据管理器"} /></label>
               <label className="field-label">生成温度<input className="field-control h-11 px-3" type="number" step={0.05} min={0} max={1} value={draft.temperature} onChange={(event) => setDraft({ ...draft, temperature: Number(event.target.value) })} /></label>
-              <label className="settings-toggle-row"><input type="checkbox" checked={draft.useEnvKey} onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })} />优先使用环境变量 VITE_DEEPSEEK_API_KEY</label>
+              <label className="settings-toggle-row"><input type="checkbox" checked={draft.useEnvKey} onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })} />允许后端开发环境读取 DEEPSEEK_API_KEY</label>
             </div>
             {message && <div className="settings-connection-message" aria-live="polite">{message}</div>}
           </section>
@@ -6193,7 +6773,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
                 <label className="field-label">端口<input className="field-control h-11 px-3" type="number" min={1} max={65535} value={draft.mysql.port} onChange={(event) => updateMysql({ port: Number(event.target.value) || 3306 })} /></label>
                 <label className="field-label">用户名<input className="field-control h-11 px-3" value={draft.mysql.user} onChange={(event) => updateMysql({ user: event.target.value })} placeholder="root" /></label>
                 <label className="field-label">数据库<input className="field-control h-11 px-3" value={draft.mysql.database} onChange={(event) => updateMysql({ database: event.target.value })} placeholder="research_hotspots" /></label>
-                <label className="field-label">密码<input className="field-control h-11 px-3" type="password" value={draft.mysql.password} onChange={(event) => updateMysql({ password: event.target.value })} placeholder="可留空，导入时再输入" /></label>
+                <label className="field-label">密码<input className="field-control h-11 px-3" type="password" value={draft.mysql.password} onChange={(event) => updateMysql({ password: event.target.value })} placeholder={draft.mysql.credentialConfigured ? "已安全保存；输入新值可替换" : "输入后保存到 Windows 凭据管理器"} /></label>
                 <label className="field-label">每批数量<input className="field-control h-11 px-3" type="number" min={100} max={5000} step={100} value={draft.mysql.batchSize} onChange={(event) => updateMysql({ batchSize: Math.max(100, Math.min(5000, Number(event.target.value) || 1000)) })} /></label>
               </div>
             </section>
@@ -6309,7 +6889,7 @@ function AboutView({
     const profile = report.evidenceProfile;
     return Boolean(profile && profile.paperCount >= 3 && profile.representativePaperIds.length >= 3 && report.metrics.citationAccuracy >= 0.8);
   });
-  const aiConfigured = Boolean(settings && (hasEnvApiKey() || settings.manualApiKey.trim()));
+  const aiConfigured = Boolean(settings?.apiCredentialConfigured || settings?.useEnvKey);
   const runtimeSummary = [
     ["当前 SQLite 论文", paperCount.toLocaleString()],
     ["热点证据覆盖", `${evidenceHotspots.length}/${hotspots.length}`],
@@ -6462,7 +7042,13 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
       onNotice(result.summary);
     } else {
       const result = activeProject ? await runLibraryClusterWorker(settings.databaseDir, activeProject.id) : await runClusterWorker(papers, settings.workerTempDir);
-      await replaceHotspots(result.hotspots);
+      if (activeProject && isDesktopRuntime()) {
+        const snapshot = await getV20HotspotSnapshot({ databaseDir: settings.databaseDir, projectId: activeProject.id });
+        if (!snapshot || snapshot.snapshotId !== result.snapshotId) throw new Error("聚类完成后无法读取一致的 V20 活动快照。");
+        await replaceV20HotspotCache(snapshot);
+      } else {
+        await replaceHotspots(result.hotspots.map((hotspot) => ({ ...hotspot, snapshotId: result.snapshotId })));
+      }
       await updatePipelineJob("cluster", { status: "done", progress: 100, detail: result.summary });
       await saveTaskLog({ stage, title: activeProject ? "SQLite 大库 V20 热点分析" : "热点聚类 worker", status: "done", inputSummary, outputSummary: result.summary, rawInput: rawInputForLog, rawOutput: JSON.stringify({ beforeCount: result.beforeCount, clusterCount: result.clusterCount, hotspots: result.hotspots.slice(0, 20) }, null, 2), durationMs: Math.round(performance.now() - started) });
       onNotice(result.summary);
@@ -6470,6 +7056,11 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
     await onRefresh();
   } catch (error) {
     const message = error instanceof Error ? error.message : `${stage} worker 执行失败。`;
+    if (stage === "cluster" && message.includes("CLUSTER_ALREADY_RUNNING")) {
+      await onRefresh();
+      onNotice("该项目正在后台聚类，请等待当前任务完成。");
+      return;
+    }
     await updatePipelineJob(stage, { status: "failed", progress: 100, detail: message });
     await saveTaskLog({ stage, title: stage === "clean" ? (activeProject ? "SQLite 大库清洗去重" : "清洗去重 worker") : (activeProject ? "SQLite 大库热点聚类" : "热点聚类 worker"), status: "failed", inputSummary, outputSummary: "", rawInput: rawInputForLog, error: message, durationMs: Math.round(performance.now() - started) });
     await onRefresh();
@@ -6522,30 +7113,79 @@ function DataQualityPanel({ hints }: { hints: PaperQualityHint[] }) {
   );
 }
 
-function PaperDetailEditor({ paper, qualityHints, onSave }: { paper?: Paper; qualityHints: PaperQualityHint[]; onSave: (paper: Paper) => Promise<void> }) {
+type PaperDetailEditorHandle = {
+  save: () => Promise<boolean>;
+  discard: () => void;
+};
+
+function comparablePaperDetails(paper: Paper | null | undefined) {
+  return {
+    title: paper?.title ?? "",
+    abstract: paper?.abstract ?? "",
+    authors: paper?.authors ?? "",
+    year: paper?.year ?? null,
+    field: paper?.field ?? "",
+    source: paper?.source ?? "",
+    doi: paper?.doi ?? "",
+    url: paper?.url ?? "",
+  };
+}
+
+const PaperDetailEditor = forwardRef<PaperDetailEditorHandle, {
+  paper?: Paper;
+  qualityHints: PaperQualityHint[];
+  onDirtyChange: (dirty: boolean) => void;
+  onSave: (paper: Paper) => Promise<void>;
+}>(function PaperDetailEditor({ paper, qualityHints, onDirtyChange, onSave }, ref) {
+  const [baseline, setBaseline] = useState<Paper | null>(paper ? { ...paper } : null);
   const [draft, setDraft] = useState<Paper | null>(paper ? { ...paper } : null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    setBaseline(paper ? { ...paper } : null);
     setDraft(paper ? { ...paper } : null);
   }, [paper]);
 
-  if (!draft) return <EmptyState title="未选择文献" description="点击左侧文献标题后，可在这里编辑详情和查看数据质量提示。" />;
+  const dirty = useMemo(
+    () => JSON.stringify(comparablePaperDetails(draft)) !== JSON.stringify(comparablePaperDetails(baseline)),
+    [baseline, draft],
+  );
 
-  async function save() {
-    if (!draft) return;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+
+  async function saveDraft() {
+    if (!draft || saving) return false;
+    const normalizedDraft: Paper = {
+      ...draft,
+      title: draft.title.trim() || "未命名文献",
+      abstract: draft.abstract.trim(),
+      year: draft.year ? Number(draft.year) : undefined,
+    };
     setSaving(true);
     try {
-      await onSave({
-        ...draft,
-        title: draft.title.trim() || "未命名文献",
-        abstract: draft.abstract.trim(),
-        year: draft.year ? Number(draft.year) : undefined,
-      });
+      await onSave(normalizedDraft);
+      setBaseline({ ...normalizedDraft });
+      setDraft({ ...normalizedDraft });
+      return true;
+    } catch {
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  function discardDraft() {
+    setDraft(baseline ? { ...baseline } : null);
+  }
+
+  useImperativeHandle(ref, () => ({
+    save: saveDraft,
+    discard: discardDraft,
+  }));
+
+  if (!draft) return <EmptyState title="未选择文献" description="点击左侧论文卡片后，可在这里编辑详情和查看数据质量提示。" />;
 
   return (
     <>
@@ -6569,7 +7209,7 @@ function PaperDetailEditor({ paper, qualityHints, onSave }: { paper?: Paper; qua
         <label className="field-label">URL<input className="field-control h-10 px-3" value={draft.url ?? ""} onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label>
         {qualityHints.length > 0 && <DataQualityPanel hints={qualityHints} />}
         <div className="flex flex-wrap gap-2">
-          <button className="primary-action h-10 gap-2" onClick={() => void save()} disabled={saving}>
+          <button className="primary-action h-10 gap-2" onClick={() => void saveDraft()} disabled={saving || !dirty}>
             {saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
             保存文献
           </button>
@@ -6581,7 +7221,7 @@ function PaperDetailEditor({ paper, qualityHints, onSave }: { paper?: Paper; qua
       </div>
     </>
   );
-}
+});
 
 function ReportOptionsPanel({ options, onChange }: { options: ReportGenerationOptions; onChange: (options: ReportGenerationOptions) => void }) {
   const [userTemplates, setUserTemplates] = useState<AiParameterTemplate[]>([]);
@@ -6737,13 +7377,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function relatedPapers(selected: Hotspot | undefined, papers: Paper[]) {
-  if (!selected) return [];
-  const ids = new Set(selected.evolution.flatMap((item) => item.representativeIds));
-  const byIds = papers.filter((paper) => ids.has(paper.id));
-  return (byIds.length > 0 ? byIds : papers.filter((paper) => paper.field === selected.field)).slice(0, 40);
-}
-
 function buildFilterIndex(papers: Paper[]) {
   const keywords = new Set<string>();
   for (const paper of papers) {
@@ -6834,7 +7467,7 @@ function buildLogFixSuggestions(text: string | undefined) {
   const value = text.toLowerCase();
   const suggestions: string[] = [];
   if (value.includes("python") || value.includes("worker")) suggestions.push("检查设置页的 worker 临时目录，并确认 Python worker 文件仍在 workers 目录。");
-  if (value.includes("api key") || value.includes("401") || value.includes("unauthorized")) suggestions.push("在设置页填写 API Key，或确认 VITE_DEEPSEEK_API_KEY 是否可用。");
+  if (value.includes("api key") || value.includes("401") || value.includes("unauthorized")) suggestions.push("请在设置页重新保存 API Key；开发环境也可检查后端 DEEPSEEK_API_KEY 是否可用。");
   if (value.includes("permission") || value.includes("access") || value.includes("denied") || value.includes("eacces")) suggestions.push("把导出、备份、临时目录改到 D 盘可写目录，避免系统目录权限限制。");
   if (value.includes("network") || value.includes("fetch") || value.includes("timeout")) suggestions.push("检查网络连接、Base URL 和模型服务是否可访问，必要时降低检索数量后重试。");
   if (value.includes("json") || value.includes("parse")) suggestions.push("检查导入文件或 worker 输出是否为合法 UTF-8 JSON。");

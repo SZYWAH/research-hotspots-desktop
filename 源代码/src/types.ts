@@ -25,7 +25,18 @@ export type Project = {
 export type AppMeta = {
   id: "main";
   activeProjectId: string;
+  v20CacheStates?: Record<string, V20CacheState>;
   updatedAt: string;
+};
+
+export type V20CacheState = {
+  databaseKey: string;
+  projectId: string;
+  snapshotId?: string;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  generatedAt: string;
 };
 
 export type Paper = {
@@ -48,6 +59,8 @@ export type Paper = {
 export type Hotspot = {
   id: string;
   projectId?: string;
+  databaseKey?: string;
+  snapshotId?: string;
   field: string;
   topicId: number;
   title: string;
@@ -86,6 +99,7 @@ export type Hotspot = {
 export type ResearchReport = {
   id: string;
   projectId?: string;
+  snapshotId?: string;
   topic: string;
   mode: "simple" | "deep" | "revised";
   discipline: string;
@@ -97,6 +111,10 @@ export type ResearchReport = {
     consistencyScore: number;
   };
   evidenceProfile?: ReportEvidenceProfile;
+  reviewStatus: "approved" | "needs-review";
+  auditSnapshot?: ReportAudit;
+  reviewedAt?: string;
+  reviewedBy?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -160,6 +178,8 @@ export type CleanerWorkerResult = {
 export type ClusterWorkerResult = {
   beforeCount: number;
   clusterCount: number;
+  snapshotId?: string;
+  membershipCount?: number;
   hotspots: Hotspot[];
   summary: string;
 };
@@ -169,7 +189,8 @@ export type TaskLog = {
   projectId?: string;
   stage: PipelineStage | "backup" | "restore" | "health";
   title: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "cancelled" | "done" | "failed";
+  taskKey?: string;
   inputSummary: string;
   outputSummary: string;
   rawInput?: string;
@@ -197,6 +218,7 @@ export type MysqlImportSettings = {
   port: number;
   user: string;
   password: string;
+  credentialConfigured?: boolean;
   database: string;
   batchSize: number;
 };
@@ -210,16 +232,23 @@ export type AiSettings = {
   model: string;
   useEnvKey: boolean;
   manualApiKey: string;
+  apiCredentialConfigured?: boolean;
   temperature: number;
   streamOutput: boolean;
   dataDir: string;
   databaseDir: string;
+  librarySetupCompleted: boolean;
+  librarySetupMode: "" | "seed" | "empty" | "existing";
   exportDir: string;
   workerTempDir: string;
   backupDir: string;
   cnki: CnkiSettings;
   mysql: MysqlImportSettings;
   updatedAt: string;
+};
+
+export type BackupAiSettings = Omit<AiSettings, "manualApiKey" | "apiCredentialConfigured" | "mysql"> & {
+  mysql: Omit<MysqlImportSettings, "password" | "credentialConfigured">;
 };
 
 export type ReportGenerationOptions = {
@@ -250,6 +279,7 @@ export type ReportAudit = {
 };
 
 export type DataBackup = {
+  schemaVersion?: number;
   version: string;
   exportedAt: string;
   projects?: Project[];
@@ -258,7 +288,7 @@ export type DataBackup = {
   hotspots: Hotspot[];
   reports: ResearchReport[];
   jobs: PipelineJob[];
-  settings: AiSettings;
+  settings: BackupAiSettings;
   taskLogs: TaskLog[];
 };
 
@@ -394,6 +424,24 @@ export type App17GalaxyPayload = {
   fields: string[];
   papers: App17GalaxyPaperPoint[];
   hotspots: App17GalaxyHotspotPoint[];
+  snapshotId?: string;
+  hotspotRecords?: Hotspot[];
+};
+
+export type V20AnalysisState = {
+  projectId: string;
+  activeSnapshotId: string;
+  algorithmVersion: string;
+  paperCount: number;
+  hotspotCount: number;
+  membershipCount: number;
+  generatedAt: string;
+};
+
+export type V20HotspotSnapshot = V20AnalysisState & {
+  databaseKey: string;
+  snapshotId?: string;
+  hotspots: Hotspot[];
 };
 
 export type App17GalaxySyncResult = {

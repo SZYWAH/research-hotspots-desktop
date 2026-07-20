@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -10,9 +10,19 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use research_hotspots_core::{
+    atomic_replace_file_with_rollback, create_empty_library_atomically,
+    install_seed_library_atomically,
+    read_analysis_state, read_unified_galaxy_rows,
+    read_unified_hotspot_rows, validate_library_candidate_connection,
+    validate_library_candidate_file, write_snapshot_transaction, AnalysisState, SnapshotHotspot,
+    FirstRunMode, SeedExpectation, SnapshotMembership, SnapshotWriteInput,
+    ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
+};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use sha2::{Digest, Sha256};
+use tauri::{path::BaseDirectory, Emitter, Manager};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +100,112 @@ struct PaperLibraryStatus {
     paper_count: i64,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefaultLibraryManifest {
+    manifest_schema_version: i64,
+    generator_version: String,
+    database_schema_version: i64,
+    data_version: String,
+    app_version: String,
+    database_file: String,
+    project_id: String,
+    snapshot_id: String,
+    sha256: String,
+    size_bytes: u64,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    generated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibrarySetupState {
+    configured: bool,
+    database_dir: Option<String>,
+    database_path: Option<String>,
+    database_exists: bool,
+    database_valid: bool,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    snapshot_id: Option<String>,
+    database_schema_version: Option<i64>,
+    requires_modeling: bool,
+    seed_available: bool,
+    seed_size_bytes: Option<u64>,
+    seed_paper_count: Option<i64>,
+    seed_hotspot_count: Option<i64>,
+    seed_membership_count: Option<i64>,
+    seed_snapshot_id: Option<String>,
+    seed_database_schema_version: Option<i64>,
+    seed_version: Option<String>,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidateLibraryLocationInput {
+    database_dir: String,
+    mode: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryLocationValidation {
+    valid: bool,
+    database_dir: String,
+    database_path: String,
+    writable: bool,
+    available_space_bytes: u64,
+    required_space_bytes: u64,
+    existing_database: bool,
+    existing_database_valid: bool,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    snapshot_id: Option<String>,
+    database_schema_version: Option<i64>,
+    requires_modeling: bool,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeLibraryInput {
+    database_dir: String,
+    mode: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeLibraryResult {
+    mode: String,
+    database_dir: String,
+    database_path: String,
+    size_bytes: u64,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    snapshot_id: Option<String>,
+    database_schema_version: i64,
+    requires_modeling: bool,
+    sha256: String,
+    integrity_check: String,
+    summary: String,
+}
+
+#[derive(Clone)]
+struct LibraryFileValidation {
+    schema_version: i64,
+    snapshot_id: Option<String>,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    integrity_check: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PaperLibraryBackupResult {
@@ -108,10 +224,26 @@ struct PaperLibraryRestoreResult {
     previous_backup_path: Option<String>,
     size_bytes: u64,
     paper_count: i64,
+    restored_snapshot_id: Option<String>,
+    validation_status: String,
+    rollback_performed: bool,
     summary: String,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PaperLibraryBackupInspection {
+    backup_path: String,
+    schema_version: i64,
+    paper_count: i64,
+    project_count: i64,
+    snapshot_id: Option<String>,
+    hotspot_count: i64,
+    membership_count: i64,
+    validation_status: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct CountFacet {
     value: String,
@@ -170,6 +302,179 @@ struct CnkiSearchOutput {
 #[derive(Clone, Default)]
 struct PaperImportTaskRegistry {
     controls: Arc<Mutex<HashMap<String, PaperImportTaskControl>>>,
+}
+
+const CLUSTER_ALREADY_RUNNING: &str = "CLUSTER_ALREADY_RUNNING";
+
+#[derive(Clone, Default)]
+struct ClusterTaskRegistry {
+    running: Arc<Mutex<HashSet<String>>>,
+}
+
+struct ClusterTaskPermit {
+    registry: ClusterTaskRegistry,
+    key: String,
+}
+
+const LIBRARY_BUSY: &str = "LIBRARY_BUSY";
+
+#[derive(Clone, Default)]
+struct LibraryMutationRegistry {
+    running: Arc<Mutex<HashSet<String>>>,
+}
+
+struct LibraryMutationPermit {
+    registry: LibraryMutationRegistry,
+    key: String,
+}
+
+impl LibraryMutationRegistry {
+    fn try_acquire(&self, database_path: &Path) -> Result<LibraryMutationPermit, String> {
+        let key = normalized_database_key(database_path);
+        let mut running = self
+            .running
+            .lock()
+            .map_err(|_| "Cannot lock library mutation registry.".to_string())?;
+        if !running.insert(key.clone()) {
+            return Err(LIBRARY_BUSY.to_string());
+        }
+        Ok(LibraryMutationPermit {
+            registry: self.clone(),
+            key,
+        })
+    }
+}
+
+impl Drop for LibraryMutationPermit {
+    fn drop(&mut self) {
+        self.registry
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
+}
+
+impl ClusterTaskRegistry {
+    fn try_acquire(&self, key: String) -> Result<ClusterTaskPermit, String> {
+        let mut running = self
+            .running
+            .lock()
+            .map_err(|_| "Cannot lock cluster task registry.".to_string())?;
+        if !running.insert(key.clone()) {
+            return Err(CLUSTER_ALREADY_RUNNING.to_string());
+        }
+        Ok(ClusterTaskPermit {
+            registry: self.clone(),
+            key,
+        })
+    }
+
+    #[cfg(test)]
+    fn running_count(&self) -> usize {
+        self.running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+}
+
+impl Drop for ClusterTaskPermit {
+    fn drop(&mut self) {
+        self.registry
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
+}
+
+const AI_ALREADY_RUNNING: &str = "AI_ALREADY_RUNNING";
+
+#[derive(Clone, Default)]
+struct AiTaskRegistry {
+    running: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+}
+
+struct AiTaskPermit {
+    registry: AiTaskRegistry,
+    key: String,
+    cancel_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+impl AiTaskRegistry {
+    fn try_acquire(&self, key: String) -> Result<AiTaskPermit, String> {
+        let mut running = self
+            .running
+            .lock()
+            .map_err(|_| "Cannot lock AI task registry.".to_string())?;
+        if running.contains_key(&key) {
+            return Err(AI_ALREADY_RUNNING.to_string());
+        }
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        running.insert(key.clone(), cancel_tx);
+        Ok(AiTaskPermit {
+            registry: self.clone(),
+            key,
+            cancel_rx,
+        })
+    }
+
+    fn cancel(&self, key: &str) -> Result<bool, String> {
+        let running = self
+            .running
+            .lock()
+            .map_err(|_| "Cannot lock AI task registry.".to_string())?;
+        Ok(running
+            .get(key)
+            .map(|sender| sender.send(true).is_ok())
+            .unwrap_or(false))
+    }
+}
+
+impl Drop for AiTaskPermit {
+    fn drop(&mut self) {
+        self.registry
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatInput {
+    task_key: String,
+    project_id: String,
+    provider: String,
+    base_url: String,
+    model: String,
+    temperature: f64,
+    use_env_key: bool,
+    mode: String,
+    messages: Vec<AiChatMessage>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatResult {
+    content: String,
+    retry_count: usize,
+    elapsed_ms: u128,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialStatus {
+    configured: bool,
 }
 
 #[derive(Clone)]
@@ -317,6 +622,39 @@ struct App17GalaxyPayload {
     fields: Vec<String>,
     papers: Vec<App17GalaxyPaperPoint>,
     hotspots: Vec<App17GalaxyHotspotPoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct V20GalaxyPayload {
+    ready: bool,
+    message: String,
+    source: String,
+    mode: String,
+    generated_at: String,
+    snapshot_id: Option<String>,
+    paper_count: usize,
+    hotspot_count: usize,
+    topic_count: usize,
+    fields: Vec<String>,
+    papers: Vec<App17GalaxyPaperPoint>,
+    hotspots: Vec<App17GalaxyHotspotPoint>,
+    hotspot_records: Vec<HotspotRecord>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct V20HotspotSnapshot {
+    database_key: String,
+    project_id: String,
+    active_snapshot_id: String,
+    snapshot_id: Option<String>,
+    algorithm_version: String,
+    paper_count: i64,
+    hotspot_count: i64,
+    membership_count: i64,
+    generated_at: String,
+    hotspots: Vec<HotspotRecord>,
 }
 
 #[derive(Clone, Serialize)]
@@ -607,21 +945,21 @@ struct PaperLibraryCleanResult {
     summary: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct KeywordWeight {
     keyword: String,
     weight: f64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SimilarHotspotRelation {
     hotspot_id: String,
     score: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotCoordinates {
     x: i64,
@@ -629,7 +967,7 @@ struct HotspotCoordinates {
     z: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotEvolution {
     year: i64,
@@ -638,7 +976,7 @@ struct HotspotEvolution {
     representative_ids: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotAnalysis {
     keyword_focus: f64,
@@ -649,7 +987,7 @@ struct HotspotAnalysis {
     warnings: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotRecord {
     id: String,
@@ -678,6 +1016,8 @@ struct HotspotRecord {
 struct LibraryClusterResult {
     before_count: i64,
     cluster_count: i64,
+    snapshot_id: String,
+    membership_count: i64,
     hotspots: Vec<HotspotRecord>,
     summary: String,
 }
@@ -700,7 +1040,7 @@ struct LibraryPressureTestResult {
     summary: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ClusterGroup {
     field: String,
     keyword: String,
@@ -723,13 +1063,220 @@ struct RepresentativeCandidate {
 }
 
 #[tauri::command]
-fn paper_library_status(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>) -> Result<PaperLibraryStatus, String> {
+fn get_library_setup_state(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+) -> Result<LibrarySetupState, String> {
+    let seed_manifest = load_default_library_manifest(&app).ok();
+    let configured_dir = database_dir
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            if cfg!(debug_assertions) {
+                find_project_root().map(|root| root.join("data").join("library"))
+            } else {
+                None
+            }
+        });
+
+    let Some(database_dir) = configured_dir else {
+        return Ok(LibrarySetupState {
+            configured: false,
+            database_dir: None,
+            database_path: None,
+            database_exists: false,
+            database_valid: false,
+            paper_count: 0,
+            hotspot_count: 0,
+            membership_count: 0,
+            snapshot_id: None,
+            database_schema_version: None,
+            requires_modeling: true,
+            seed_available: seed_manifest.is_some(),
+            seed_size_bytes: seed_manifest.as_ref().map(|manifest| manifest.size_bytes),
+            seed_paper_count: seed_manifest.as_ref().map(|manifest| manifest.paper_count),
+            seed_hotspot_count: seed_manifest
+                .as_ref()
+                .map(|manifest| manifest.hotspot_count),
+            seed_membership_count: seed_manifest
+                .as_ref()
+                .map(|manifest| manifest.membership_count),
+            seed_snapshot_id: seed_manifest
+                .as_ref()
+                .map(|manifest| manifest.snapshot_id.clone()),
+            seed_database_schema_version: seed_manifest
+                .as_ref()
+                .map(|manifest| manifest.database_schema_version),
+            seed_version: seed_manifest
+                .as_ref()
+                .map(|manifest| manifest.data_version.clone()),
+            message: "论文库尚未配置。请选择一个可写的数据目录。".to_string(),
+        });
+    };
+
+    recover_interrupted_restore(&database_dir)?;
+
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let database_exists = database_path.is_file();
+    let validation = if database_exists {
+        validate_database_file(&database_path)
+    } else {
+        Err("所选目录中不存在 research-hotspots-v7.sqlite。".to_string())
+    };
+    let (
+        database_valid,
+        paper_count,
+        hotspot_count,
+        membership_count,
+        snapshot_id,
+        database_schema_version,
+        requires_modeling,
+        message,
+    ) = match validation {
+        Ok(value) => {
+            let requires_modeling = value.snapshot_id.is_none();
+            let message = if requires_modeling {
+                "论文库配置有效，但尚无 V20 活动快照；请在分析流水线中显式运行热点建模。"
+                    .to_string()
+            } else {
+                "论文库配置有效，V20 活动快照一致。".to_string()
+            };
+            (
+                true,
+                value.paper_count,
+                value.hotspot_count,
+                value.membership_count,
+                value.snapshot_id,
+                Some(value.schema_version),
+                requires_modeling,
+                message,
+            )
+        }
+        Err(error) => (false, 0, 0, 0, None, None, true, error),
+    };
+
+    Ok(LibrarySetupState {
+        configured: database_valid,
+        database_dir: Some(database_dir.to_string_lossy().to_string()),
+        database_path: Some(database_path.to_string_lossy().to_string()),
+        database_exists,
+        database_valid,
+        paper_count,
+        hotspot_count,
+        membership_count,
+        snapshot_id,
+        database_schema_version,
+        requires_modeling,
+        seed_available: seed_manifest.is_some(),
+        seed_size_bytes: seed_manifest.as_ref().map(|manifest| manifest.size_bytes),
+        seed_paper_count: seed_manifest.as_ref().map(|manifest| manifest.paper_count),
+        seed_hotspot_count: seed_manifest
+            .as_ref()
+            .map(|manifest| manifest.hotspot_count),
+        seed_membership_count: seed_manifest
+            .as_ref()
+            .map(|manifest| manifest.membership_count),
+        seed_snapshot_id: seed_manifest
+            .as_ref()
+            .map(|manifest| manifest.snapshot_id.clone()),
+        seed_database_schema_version: seed_manifest
+            .as_ref()
+            .map(|manifest| manifest.database_schema_version),
+        seed_version: seed_manifest
+            .as_ref()
+            .map(|manifest| manifest.data_version.clone()),
+        message,
+    })
+}
+
+#[tauri::command]
+fn validate_library_location(
+    app: tauri::AppHandle,
+    input: ValidateLibraryLocationInput,
+) -> Result<LibraryLocationValidation, String> {
+    validate_library_location_impl(&app, &input.database_dir, &input.mode)
+}
+
+#[tauri::command]
+fn initialize_library(
+    app: tauri::AppHandle,
+    input: InitializeLibraryInput,
+) -> Result<InitializeLibraryResult, String> {
+    let mode = input.mode.trim().to_ascii_lowercase();
+    if !matches!(mode.as_str(), "seed" | "empty" | "existing") {
+        return Err("未知的论文库初始化方式。".to_string());
+    }
+    let validation = validate_library_location_impl(&app, &input.database_dir, &mode)?;
+    if !validation.valid {
+        return Err(validation.message);
+    }
+
+    let database_dir = PathBuf::from(input.database_dir.trim());
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    fs::create_dir_all(&database_dir)
+        .map_err(|error| format!("无法创建论文库目录 {:?}: {error}", database_dir))?;
+
+    match mode.as_str() {
+        "seed" => install_seed_library(&app, &database_path)?,
+        "empty" => create_empty_library(&database_path)?,
+        "existing" => {}
+        _ => unreachable!(),
+    }
+
+    let verified = validate_database_file(&database_path)?;
+    let size_bytes = fs::metadata(&database_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    let sha256 = sha256_file(&database_path)?;
+    Ok(InitializeLibraryResult {
+        mode: mode.clone(),
+        database_dir: database_dir.to_string_lossy().to_string(),
+        database_path: database_path.to_string_lossy().to_string(),
+        size_bytes,
+        paper_count: verified.paper_count,
+        hotspot_count: verified.hotspot_count,
+        membership_count: verified.membership_count,
+        snapshot_id: verified.snapshot_id.clone(),
+        database_schema_version: verified.schema_version,
+        requires_modeling: verified.snapshot_id.is_none(),
+        sha256,
+        integrity_check: verified.integrity_check,
+        summary: match mode.as_str() {
+            "seed" => format!(
+                "默认论文库安装完成：{} 篇论文，{} 个热点，{} 条归属。",
+                verified.paper_count, verified.hotspot_count, verified.membership_count
+            ),
+            "empty" => "空白论文库已创建。".to_string(),
+            _ if verified.snapshot_id.is_some() => format!(
+                "现有论文库验证完成：{} 篇论文，{} 个热点，{} 条归属。",
+                verified.paper_count, verified.hotspot_count, verified.membership_count
+            ),
+            _ => format!(
+                "现有论文库验证完成：{} 篇论文；尚无 V20 快照，请显式运行热点建模。",
+                verified.paper_count
+            ),
+        },
+    })
+}
+
+#[tauri::command]
+fn paper_library_status(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<PaperLibraryStatus, String> {
     let (conn, database_dir, database_path) = open_library_database(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     let paper_count = conn
-        .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
         .map_err(|error| error.to_string())?;
-    let size_bytes = fs::metadata(&database_path).map(|metadata| metadata.len()).unwrap_or_default();
+    let size_bytes = fs::metadata(&database_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
     Ok(PaperLibraryStatus {
         database_dir: database_dir.to_string_lossy().to_string(),
         database_path: database_path.to_string_lossy().to_string(),
@@ -739,90 +1286,338 @@ fn paper_library_status(app: tauri::AppHandle, database_dir: Option<String>, pro
 }
 
 #[tauri::command]
-fn backup_paper_library(app: tauri::AppHandle, database_dir: Option<String>, backup_dir: Option<String>, project_id: Option<String>) -> Result<PaperLibraryBackupResult, String> {
+fn backup_paper_library(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    backup_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<PaperLibraryBackupResult, String> {
     let (_, database_dir, _) = open_library_database(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
-    let backup_dir = backup_dir.filter(|value| !value.trim().is_empty()).map(PathBuf::from);
+    let backup_dir = backup_dir
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
     backup_library_database_path(&database_dir, backup_dir, &project_id)
 }
 
-fn backup_library_database_path(database_dir: &Path, backup_dir: Option<PathBuf>, project_id: &str) -> Result<PaperLibraryBackupResult, String> {
+fn backup_library_database_path(
+    database_dir: &Path,
+    backup_dir: Option<PathBuf>,
+    project_id: &str,
+) -> Result<PaperLibraryBackupResult, String> {
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    let conn = Connection::open(&database_path)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     initialize_library_database(&conn)?;
     let paper_count = conn
-        .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
         .map_err(|error| error.to_string())?;
     let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     drop(conn);
 
-    let backup_dir = backup_dir
-        .unwrap_or_else(|| database_dir.join("backups"));
-    fs::create_dir_all(&backup_dir).map_err(|error| format!("Cannot create SQLite backup dir {:?}: {error}", backup_dir))?;
-    let backup_path = backup_dir.join(format!("research-hotspots-v7-backup-{}.sqlite", now_millis()));
-    fs::copy(&database_path, &backup_path).map_err(|error| format!("Cannot copy SQLite database to {:?}: {error}", backup_path))?;
-    let size_bytes = fs::metadata(&backup_path).map(|metadata| metadata.len()).unwrap_or_default();
+    let backup_dir = backup_dir.unwrap_or_else(|| database_dir.join("backups"));
+    fs::create_dir_all(&backup_dir)
+        .map_err(|error| format!("Cannot create SQLite backup dir {:?}: {error}", backup_dir))?;
+    let backup_path = backup_dir.join(format!(
+        "research-hotspots-v7-backup-{}.sqlite",
+        now_millis()
+    ));
+    fs::copy(&database_path, &backup_path)
+        .map_err(|error| format!("Cannot copy SQLite database to {:?}: {error}", backup_path))?;
+    let size_bytes = fs::metadata(&backup_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
 
     Ok(PaperLibraryBackupResult {
         database_path: database_path.to_string_lossy().to_string(),
         backup_path: backup_path.to_string_lossy().to_string(),
         size_bytes,
         paper_count,
-        summary: format!("SQLite 论文库已备份：{paper_count} 篇，{} bytes。", size_bytes),
+        summary: format!(
+            "SQLite 论文库已备份：{paper_count} 篇，{} bytes。",
+            size_bytes
+        ),
     })
 }
 
 #[tauri::command]
-fn restore_paper_library(app: tauri::AppHandle, database_dir: Option<String>, backup_path: String, project_id: Option<String>) -> Result<PaperLibraryRestoreResult, String> {
+fn inspect_paper_library_backup(
+    backup_path: String,
+    project_id: Option<String>,
+) -> Result<PaperLibraryBackupInspection, String> {
     let source_path = PathBuf::from(&backup_path);
     if !source_path.exists() || !source_path.is_file() {
-        return Err(format!("SQLite backup file does not exist: {:?}", source_path));
+        return Err(format!(
+            "SQLite backup file does not exist: {:?}",
+            source_path
+        ));
     }
-    let database_dir = resolve_database_dir(&app, database_dir)?;
-    let project_id = project_id.unwrap_or_else(default_project_id);
-    restore_library_database_path(&database_dir, &source_path, &project_id)
+    inspect_library_backup_path(&source_path, &project_id.unwrap_or_else(default_project_id))
 }
 
-fn restore_library_database_path(database_dir: &Path, source_path: &Path, project_id: &str) -> Result<PaperLibraryRestoreResult, String> {
+#[tauri::command]
+async fn restore_paper_library(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LibraryMutationRegistry>,
+    database_dir: Option<String>,
+    backup_path: String,
+    project_id: Option<String>,
+) -> Result<PaperLibraryRestoreResult, String> {
+    let source_path = PathBuf::from(&backup_path);
     if !source_path.exists() || !source_path.is_file() {
-        return Err(format!("SQLite backup file does not exist: {:?}", source_path));
+        return Err(format!(
+            "SQLite backup file does not exist: {:?}",
+            source_path
+        ));
     }
-    fs::create_dir_all(&database_dir).map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    let database_dir = resolve_database_dir(&app, database_dir)?;
+    let permit = state.try_acquire(&database_dir.join("research-hotspots-v7.sqlite"))?;
+    let project_id = project_id.unwrap_or_else(default_project_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        restore_library_database_path(&database_dir, &source_path, &project_id)
+    })
+    .await
+    .map_err(|error| format!("SQLite restore task failed: {error}"))?
+}
+
+fn restore_library_database_path(
+    database_dir: &Path,
+    source_path: &Path,
+    project_id: &str,
+) -> Result<PaperLibraryRestoreResult, String> {
+    if !source_path.exists() || !source_path.is_file() {
+        return Err(format!(
+            "SQLite backup file does not exist: {:?}",
+            source_path
+        ));
+    }
+    fs::create_dir_all(&database_dir)
+        .map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    if source_path == database_path {
+    if fs::canonicalize(source_path).ok() == fs::canonicalize(&database_path).ok()
+        && database_path.exists()
+    {
         return Err("Cannot restore from the active SQLite database file.".to_string());
     }
-
-    let previous_backup_path = if database_path.exists() {
-        let safety_path = database_dir.join(format!("research-hotspots-v7-before-restore-{}.sqlite", now_millis()));
-        fs::copy(&database_path, &safety_path).map_err(|error| format!("Cannot create safety copy before restore: {error}"))?;
-        Some(safety_path)
-    } else {
-        None
+    let restore_id = now_millis();
+    let staging_path =
+        database_dir.join(format!(".research-hotspots-v7-restore-{restore_id}.sqlite"));
+    let marker_path = database_dir.join("research-hotspots-v7.restore.json");
+    let safety_path = database_dir.join(format!(
+        "research-hotspots-v7-before-restore-{restore_id}.sqlite"
+    ));
+    fs::copy(source_path, &staging_path)
+        .map_err(|error| format!("Cannot stage SQLite backup {:?}: {error}", source_path))?;
+    match validate_library_candidate(&staging_path, project_id) {
+        Ok(value) => value,
+        Err(error) => {
+            remove_sqlite_sidecars(&staging_path);
+            let _ = fs::remove_file(&staging_path);
+            return Err(format!("SQLite backup validation failed: {error}"));
+        }
     };
-    let _ = fs::remove_file(database_dir.join("research-hotspots-v7.sqlite-wal"));
-    let _ = fs::remove_file(database_dir.join("research-hotspots-v7.sqlite-shm"));
-    fs::copy(&source_path, &database_path).map_err(|error| format!("Cannot restore SQLite database from {:?}: {error}", source_path))?;
+    fs::write(
+        &marker_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "restoreId": restore_id,
+            "source": source_path,
+            "staging": staging_path,
+            "active": database_path,
+            "safety": safety_path,
+            "phase": "validated"
+        }))
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("Cannot write restore marker: {error}"))?;
 
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open restored SQLite library {:?}: {error}", database_path))?;
-    initialize_library_database(&conn)?;
-    let paper_count = conn
-        .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+    if database_path.exists() {
+        let conn = Connection::open(&database_path)
+            .map_err(|error| format!("Cannot checkpoint active SQLite library: {error}"))?;
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        drop(conn);
+        remove_sqlite_sidecars(&database_path);
+    }
+    let (had_active, validated) = match atomic_replace_file_with_rollback(
+        &database_path,
+        &staging_path,
+        &safety_path,
+        |path| validate_library_candidate(path, project_id),
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = fs::remove_file(&marker_path);
+            return Err(error);
+        }
+    };
+    let _ = fs::remove_file(&marker_path);
+    let size_bytes = fs::metadata(&database_path)
+        .map(|metadata| metadata.len())
         .unwrap_or_default();
-    let size_bytes = fs::metadata(&database_path).map(|metadata| metadata.len()).unwrap_or_default();
 
     Ok(PaperLibraryRestoreResult {
         database_path: database_path.to_string_lossy().to_string(),
         restored_from: source_path.to_string_lossy().to_string(),
-        previous_backup_path: previous_backup_path.map(|path| path.to_string_lossy().to_string()),
+        previous_backup_path: had_active.then(|| safety_path.to_string_lossy().to_string()),
         size_bytes,
-        paper_count,
-        summary: format!("SQLite 论文库已恢复：{paper_count} 篇，{} bytes。", size_bytes),
+        paper_count: validated.paper_count,
+        restored_snapshot_id: validated.snapshot_id.clone(),
+        validation_status: "passed".to_string(),
+        rollback_performed: false,
+        summary: format!(
+            "SQLite 论文库已原子恢复：{} 篇，快照 {}，{} bytes。",
+            validated.paper_count,
+            validated.snapshot_id.as_deref().unwrap_or("未生成"),
+            size_bytes
+        ),
     })
 }
 
+fn inspect_library_backup_path(
+    path: &Path,
+    project_id: &str,
+) -> Result<PaperLibraryBackupInspection, String> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("Cannot open SQLite backup {:?}: {error}", path))?;
+    let quick_check: String = conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if quick_check.to_lowercase() != "ok" {
+        return Err(format!("SQLite quick_check failed: {quick_check}"));
+    }
+    if !sqlite_table_exists(&conn, "papers")? {
+        return Err("SQLite backup has no papers table.".to_string());
+    }
+    let schema_version = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or_default();
+    let paper_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    let project_count = conn
+        .query_row("SELECT COUNT(DISTINCT project_id) FROM papers", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or_default();
+    let snapshot_id = if sqlite_table_exists(&conn, "v20_analysis_state")? {
+        conn.query_row(
+            "SELECT active_snapshot_id FROM v20_analysis_state WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    let (hotspot_count, membership_count) = if let Some(snapshot_id) = snapshot_id.as_ref() {
+        let hotspots = conn
+            .query_row(
+                "SELECT COUNT(*) FROM v20_hotspots WHERE project_id = ?1 AND snapshot_id = ?2",
+                params![project_id, snapshot_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let memberships = conn.query_row("SELECT COUNT(*) FROM v20_paper_memberships WHERE project_id = ?1 AND snapshot_id = ?2", params![project_id, snapshot_id], |row| row.get(0)).unwrap_or_default();
+        (hotspots, memberships)
+    } else {
+        (0, 0)
+    };
+    Ok(PaperLibraryBackupInspection {
+        backup_path: path.to_string_lossy().to_string(),
+        schema_version,
+        paper_count,
+        project_count,
+        snapshot_id,
+        hotspot_count,
+        membership_count,
+        validation_status: "passed".to_string(),
+    })
+}
+
+fn validate_library_candidate(
+    path: &Path,
+    project_id: &str,
+) -> Result<ValidatedLibraryCandidate, String> {
+    let conn = Connection::open(path)
+        .map_err(|error| format!("Cannot open staged SQLite library {:?}: {error}", path))?;
+    initialize_library_database(&conn)?;
+    let validated = validate_library_candidate_connection(&conn, project_id)?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(|error| error.to_string())?;
+    Ok(validated)
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        params![table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value != 0)
+    .map_err(|error| error.to_string())
+}
+
+fn remove_sqlite_sidecars(database_path: &Path) {
+    let path = database_path.to_string_lossy();
+    let _ = fs::remove_file(format!("{path}-wal"));
+    let _ = fs::remove_file(format!("{path}-shm"));
+}
+
+fn recover_interrupted_restore(database_dir: &Path) -> Result<(), String> {
+    let marker_path = database_dir.join("research-hotspots-v7.restore.json");
+    if !marker_path.exists() {
+        return Ok(());
+    }
+    let value: serde_json::Value = serde_json::from_slice(
+        &fs::read(&marker_path).map_err(|error| format!("Cannot read restore marker: {error}"))?,
+    )
+        .map_err(|error| format!("Cannot parse restore marker: {error}"))?;
+    let path_value = |key: &str| {
+        value
+            .get(key)
+            .and_then(|item| item.as_str())
+            .map(PathBuf::from)
+    };
+    let active =
+        path_value("active").unwrap_or_else(|| database_dir.join("research-hotspots-v7.sqlite"));
+    let safety = path_value("safety");
+    let staging = path_value("staging");
+    if let Some(safety) = safety.filter(|path| path.exists()) {
+        if active.exists() {
+            remove_sqlite_sidecars(&active);
+            let failed = database_dir.join(format!(
+                "research-hotspots-v7-interrupted-restore-{}.sqlite",
+                now_millis()
+            ));
+            fs::rename(&active, &failed).map_err(|error| {
+                format!("Cannot quarantine interrupted restored database: {error}")
+            })?;
+        }
+        fs::rename(&safety, &active)
+            .map_err(|error| format!("Cannot recover pre-restore SQLite library: {error}"))?;
+    }
+    if let Some(staging) = staging {
+        remove_sqlite_sidecars(&staging);
+        let _ = fs::remove_file(staging);
+    }
+    let _ = fs::remove_file(marker_path);
+    Ok(())
+}
+
 #[tauri::command]
-fn query_paper_library(app: tauri::AppHandle, input: PaperQueryInput) -> Result<PaperQueryResult, String> {
+fn query_paper_library(
+    app: tauri::AppHandle,
+    input: PaperQueryInput,
+) -> Result<PaperQueryResult, String> {
     let started = Instant::now();
     let (conn, _, _) = open_library_database(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
@@ -861,16 +1656,29 @@ fn query_paper_library(app: tauri::AppHandle, input: PaperQueryInput) -> Result<
         .map_err(|error| error.to_string())?;
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let rows = stmt
-        .query_map(params![project_id, query, source, field, input.year, limit, offset], row_to_paper)
+        .query_map(
+            params![project_id, query, source, field, input.year, limit, offset],
+            row_to_paper,
+        )
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
 
-    Ok(PaperQueryResult { rows, total, limit, offset, query_ms: started.elapsed().as_millis() })
+    Ok(PaperQueryResult {
+        rows,
+        total,
+        limit,
+        offset,
+        query_ms: started.elapsed().as_millis(),
+    })
 }
 
 #[tauri::command]
-fn paper_library_facets(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>) -> Result<PaperLibraryFacets, String> {
+fn paper_library_facets(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<PaperLibraryFacets, String> {
     let (conn, _, _) = open_library_database(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     Ok(PaperLibraryFacets {
@@ -881,18 +1689,29 @@ fn paper_library_facets(app: tauri::AppHandle, database_dir: Option<String>, pro
 }
 
 #[tauri::command]
-fn upsert_paper_library(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>, papers: Vec<PaperRecord>) -> Result<PaperLibraryMutationResult, String> {
+fn upsert_paper_library(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    papers: Vec<PaperRecord>,
+) -> Result<PaperLibraryMutationResult, String> {
     let (mut conn, _, _) = open_library_database(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     upsert_paper_rows(&mut conn, &project_id, papers)
 }
 
-fn upsert_paper_rows(conn: &mut Connection, project_id: &str, papers: Vec<PaperRecord>) -> Result<PaperLibraryMutationResult, String> {
+fn upsert_paper_rows(
+    conn: &mut Connection,
+    project_id: &str,
+    papers: Vec<PaperRecord>,
+) -> Result<PaperLibraryMutationResult, String> {
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let mut inserted = 0;
     let mut updated = 0;
     {
-        let mut exists_stmt = tx.prepare("SELECT 1 FROM papers WHERE id = ?1").map_err(|error| error.to_string())?;
+        let mut exists_stmt = tx
+            .prepare("SELECT 1 FROM papers WHERE id = ?1")
+            .map_err(|error| error.to_string())?;
         let mut upsert_stmt = tx
             .prepare(
                 "INSERT INTO papers (
@@ -923,7 +1742,11 @@ fn upsert_paper_rows(conn: &mut Connection, project_id: &str, papers: Vec<PaperR
                 .optional()
                 .map_err(|error| error.to_string())?
                 .is_some();
-            let timestamp = paper.updated_at.clone().or_else(|| paper.created_at.clone()).unwrap_or_else(now_millis_string);
+            let timestamp = paper
+                .updated_at
+                .clone()
+                .or_else(|| paper.created_at.clone())
+                .unwrap_or_else(now_millis_string);
             let created_at = paper.created_at.take().unwrap_or_else(|| timestamp.clone());
             let updated_at = paper.updated_at.take().unwrap_or(timestamp);
             let search_blob = paper_search_blob(&paper);
@@ -954,11 +1777,20 @@ fn upsert_paper_rows(conn: &mut Connection, project_id: &str, papers: Vec<PaperR
         }
     }
     tx.commit().map_err(|error| error.to_string())?;
-    Ok(PaperLibraryMutationResult { inserted, updated, total: inserted + updated })
+    Ok(PaperLibraryMutationResult {
+        inserted,
+        updated,
+        total: inserted + updated,
+    })
 }
 
 #[tauri::command]
-fn get_papers_by_ids(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>, ids: Vec<String>) -> Result<Vec<PaperRecord>, String> {
+fn get_papers_by_ids(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    ids: Vec<String>,
+) -> Result<Vec<PaperRecord>, String> {
     let (conn, _, _) = open_library_database(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     let mut rows = Vec::new();
@@ -982,16 +1814,25 @@ fn get_papers_by_ids(app: tauri::AppHandle, database_dir: Option<String>, projec
 }
 
 #[tauri::command]
-fn delete_papers_from_library(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>, ids: Vec<String>) -> Result<usize, String> {
+fn delete_papers_from_library(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
     let (mut conn, _, _) = open_library_database(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let mut deleted = 0;
     {
-        let mut stmt = tx.prepare("DELETE FROM papers WHERE id = ?1 AND project_id = ?2").map_err(|error| error.to_string())?;
+        let mut stmt = tx
+            .prepare("DELETE FROM papers WHERE id = ?1 AND project_id = ?2")
+            .map_err(|error| error.to_string())?;
         for id in ids {
             let id = scoped_id(&project_id, &id);
-            deleted += stmt.execute(params![id, project_id]).map_err(|error| error.to_string())?;
+            deleted += stmt
+                .execute(params![id, project_id])
+                .map_err(|error| error.to_string())?;
         }
     }
     tx.commit().map_err(|error| error.to_string())?;
@@ -999,7 +1840,12 @@ fn delete_papers_from_library(app: tauri::AppHandle, database_dir: Option<String
 }
 
 #[tauri::command]
-fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperImportTaskRegistry>, input: PaperFileImportInput) -> Result<PaperFileImportStart, String> {
+fn start_paper_file_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PaperImportTaskRegistry>,
+    mutation_state: tauri::State<'_, LibraryMutationRegistry>,
+    input: PaperFileImportInput,
+) -> Result<PaperFileImportStart, String> {
     let file_path = PathBuf::from(&input.file_path);
     if !file_path.exists() {
         return Err(format!("Import file does not exist: {:?}", file_path));
@@ -1007,6 +1853,9 @@ fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperI
     if !file_path.is_file() {
         return Err(format!("Import path is not a file: {:?}", file_path));
     }
+    let target_dir = resolve_database_dir(&app, input.database_dir.clone())?;
+    let mutation_permit =
+        mutation_state.try_acquire(&target_dir.join("research-hotspots-v7.sqlite"))?;
 
     let task_id = format!("paper-import-{}-{}", std::process::id(), now_millis());
     let file_name = file_path
@@ -1026,7 +1875,16 @@ fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperI
     let return_task_id = task_id.clone();
     let return_file_name = file_name.clone();
     thread::spawn(move || {
-        let result = run_paper_file_import_task(app_handle.clone(), task_id.clone(), file_name.clone(), input.database_dir, input.project_id, file_path, control);
+        let _mutation_permit = mutation_permit;
+        let result = run_paper_file_import_task(
+            app_handle.clone(),
+            task_id.clone(),
+            file_name.clone(),
+            input.database_dir,
+            input.project_id,
+            file_path,
+            control,
+        );
         if let Err(error) = result {
             if !error.starts_with(IMPORT_TASK_ERROR_EMITTED_PREFIX) {
                 let _ = app_handle.emit(
@@ -1059,10 +1917,34 @@ fn start_paper_file_import(app: tauri::AppHandle, state: tauri::State<'_, PaperI
 }
 
 #[tauri::command]
-fn start_mysql_paper_import(app: tauri::AppHandle, state: tauri::State<'_, PaperImportTaskRegistry>, input: MysqlPaperImportInput) -> Result<PaperFileImportStart, String> {
+fn start_mysql_paper_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PaperImportTaskRegistry>,
+    mutation_state: tauri::State<'_, LibraryMutationRegistry>,
+    mut input: MysqlPaperImportInput,
+) -> Result<PaperFileImportStart, String> {
+    let credential_project_id = input.project_id.clone().unwrap_or_else(default_project_id);
+    if input
+        .password
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        input.password = read_app_credential(&credential_project_id, "mysql")
+            .or_else(|| std::env::var("MYSQL_PASSWORD").ok())
+            .or_else(|| std::env::var("DB_PASSWORD").ok());
+    }
     let task_id = format!("mysql-paper-import-{}-{}", std::process::id(), now_millis());
-    let database = input.database.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or("research_hotspots");
+    let database = input
+        .database
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("research_hotspots");
     let file_name = format!("MySQL {database}.papers");
+    let target_dir = resolve_database_dir(&app, input.database_dir.clone())?;
+    let mutation_permit =
+        mutation_state.try_acquire(&target_dir.join("research-hotspots-v7.sqlite"))?;
     let control = PaperImportTaskControl::default();
     state
         .controls
@@ -1075,7 +1957,14 @@ fn start_mysql_paper_import(app: tauri::AppHandle, state: tauri::State<'_, Paper
     let return_task_id = task_id.clone();
     let return_file_name = file_name.clone();
     thread::spawn(move || {
-        let result = run_mysql_paper_import_task(app_handle.clone(), task_id.clone(), file_name.clone(), input, control);
+        let _mutation_permit = mutation_permit;
+        let result = run_mysql_paper_import_task(
+            app_handle.clone(),
+            task_id.clone(),
+            file_name.clone(),
+            input,
+            control,
+        );
         if let Err(error) = result {
             if !error.starts_with(IMPORT_TASK_ERROR_EMITTED_PREFIX) {
                 let _ = app_handle.emit(
@@ -1115,9 +2004,18 @@ fn demo_paper_sample_path() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn control_paper_file_import(state: tauri::State<'_, PaperImportTaskRegistry>, task_id: String, action: String) -> Result<(), String> {
-    let controls = state.controls.lock().map_err(|_| "Cannot lock import task registry.".to_string())?;
-    let control = controls.get(&task_id).ok_or_else(|| format!("Import task not found: {task_id}"))?;
+fn control_paper_file_import(
+    state: tauri::State<'_, PaperImportTaskRegistry>,
+    task_id: String,
+    action: String,
+) -> Result<(), String> {
+    let controls = state
+        .controls
+        .lock()
+        .map_err(|_| "Cannot lock import task registry.".to_string())?;
+    let control = controls
+        .get(&task_id)
+        .ok_or_else(|| format!("Import task not found: {task_id}"))?;
     match action.as_str() {
         "pause" => {
             control.paused.store(true, Ordering::SeqCst);
@@ -1137,16 +2035,32 @@ fn control_paper_file_import(state: tauri::State<'_, PaperImportTaskRegistry>, t
 }
 
 #[tauri::command]
-fn clean_paper_library(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>) -> Result<PaperLibraryCleanResult, String> {
-    let (mut conn, _, _) = open_library_database(&app, database_dir)?;
+fn clean_paper_library(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LibraryMutationRegistry>,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<PaperLibraryCleanResult, String> {
+    let target_dir = resolve_database_dir(&app, database_dir)?;
+    let database_path = target_dir.join("research-hotspots-v7.sqlite");
+    let _permit = state.try_acquire(&database_path)?;
+    let mut conn = Connection::open(&database_path).map_err(|error| error.to_string())?;
+    initialize_library_database(&conn)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     clean_library_connection(&mut conn, &project_id)
 }
 
-fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<PaperLibraryCleanResult, String> {
+fn clean_library_connection(
+    conn: &mut Connection,
+    project_id: &str,
+) -> Result<PaperLibraryCleanResult, String> {
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let before_count = tx
-        .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
         .map_err(|error| error.to_string())?;
     let rows = {
         let mut stmt = tx
@@ -1185,7 +2099,9 @@ fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<P
             continue;
         }
 
-        if let Some(key) = paper_dedupe_key(paper.doi.as_deref(), paper.url.as_deref(), &clean_title) {
+        if let Some(key) =
+            paper_dedupe_key(paper.doi.as_deref(), paper.url.as_deref(), &clean_title)
+        {
             if seen.contains_key(&key) {
                 if duplicate_ids.len() < removed_id_log_limit {
                     duplicate_ids.push(paper.id.clone());
@@ -1217,7 +2133,14 @@ fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<P
             .map_err(|error| error.to_string())?;
         for (id, title, abstract_text, search_blob) in updates {
             updated_count += update_stmt
-                .execute(params![title, abstract_text, search_blob, updated_at, id, project_id])
+                .execute(params![
+                    title,
+                    abstract_text,
+                    search_blob,
+                    updated_at,
+                    id,
+                    project_id
+                ])
                 .map_err(|error| error.to_string())? as i64;
         }
     }
@@ -1226,11 +2149,17 @@ fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<P
             .prepare("DELETE FROM papers WHERE id = ?1 AND project_id = ?2")
             .map_err(|error| error.to_string())?;
         for id in delete_ids {
-            delete_stmt.execute(params![id, project_id]).map_err(|error| error.to_string())?;
+            delete_stmt
+                .execute(params![id, project_id])
+                .map_err(|error| error.to_string())?;
         }
     }
     let after_count = tx
-        .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
         .map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())?;
 
@@ -1251,15 +2180,31 @@ fn clean_library_connection(conn: &mut Connection, project_id: &str) -> Result<P
 }
 
 #[tauri::command]
-fn cluster_paper_library(app: tauri::AppHandle, database_dir: Option<String>, project_id: Option<String>) -> Result<LibraryClusterResult, String> {
-    let (conn, _, _) = open_library_database(&app, database_dir)?;
+async fn cluster_paper_library(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ClusterTaskRegistry>,
+    mutation_state: tauri::State<'_, LibraryMutationRegistry>,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<LibraryClusterResult, String> {
+    let database_dir = resolve_database_dir(&app, database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
     let project_id = project_id.unwrap_or_else(default_project_id);
-    cluster_library_connection(&conn, &project_id)
+    let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
+    let mutation_permit = mutation_state.try_acquire(&database_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let _mutation_permit = mutation_permit;
+        cluster_library_from_database_path(database_path, &project_id)
+    })
+    .await
+    .map_err(|error| format!("Hotspot cluster task failed: {error}"))?
 }
 
 #[tauri::command]
-fn export_hotspot_evidence(
+async fn export_hotspot_evidence(
     app: tauri::AppHandle,
+    state: tauri::State<'_, ClusterTaskRegistry>,
     database_dir: Option<String>,
     project_id: Option<String>,
     hotspot_id: Option<String>,
@@ -1267,14 +2212,74 @@ fn export_hotspot_evidence(
 ) -> Result<HotspotEvidenceExportResult, String> {
     let database_dir = resolve_database_dir(&app, database_dir)?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    export_hotspot_evidence_from_database_path(database_path, project_id, hotspot_id, max_papers.unwrap_or(12))
+    let project_id = project_id.unwrap_or_else(default_project_id);
+    let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        export_hotspot_evidence_from_database_path(
+            database_path,
+            Some(project_id),
+            hotspot_id,
+            max_papers.unwrap_or(12),
+        )
+    })
+    .await
+    .map_err(|error| format!("Hotspot evidence export task failed: {error}"))?
 }
 
-fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<LibraryClusterResult, String> {
+fn cluster_library_from_database_path(
+    database_path: PathBuf,
+    project_id: &str,
+) -> Result<LibraryClusterResult, String> {
+    if let Some(database_dir) = database_path.parent() {
+        fs::create_dir_all(database_dir)
+            .map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    }
+    let conn = Connection::open(&database_path)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    initialize_library_database(&conn)?;
+    cluster_library_connection(&conn, project_id)
+}
+
+fn cluster_task_key(database_path: &Path, project_id: &str) -> String {
+    let absolute_path = fs::canonicalize(database_path).unwrap_or_else(|_| {
+        if database_path.is_absolute() {
+            database_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|current_dir| current_dir.join(database_path))
+                .unwrap_or_else(|_| database_path.to_path_buf())
+        }
+    });
+    let mut normalized_path = absolute_path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        normalized_path.make_ascii_lowercase();
+    }
+    format!(
+        "{}::{}",
+        normalized_path.trim_end_matches('/'),
+        project_id.trim()
+    )
+}
+
+fn normalized_database_key(database_path: &Path) -> String {
+    fs::canonicalize(database_path)
+        .unwrap_or_else(|_| database_path.to_path_buf())
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase()
+}
+
+fn cluster_library_connection(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<LibraryClusterResult, String> {
     let mut stmt = conn
         .prepare("SELECT id, field, title, abstract, year, source, categories, doi, url FROM papers WHERE project_id = ?1")
         .map_err(|error| error.to_string())?;
-    let mut rows = stmt.query(params![project_id]).map_err(|error| error.to_string())?;
+    let mut rows = stmt
+        .query(params![project_id])
+        .map_err(|error| error.to_string())?;
     let mut groups: HashMap<String, ClusterGroup> = HashMap::new();
     let mut before_count = 0;
 
@@ -1292,7 +2297,10 @@ fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<Lib
 
         let token_counts = weighted_token_counts(&title, &abstract_text, categories.as_deref());
         let tokens = sorted_keywords(&token_counts, 14);
-        let keyword = tokens.first().cloned().unwrap_or_else(|| normalize_group_key(&field));
+        let keyword = tokens
+            .first()
+            .cloned()
+            .unwrap_or_else(|| normalize_group_key(&field));
         let key = format!("{field}::{keyword}");
         let group = groups.entry(key).or_insert_with(|| ClusterGroup {
             field: field.clone(),
@@ -1300,7 +2308,14 @@ fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<Lib
             ..ClusterGroup::default()
         });
         group.paper_count += 1;
-        let evidence_score = candidate_evidence_score(&title, &abstract_text, year, doi.as_deref(), url.as_deref(), &tokens);
+        let evidence_score = candidate_evidence_score(
+            &title,
+            &abstract_text,
+            year,
+            doi.as_deref(),
+            url.as_deref(),
+            &tokens,
+        );
         let candidate = RepresentativeCandidate {
             id: id.clone(),
             year,
@@ -1324,34 +2339,160 @@ fn cluster_library_connection(conn: &Connection, project_id: &str) -> Result<Lib
     }
 
     let mut sorted_groups = groups.into_values().collect::<Vec<_>>();
-    sorted_groups.sort_by(|a, b| b.paper_count.cmp(&a.paper_count).then_with(|| a.field.cmp(&b.field)));
+    sorted_groups.sort_by(|a, b| {
+        b.paper_count
+            .cmp(&a.paper_count)
+            .then_with(|| a.field.cmp(&b.field))
+            .then_with(|| a.keyword.cmp(&b.keyword))
+    });
 
     let timestamp = now_millis_string();
-    let mut hotspots = sorted_groups
-        .into_iter()
-        .take(160)
+    let retained_groups = sorted_groups.iter().take(160).cloned().collect::<Vec<_>>();
+    let mut hotspots = retained_groups
+        .iter()
+        .cloned()
         .enumerate()
         .map(|(index, group)| cluster_group_to_hotspot(project_id, group, index, &timestamp))
         .collect::<Vec<_>>();
     assign_similar_hotspots(&mut hotspots);
 
+    let retained_index = retained_groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| (format!("{}::{}", group.field, group.keyword), index))
+        .collect::<HashMap<_, _>>();
+    let mut memberships = Vec::with_capacity(before_count as usize);
+    for group in &sorted_groups {
+        let group_key = format!("{}::{}", group.field, group.keyword);
+        let target_index = retained_index.get(&group_key).copied().unwrap_or_else(|| {
+            hotspots
+                .iter()
+                .enumerate()
+                .filter(|(_, hotspot)| hotspot.field == group.field)
+                .max_by(|(_, left), (_, right)| {
+                    hotspot_group_overlap(left, group)
+                        .partial_cmp(&hotspot_group_overlap(right, group))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| left.paper_count.cmp(&right.paper_count))
+                })
+                .map(|(index, _)| index)
+                .unwrap_or_else(|| {
+                    hotspots
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, hotspot)| hotspot.paper_count)
+                .map(|(index, _)| index)
+                        .unwrap_or(0)
+                })
+        });
+        let hotspot = &hotspots[target_index];
+        let group_score = hotspot_group_overlap(hotspot, group);
+        for candidate in &group.representative_candidates {
+            memberships.push(v20_membership_for_candidate(
+                hotspot,
+                candidate,
+                group_score,
+            ));
+        }
+    }
+
+    let snapshot_id = format!("{}:v20:{}", project_id, timestamp);
+    let snapshot_hotspots = hotspots
+        .iter()
+        .map(|hotspot| {
+        Ok(SnapshotHotspot {
+            hotspot_id: hotspot.id.clone(),
+            payload_json: serde_json::to_string(hotspot).map_err(|error| error.to_string())?,
+            x: hotspot.coordinates.x as f64,
+            y: hotspot.coordinates.y as f64,
+            z: hotspot.coordinates.z as f64,
+            paper_count: hotspot.paper_count,
+            updated_at: hotspot.updated_at.clone(),
+        })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    write_snapshot_transaction(
+        conn,
+        &SnapshotWriteInput {
+        snapshot_id: snapshot_id.clone(),
+        project_id: project_id.to_string(),
+        algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+        paper_count: before_count,
+        created_at: timestamp.clone(),
+        hotspots: snapshot_hotspots,
+        memberships: memberships.clone(),
+        },
+    )?;
+
     Ok(LibraryClusterResult {
         before_count,
         cluster_count: hotspots.len() as i64,
+        snapshot_id,
+        membership_count: memberships.len() as i64,
         summary: format!(
-            "已从 SQLite 论文库 {before_count} 篇文献生成 {} 个 V20 热点；已写入关键词集中度、代表论文覆盖、近期动量和来源多样性。",
-            hotspots.len()
+            "已生成统一 V20 快照：{before_count} 篇论文、{} 个热点、{} 条论文归属。",
+            hotspots.len(),
+            memberships.len()
         ),
         hotspots,
     })
 }
 
-pub fn export_star_map_from_database_path(database_path: PathBuf, project_id: Option<String>) -> Result<StarMapExportResult, String> {
+fn hotspot_group_overlap(hotspot: &HotspotRecord, group: &ClusterGroup) -> f64 {
+    let total = group.keyword_counts.values().copied().sum::<i64>().max(1) as f64;
+    hotspot
+        .keywords
+        .iter()
+        .take(10)
+        .map(|keyword| *group.keyword_counts.get(keyword).unwrap_or(&0) as f64)
+        .sum::<f64>()
+        / total
+}
+
+fn v20_membership_for_candidate(
+    hotspot: &HotspotRecord,
+    candidate: &RepresentativeCandidate,
+    group_score: f64,
+) -> SnapshotMembership {
+    let hash_a = stable_hash(&format!("{}::x", candidate.id)) as f64 / u32::MAX as f64;
+    let hash_b = stable_hash(&format!("{}::y", candidate.id)) as f64 / u32::MAX as f64;
+    let hash_c = stable_hash(&format!("{}::z", candidate.id)) as f64 / u32::MAX as f64;
+    let radius = 1.6 + 8.4 * hash_a.sqrt();
+    let theta = hash_b * std::f64::consts::TAU;
+    let vertical = (hash_c * 2.0 - 1.0) * radius * 0.72;
+    let radial = (radius * radius - vertical * vertical).max(0.0).sqrt();
+    let representative_rank = hotspot
+        .analysis
+        .evidence_paper_ids
+        .iter()
+        .position(|id| id == &candidate.id)
+        .map(|index| index as i64 + 1);
+    SnapshotMembership {
+        paper_id: candidate.id.clone(),
+        hotspot_id: hotspot.id.clone(),
+        x: hotspot.coordinates.x as f64 + theta.cos() * radial,
+        y: hotspot.coordinates.y as f64 + theta.sin() * radial,
+        z: hotspot.coordinates.z as f64 + vertical,
+        representative_rank,
+        score: round_metric(
+            (0.45 + group_score * 0.45 + candidate.evidence_score.min(4.0) * 0.025).min(1.0),
+        ),
+    }
+}
+
+pub fn export_star_map_from_database_path(
+    database_path: PathBuf,
+    project_id: Option<String>,
+) -> Result<StarMapExportResult, String> {
     if !database_path.exists() || !database_path.is_file() {
-        return Err(format!("SQLite database does not exist: {}", database_path.display()));
+        return Err(format!(
+            "SQLite database does not exist: {}",
+            database_path.display()
+        ));
     }
     let project_id = project_id.unwrap_or_else(default_project_id);
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    let conn = Connection::open(&database_path)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     let cluster_result = cluster_library_connection(&conn, &project_id)?;
     let hotspots = cluster_result.hotspots;
     let mut evidence_ids = HashSet::new();
@@ -1415,10 +2556,14 @@ pub fn export_star_map_from_database_path(database_path: PathBuf, project_id: Op
     let evidence_profile = StarMapEvidenceProfile {
         evidence_coverage: round_metric(hotspots_with_evidence as f64 / hotspot_total),
         evolution_coverage: round_metric(hotspots_with_evolution as f64 / hotspot_total),
-        source_distribution_coverage: round_metric(hotspots_with_source_distribution as f64 / hotspot_total),
+        source_distribution_coverage: round_metric(
+            hotspots_with_source_distribution as f64 / hotspot_total,
+        ),
         average_representative_ids: round_metric(total_representative_ids as f64 / hotspot_total),
         sample_signal_count: sample_signal_ids.len(),
-        sample_signal_rate: round_metric(sample_signal_ids.len() as f64 / evidence_ids.len().max(1) as f64),
+        sample_signal_rate: round_metric(
+            sample_signal_ids.len() as f64 / evidence_ids.len().max(1) as f64,
+        ),
     };
 
     let sample_hotspots = hotspots
@@ -1429,7 +2574,13 @@ pub fn export_star_map_from_database_path(database_path: PathBuf, project_id: Op
             title: hotspot.title.clone(),
             field: hotspot.field.clone(),
             paper_count: hotspot.paper_count,
-            representative_ids: hotspot.analysis.evidence_paper_ids.iter().take(8).cloned().collect(),
+            representative_ids: hotspot
+                .analysis
+                .evidence_paper_ids
+                .iter()
+                .take(8)
+                .cloned()
+                .collect(),
             year_count: hotspot.evolution.len(),
             link_count: hotspot.similar_hotspots.len(),
         })
@@ -1478,10 +2629,14 @@ pub fn export_hotspot_evidence_from_database_path(
     max_papers: usize,
 ) -> Result<HotspotEvidenceExportResult, String> {
     if !database_path.exists() || !database_path.is_file() {
-        return Err(format!("SQLite database does not exist: {}", database_path.display()));
+        return Err(format!(
+            "SQLite database does not exist: {}",
+            database_path.display()
+        ));
     }
     let project_id = project_id.unwrap_or_else(default_project_id);
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    let conn = Connection::open(&database_path)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     let cluster_result = cluster_library_connection(&conn, &project_id)?;
     let hotspots = cluster_result.hotspots;
     if hotspots.is_empty() {
@@ -1514,8 +2669,12 @@ pub fn export_hotspot_evidence_from_database_path(
     }
     representative_ids.truncate(max_papers.max(1));
 
-    let representative_papers = query_paper_snapshots_by_ids(&conn, &project_id, &representative_ids)?;
-    let found_ids = representative_papers.iter().map(|paper| paper.id.clone()).collect::<HashSet<_>>();
+    let representative_papers =
+        query_paper_snapshots_by_ids(&conn, &project_id, &representative_ids)?;
+    let found_ids = representative_papers
+        .iter()
+        .map(|paper| paper.id.clone())
+        .collect::<HashSet<_>>();
     let missing_representative_ids = representative_ids
         .iter()
         .filter(|id| !found_ids.contains(*id))
@@ -1525,7 +2684,10 @@ pub fn export_hotspot_evidence_from_database_path(
         .similar_hotspots
         .iter()
         .filter_map(|relation| {
-            hotspots.iter().find(|hotspot| hotspot.id == relation.hotspot_id).map(|hotspot| EvidenceSimilarHotspot {
+            hotspots
+                .iter()
+                .find(|hotspot| hotspot.id == relation.hotspot_id)
+                .map(|hotspot| EvidenceSimilarHotspot {
                 hotspot_id: relation.hotspot_id.clone(),
                 title: hotspot.title.clone(),
                 field: hotspot.field.clone(),
@@ -1551,7 +2713,8 @@ pub fn export_hotspot_evidence_from_database_path(
             count: item.count,
         })
         .collect::<Vec<_>>();
-    let evidence_profile_markdown = build_hotspot_evidence_markdown(selected, &representative_papers);
+    let evidence_profile_markdown =
+        build_hotspot_evidence_markdown(selected, &representative_papers);
 
     Ok(HotspotEvidenceExportResult {
         generated_at: format!("unix-ms:{}", now_millis()),
@@ -1574,7 +2737,11 @@ pub fn export_hotspot_evidence_from_database_path(
     })
 }
 
-fn query_paper_snapshots_by_ids(conn: &Connection, project_id: &str, ids: &[String]) -> Result<Vec<EvidencePaperSnapshot>, String> {
+fn query_paper_snapshots_by_ids(
+    conn: &Connection,
+    project_id: &str,
+    ids: &[String],
+) -> Result<Vec<EvidencePaperSnapshot>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, source, title, abstract, authors, categories, field, published_date, year, url, doi
@@ -1608,7 +2775,10 @@ fn query_paper_snapshots_by_ids(conn: &Connection, project_id: &str, ids: &[Stri
     Ok(rows)
 }
 
-fn build_hotspot_evidence_markdown(hotspot: &HotspotRecord, papers: &[EvidencePaperSnapshot]) -> String {
+fn build_hotspot_evidence_markdown(
+    hotspot: &HotspotRecord,
+    papers: &[EvidencePaperSnapshot],
+) -> String {
     let sources = hotspot
         .source_distribution
         .iter()
@@ -1625,14 +2795,21 @@ fn build_hotspot_evidence_markdown(hotspot: &HotspotRecord, papers: &[EvidencePa
         .iter()
         .enumerate()
         .map(|(index, paper)| {
-            let year = paper.year.map(|value| value.to_string()).unwrap_or_else(|| "unknown".to_string());
+            let year = paper
+                .year
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
             format!(
                 "[{}] {}. {}, {}. {}",
                 index + 1,
                 paper.title,
                 paper.source,
                 year,
-                paper.url.as_deref().or(paper.doi.as_deref()).unwrap_or_default()
+                paper
+                    .url
+                    .as_deref()
+                    .or(paper.doi.as_deref())
+                    .unwrap_or_default()
             )
         })
         .collect::<Vec<_>>()
@@ -1644,28 +2821,74 @@ fn build_hotspot_evidence_markdown(hotspot: &HotspotRecord, papers: &[EvidencePa
         format!("- Paper count: {}", hotspot.paper_count),
         format!("- Trend: {}", hotspot.trend),
         format!("- Confidence: {:.2}", hotspot.confidence),
-        format!("- Keywords: {}", hotspot.keywords.iter().take(16).cloned().collect::<Vec<_>>().join(", ")),
-        format!("- Year evolution: {}", if years.is_empty() { "unknown".to_string() } else { years }),
-        format!("- Source distribution: {}", if sources.is_empty() { "unknown".to_string() } else { sources }),
+        format!(
+            "- Keywords: {}",
+            hotspot
+                .keywords
+                .iter()
+                .take(16)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        format!(
+            "- Year evolution: {}",
+            if years.is_empty() {
+                "unknown".to_string()
+            } else {
+                years
+            }
+        ),
+        format!(
+            "- Source distribution: {}",
+            if sources.is_empty() {
+                "unknown".to_string()
+            } else {
+                sources
+            }
+        ),
         "## Representative Papers".to_string(),
-        if representative_lines.is_empty() { "No representative papers found.".to_string() } else { representative_lines },
+        if representative_lines.is_empty() {
+            "No representative papers found.".to_string()
+        } else {
+            representative_lines
+        },
     ]
     .join("\n")
 }
 
 #[tauri::command]
-fn run_library_pressure_test(app: tauri::AppHandle, database_dir: Option<String>, rows: Option<i64>) -> Result<LibraryPressureTestResult, String> {
+fn run_library_pressure_test(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    rows: Option<i64>,
+) -> Result<LibraryPressureTestResult, String> {
     let base_dir = resolve_database_dir(&app, database_dir)?;
     let row_count = rows.unwrap_or(100_000).clamp(1_000, 200_000);
     run_library_pressure_test_in_dir(base_dir, row_count, true)
 }
 
-fn run_library_pressure_test_in_dir(base_dir: PathBuf, rows: i64, cleanup: bool) -> Result<LibraryPressureTestResult, String> {
-    fs::create_dir_all(&base_dir).map_err(|error| format!("Cannot create pressure test base dir {:?}: {error}", base_dir))?;
+fn run_library_pressure_test_in_dir(
+    base_dir: PathBuf,
+    rows: i64,
+    cleanup: bool,
+) -> Result<LibraryPressureTestResult, String> {
+    fs::create_dir_all(&base_dir).map_err(|error| {
+        format!(
+            "Cannot create pressure test base dir {:?}: {error}",
+            base_dir
+        )
+    })?;
     let test_dir = base_dir.join(format!("v7-pressure-test-{}", now_millis()));
-    fs::create_dir_all(&test_dir).map_err(|error| format!("Cannot create pressure test dir {:?}: {error}", test_dir))?;
+    fs::create_dir_all(&test_dir)
+        .map_err(|error| format!("Cannot create pressure test dir {:?}: {error}", test_dir))?;
     let database_path = test_dir.join("pressure-test-v7.sqlite");
-    let mut conn = Connection::open(&database_path).map_err(|error| format!("Cannot open pressure test database {:?}: {error}", database_path))?;
+    let mut conn = Connection::open(&database_path).map_err(|error| {
+        format!(
+            "Cannot open pressure test database {:?}: {error}",
+            database_path
+        )
+    })?;
     initialize_library_database(&conn)?;
 
     let project_id = "pressure-test-v7";
@@ -1703,7 +2926,9 @@ fn run_library_pressure_test_in_dir(base_dir: PathBuf, rows: i64, cleanup: bool)
         )
         .map_err(|error| error.to_string())?;
     let sample_rows = query_stmt
-        .query_map(params![project_id, "%retrieval%"], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map(params![project_id, "%retrieval%"], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -1713,7 +2938,9 @@ fn run_library_pressure_test_in_dir(base_dir: PathBuf, rows: i64, cleanup: bool)
     let cluster_started = Instant::now();
     let cluster_result = cluster_library_connection(&conn, project_id)?;
     let cluster_ms = cluster_started.elapsed().as_millis();
-    let size_bytes = fs::metadata(&database_path).map(|metadata| metadata.len()).unwrap_or_default();
+    let size_bytes = fs::metadata(&database_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
     drop(conn);
 
     let cleanup_done = if cleanup {
@@ -1759,6 +2986,216 @@ fn write_text_file(path: String, content: String) -> Result<(), String> {
     fs::write(path, content).map_err(|error| error.to_string())
 }
 
+fn credential_service(project_id: &str, service: &str) -> String {
+    let safe_project = project_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || matches!(value, '-' | '_') {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let safe_service = service
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || matches!(value, '-' | '_') {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("research-hotspots-desktop:{safe_project}:{safe_service}")
+}
+
+fn credential_entry(project_id: &str, service: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(&credential_service(project_id, service), "credential")
+        .map_err(|error| format!("Cannot access Windows Credential Manager: {error}"))
+}
+
+fn read_app_credential(project_id: &str, service: &str) -> Option<String> {
+    credential_entry(project_id, service)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+#[tauri::command]
+fn set_app_credential(
+    project_id: String,
+    service: String,
+    secret: String,
+) -> Result<CredentialStatus, String> {
+    if project_id.trim().is_empty() || service.trim().is_empty() {
+        return Err("Credential project and service are required.".to_string());
+    }
+    let entry = credential_entry(&project_id, &service)?;
+    if secret.trim().is_empty() {
+        let _ = entry.delete_credential();
+        return Ok(CredentialStatus { configured: false });
+    }
+    entry
+        .set_password(secret.trim())
+        .map_err(|error| format!("Cannot save credential: {error}"))?;
+    Ok(CredentialStatus { configured: true })
+}
+
+#[tauri::command]
+fn get_app_credential_status(project_id: String, service: String) -> CredentialStatus {
+    CredentialStatus {
+        configured: read_app_credential(&project_id, &service).is_some(),
+    }
+}
+
+#[tauri::command]
+fn delete_app_credential(project_id: String, service: String) -> Result<CredentialStatus, String> {
+    let entry = credential_entry(&project_id, &service)?;
+    let _ = entry.delete_credential();
+    Ok(CredentialStatus { configured: false })
+}
+
+fn ai_chat_endpoint(base_url: &str) -> String {
+    let normalized = base_url.trim().trim_end_matches('/');
+    if normalized.ends_with("/chat/completions") {
+        normalized.to_string()
+    } else if normalized.ends_with("/v1") {
+        format!("{normalized}/chat/completions")
+    } else {
+        format!("{normalized}/v1/chat/completions")
+    }
+}
+
+#[tauri::command]
+async fn ai_chat(
+    state: tauri::State<'_, AiTaskRegistry>,
+    input: AiChatInput,
+) -> Result<AiChatResult, String> {
+    if input.messages.is_empty() {
+        return Err("AI messages are required.".to_string());
+    }
+    let permit = state.try_acquire(input.task_key.clone())?;
+    let mut cancel_rx = permit.cancel_rx.clone();
+    let _permit = permit;
+    let service = format!("ai-{}", input.provider.trim().to_lowercase());
+    let api_key = read_app_credential(&input.project_id, &service)
+        .or_else(|| {
+            if input.use_env_key && input.provider.eq_ignore_ascii_case("deepseek") {
+                std::env::var("DEEPSEEK_API_KEY").ok()
+            } else {
+                None
+            }
+        })
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "缺少安全凭据。请在设置页重新保存 API Key。".to_string())?;
+    let base_url = if input.provider.eq_ignore_ascii_case("deepseek") {
+        std::env::var("DEEPSEEK_BASE_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(input.base_url)
+    } else {
+        input.base_url
+    };
+    let model = if input.provider.eq_ignore_ascii_case("deepseek") {
+        std::env::var("DEEPSEEK_MODEL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(input.model)
+    } else {
+        input.model
+    };
+    let total_seconds = if input.mode == "deep" || input.mode == "revised" {
+        180
+    } else {
+        90
+    };
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("Cannot initialize AI client: {error}"))?;
+    let endpoint = ai_chat_endpoint(&base_url);
+    let started = Instant::now();
+    let request = async {
+        let mut last_error = String::new();
+        for attempt in 0..2usize {
+            let response = tokio::select! {
+                changed = cancel_rx.changed() => {
+                    if changed.is_ok() && *cancel_rx.borrow() { return Err("AI_TASK_CANCELLED".to_string()); }
+                    continue;
+                }
+                result = client.post(&endpoint)
+                    .bearer_auth(&api_key)
+                    .json(&serde_json::json!({ "model": model, "messages": input.messages, "temperature": input.temperature }))
+                    .send() => result,
+            };
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+                    let payload = tokio::select! {
+                        changed = cancel_rx.changed() => {
+                            if changed.is_ok() && *cancel_rx.borrow() {
+                                return Err("AI_TASK_CANCELLED".to_string());
+                            }
+                            return Err("AI_TASK_CANCELLED".to_string());
+                        }
+                        result = response.json::<serde_json::Value>() => result.unwrap_or_else(|_| serde_json::json!({})),
+                    };
+                    if !status.is_success() {
+                        last_error = payload
+                            .pointer("/error/message")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("AI service returned an error.")
+                            .to_string();
+                        if attempt == 0 && (status.as_u16() == 429 || status.is_server_error()) {
+                            continue;
+                        }
+                        return Err(format!("{last_error} (HTTP {})", status.as_u16()));
+                    }
+                    let content = payload
+                        .pointer("/choices/0/message/content")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "AI 返回为空。".to_string())?;
+                    return Ok(AiChatResult {
+                        content: content.to_string(),
+                        retry_count: attempt,
+                        elapsed_ms: started.elapsed().as_millis(),
+                    });
+                }
+                Err(error) => {
+                    last_error = if error.is_timeout() {
+                        "AI 请求超时。".to_string()
+                    } else {
+                        format!("AI 网络请求失败：{error}")
+                    };
+                    if attempt == 0
+                        && (error.is_timeout() || error.is_connect() || error.is_request())
+                    {
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            }
+        }
+        Err(last_error)
+    };
+    match tokio::time::timeout(Duration::from_secs(total_seconds), request).await {
+        Ok(result) => result,
+        Err(_) => Err(format!("AI 请求超过 {total_seconds} 秒总超时。")),
+    }
+}
+
+#[tauri::command]
+fn cancel_ai_task(
+    state: tauri::State<'_, AiTaskRegistry>,
+    task_key: String,
+) -> Result<bool, String> {
+    state.cancel(&task_key)
+}
+
 #[tauri::command]
 fn read_markdown_exports() -> Result<Vec<MarkdownExport>, String> {
     let root = find_project_root().ok_or_else(|| "Cannot locate project root.".to_string())?;
@@ -1772,10 +3209,17 @@ fn read_markdown_exports() -> Result<Vec<MarkdownExport>, String> {
     for entry in fs::read_dir(&export_dir).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_lowercase() != "md" {
+        if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_lowercase()
+            != "md"
+        {
             continue;
         }
-        let content = fs::read_to_string(&path).map_err(|error| format!("Cannot read {:?}: {error}", path))?;
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("Cannot read {:?}: {error}", path))?;
         let file_name = path
             .file_name()
             .and_then(|value| value.to_str())
@@ -1793,7 +3237,10 @@ fn read_markdown_exports() -> Result<Vec<MarkdownExport>, String> {
 }
 
 #[tauri::command]
-fn run_cleaner_worker(papers: serde_json::Value, temp_dir: Option<String>) -> Result<serde_json::Value, String> {
+fn run_cleaner_worker(
+    papers: serde_json::Value,
+    temp_dir: Option<String>,
+) -> Result<serde_json::Value, String> {
     if !papers.is_array() {
         return Err("Cleaner input must be a paper array.".into());
     }
@@ -1801,7 +3248,10 @@ fn run_cleaner_worker(papers: serde_json::Value, temp_dir: Option<String>) -> Re
 }
 
 #[tauri::command]
-fn run_cluster_worker(papers: serde_json::Value, temp_dir: Option<String>) -> Result<serde_json::Value, String> {
+fn run_cluster_worker(
+    papers: serde_json::Value,
+    temp_dir: Option<String>,
+) -> Result<serde_json::Value, String> {
     if !papers.is_array() {
         return Err("Cluster input must be a paper array.".into());
     }
@@ -1809,12 +3259,19 @@ fn run_cluster_worker(papers: serde_json::Value, temp_dir: Option<String>) -> Re
 }
 
 #[tauri::command]
-fn run_health_check(app: tauri::AppHandle, database_dir: Option<String>, worker_temp_dir: Option<String>, export_dir: Option<String>, backup_dir: Option<String>) -> HealthCheckResult {
+fn run_health_check(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+    worker_temp_dir: Option<String>,
+    export_dir: Option<String>,
+    backup_dir: Option<String>,
+) -> HealthCheckResult {
     let python = resolve_python();
     let worker = find_worker_script("task_worker.py");
     let mut errors = Vec::new();
 
-    let (database_dir_value, database_path_value, database_dir_writable) = match resolve_database_dir(&app, database_dir) {
+    let (database_dir_value, database_path_value, database_dir_writable) =
+        match resolve_database_dir(&app, database_dir) {
         Ok(path) => {
             let writable = check_writable_dir(&path, "database", &mut errors);
             let database_path = path.join("research-hotspots-v7.sqlite");
@@ -1852,7 +3309,10 @@ fn run_health_check(app: tauri::AppHandle, database_dir: Option<String>, worker_
                 worker_ok = true;
             }
             Ok(output) => {
-                errors.push(format!("Python version check failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+                errors.push(format!(
+                    "Python version check failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
             }
             Err(error) => {
                 errors.push(format!("Cannot start Python: {error}"));
@@ -1876,9 +3336,11 @@ fn run_health_check(app: tauri::AppHandle, database_dir: Option<String>, worker_
 
 #[tauri::command]
 fn search_cnki_papers(input: CnkiSearchInput) -> Result<CnkiSearchOutput, String> {
-    let worker = find_worker_script("cnki_worker.py").ok_or_else(|| "Cannot locate workers/cnki_worker.py.".to_string())?;
+    let worker = find_worker_script("cnki_worker.py")
+        .ok_or_else(|| "Cannot locate workers/cnki_worker.py.".to_string())?;
     let base_dir = std::env::temp_dir().join("research-hotspots-cnki");
-    fs::create_dir_all(&base_dir).map_err(|error| format!("Cannot create CNKI temp dir: {error}"))?;
+    fs::create_dir_all(&base_dir)
+        .map_err(|error| format!("Cannot create CNKI temp dir: {error}"))?;
 
     let input_path = base_dir.join(format!(
         "cnki_search_{}_{}.json",
@@ -1902,11 +3364,23 @@ fn search_cnki_papers(input: CnkiSearchInput) -> Result<CnkiSearchOutput, String
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("CNKI worker failed: {}{}", stderr.trim(), if stdout.trim().is_empty() { "" } else { " / stdout contains JSON or logs" }));
+        return Err(format!(
+            "CNKI worker failed: {}{}",
+            stderr.trim(),
+            if stdout.trim().is_empty() {
+                ""
+            } else {
+                " / stdout contains JSON or logs"
+            }
+        ));
     }
 
-    let mut result: CnkiSearchOutput = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Cannot parse CNKI worker output: {error}; stderr={}", stderr.trim()))?;
+    let mut result: CnkiSearchOutput = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "Cannot parse CNKI worker output: {error}; stderr={}",
+            stderr.trim()
+        )
+    })?;
     if result.elapsed_ms == 0 {
         result.elapsed_ms = started.elapsed().as_millis();
     }
@@ -1914,16 +3388,26 @@ fn search_cnki_papers(input: CnkiSearchInput) -> Result<CnkiSearchOutput, String
 }
 
 #[tauri::command]
-fn sync_app17_galaxy_from_mysql(app: tauri::AppHandle, input: App17GalaxySyncInput) -> Result<App17GalaxySyncResult, String> {
+fn sync_app17_galaxy_from_mysql(
+    app: tauri::AppHandle,
+    input: App17GalaxySyncInput,
+) -> Result<App17GalaxySyncResult, String> {
     let started = Instant::now();
     let worker_output = run_app17_galaxy_worker(&input)?;
     if !worker_output.ok {
-        return Err(worker_output.message.unwrap_or_else(|| "App17 galaxy MySQL worker failed.".to_string()));
+        return Err(worker_output
+            .message
+            .unwrap_or_else(|| "App17 galaxy MySQL worker failed.".to_string()));
     }
-    let (mut conn, database_dir, database_path) = open_library_database(&app, input.database_dir.clone())?;
+    let (mut conn, database_dir, database_path) =
+        open_library_database(&app, input.database_dir.clone())?;
     let project_id = input.project_id.clone().unwrap_or_else(default_project_id);
     write_app17_galaxy_snapshot(&mut conn, &project_id, &worker_output)?;
-    let elapsed_ms = if worker_output.elapsed_ms > 0 { worker_output.elapsed_ms } else { started.elapsed().as_millis() };
+    let elapsed_ms = if worker_output.elapsed_ms > 0 {
+        worker_output.elapsed_ms
+    } else {
+        started.elapsed().as_millis()
+    };
     Ok(App17GalaxySyncResult {
         database_dir: database_dir.to_string_lossy().to_string(),
         database_path: database_path.to_string_lossy().to_string(),
@@ -1942,11 +3426,200 @@ fn sync_app17_galaxy_from_mysql(app: tauri::AppHandle, input: App17GalaxySyncInp
 }
 
 #[tauri::command]
-fn get_app17_galaxy_payload(app: tauri::AppHandle, input: App17GalaxyPayloadInput) -> Result<App17GalaxyPayload, String> {
+fn get_app17_galaxy_payload(
+    app: tauri::AppHandle,
+    input: App17GalaxyPayloadInput,
+) -> Result<App17GalaxyPayload, String> {
     let (conn, _, _) = open_library_database(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
     build_app17_galaxy_payload(&conn, &project_id, &mode)
+}
+
+#[tauri::command]
+fn get_v20_analysis_state(
+    app: tauri::AppHandle,
+    input: App17GalaxyPayloadInput,
+) -> Result<Option<AnalysisState>, String> {
+    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    read_analysis_state(&conn, &project_id)
+}
+
+#[tauri::command]
+fn get_v20_hotspot_snapshot(
+    app: tauri::AppHandle,
+    input: App17GalaxyPayloadInput,
+) -> Result<V20HotspotSnapshot, String> {
+    let (conn, _, database_path) = open_library_database(&app, input.database_dir)?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let database_key = normalized_database_key(&database_path);
+    let Some(rows) = read_unified_hotspot_rows(&conn, &project_id)? else {
+        return Ok(V20HotspotSnapshot {
+            database_key,
+            project_id,
+            active_snapshot_id: String::new(),
+            snapshot_id: None,
+            algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+            paper_count: 0,
+            hotspot_count: 0,
+            membership_count: 0,
+            generated_at: now_millis_string(),
+            hotspots: Vec::new(),
+        });
+    };
+    let hotspots = rows
+        .hotspots
+        .iter()
+        .map(|row| {
+            serde_json::from_str::<HotspotRecord>(&row.payload_json)
+                .map_err(|error| format!("Invalid V20 hotspot payload {}: {error}", row.hotspot_id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(V20HotspotSnapshot {
+        database_key,
+        project_id,
+        active_snapshot_id: rows.state.active_snapshot_id.clone(),
+        snapshot_id: Some(rows.state.active_snapshot_id),
+        algorithm_version: rows.state.algorithm_version,
+        paper_count: rows.state.paper_count,
+        hotspot_count: rows.state.hotspot_count,
+        membership_count: rows.state.membership_count,
+        generated_at: rows.state.generated_at,
+        hotspots,
+    })
+}
+
+#[tauri::command]
+fn get_v20_galaxy_payload(
+    app: tauri::AppHandle,
+    input: App17GalaxyPayloadInput,
+) -> Result<V20GalaxyPayload, String> {
+    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
+    build_v20_galaxy_payload(&conn, &project_id, &mode)
+}
+
+fn build_v20_galaxy_payload(
+    conn: &Connection,
+    project_id: &str,
+    mode: &str,
+) -> Result<V20GalaxyPayload, String> {
+    let Some(rows) = read_unified_galaxy_rows(conn, project_id)? else {
+        return Ok(V20GalaxyPayload {
+            ready: false,
+            message: "需要生成统一星图快照。请前往分析流水线显式运行热点建模。".to_string(),
+            source: "none".to_string(),
+            mode: mode.to_string(),
+            generated_at: now_millis_string(),
+            snapshot_id: None,
+            paper_count: 0,
+            hotspot_count: 0,
+            topic_count: 0,
+            fields: Vec::new(),
+            papers: Vec::new(),
+            hotspots: Vec::new(),
+            hotspot_records: Vec::new(),
+        });
+    };
+    let hotspot_records = rows
+        .hotspots
+        .iter()
+        .map(|row| {
+            serde_json::from_str::<HotspotRecord>(&row.payload_json)
+                .map_err(|error| format!("Invalid V20 hotspot payload {}: {error}", row.hotspot_id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let hotspot_by_id = hotspot_records
+        .iter()
+        .map(|hotspot| (hotspot.id.as_str(), hotspot))
+        .collect::<HashMap<_, _>>();
+    let mut years = HashMap::new();
+    let mut year_stmt = conn
+        .prepare("SELECT id, year FROM papers WHERE project_id = ?1")
+        .map_err(|error| error.to_string())?;
+    for row in year_stmt
+        .query_map(params![project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })
+        .map_err(|error| error.to_string())?
+    {
+        let (id, year) = row.map_err(|error| error.to_string())?;
+        years.insert(id, year);
+    }
+    let papers = rows
+        .memberships
+        .iter()
+        .filter_map(|membership| {
+        let hotspot = hotspot_by_id.get(membership.hotspot_id.as_str())?;
+        Some(App17GalaxyPaperPoint {
+                raw_paper_id: membership.paper_id.clone(),
+                scoped_paper_id: scoped_id(project_id, &membership.paper_id),
+                field: hotspot.field.clone(),
+                topic_id: hotspot.topic_id,
+                x: membership.x,
+                y: membership.y,
+                z: membership.z,
+            year: years.get(&membership.paper_id).copied().flatten(),
+            color: app17_topic_color(&hotspot.field, hotspot.topic_id),
+                size: if membership
+                    .representative_rank
+                    .is_some_and(|rank| rank <= 10)
+                {
+                    3.6
+                } else {
+                    2.5
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    let hotspots = hotspot_records
+        .iter()
+        .enumerate()
+        .map(|(index, hotspot)| App17GalaxyHotspotPoint {
+            id: hotspot.id.clone(),
+            field: hotspot.field.clone(),
+            topic_id: hotspot.topic_id,
+            title: hotspot.title.clone(),
+            label: hotspot.label.clone(),
+            summary: hotspot.summary.clone(),
+            trend: hotspot.trend.clone(),
+            paper_count: hotspot.paper_count,
+            x: hotspot.coordinates.x as f64,
+            y: hotspot.coordinates.y as f64,
+            z: hotspot.coordinates.z as f64,
+            color: app17_palette_color(index),
+            size: (10.0 + (hotspot.paper_count as f64).sqrt() * 0.7).clamp(10.0, 26.0),
+            keywords: hotspot.keywords.clone(),
+            review: None,
+        })
+        .collect::<Vec<_>>();
+    let mut fields = hotspot_records
+        .iter()
+        .map(|hotspot| hotspot.field.clone())
+        .collect::<Vec<_>>();
+    fields.sort();
+    fields.dedup();
+    Ok(V20GalaxyPayload {
+        ready: !papers.is_empty() && !hotspots.is_empty(),
+        message: format!(
+            "已加载统一 V20 快照：{} 篇论文、{} 个热点。",
+            papers.len(),
+            hotspots.len()
+        ),
+        source: "v20-sqlite".to_string(),
+        mode: mode.to_string(),
+        generated_at: rows.state.generated_at.clone(),
+        snapshot_id: Some(rows.state.active_snapshot_id),
+        paper_count: papers.len(),
+        hotspot_count: hotspots.len(),
+        topic_count: hotspots.len(),
+        fields,
+        papers,
+        hotspots,
+        hotspot_records,
+    })
 }
 
 #[tauri::command]
@@ -1964,20 +3637,32 @@ async fn get_app17_hotspot_evidence(
     let max_papers = input.max_papers.unwrap_or(12).clamp(1, 50);
 
     tauri::async_runtime::spawn_blocking(move || {
-        app17_hotspot_evidence_from_database_path(database_path, &project_id, &field, input.topic_id, max_papers)
+        app17_hotspot_evidence_from_database_path(
+            database_path,
+            &project_id,
+            &field,
+            input.topic_id,
+            max_papers,
+        )
     })
     .await
     .map_err(|error| format!("App17 hotspot evidence task failed: {error}"))?
 }
 
 #[tauri::command]
-async fn load_app17_galaxy(app: tauri::AppHandle, input: App17GalaxySyncInput) -> Result<App17GalaxyPayload, String> {
+async fn load_app17_galaxy(
+    app: tauri::AppHandle,
+    input: App17GalaxySyncInput,
+) -> Result<App17GalaxyPayload, String> {
     tauri::async_runtime::spawn_blocking(move || load_app17_galaxy_blocking(&app, input))
         .await
         .map_err(|error| format!("App17 galaxy load task failed: {error}"))?
 }
 
-fn load_app17_galaxy_blocking(app: &tauri::AppHandle, input: App17GalaxySyncInput) -> Result<App17GalaxyPayload, String> {
+fn load_app17_galaxy_blocking(
+    app: &tauri::AppHandle,
+    input: App17GalaxySyncInput,
+) -> Result<App17GalaxyPayload, String> {
     let project_id = input.project_id.clone().unwrap_or_else(default_project_id);
     let mode = input.mode.clone().unwrap_or_else(|| "nebula".to_string());
     let mysql_result = run_app17_galaxy_worker(&input);
@@ -1990,8 +3675,7 @@ fn load_app17_galaxy_blocking(app: &tauri::AppHandle, input: App17GalaxySyncInpu
             payload.source = "mysql".to_string();
             payload.message = format!(
                 "Loaded App17 galaxy from local MySQL: {} paper coordinates, {} hotspots.",
-                payload.paper_count,
-                payload.hotspot_count
+                payload.paper_count, payload.hotspot_count
             );
             Ok(payload)
         }
@@ -2000,18 +3684,33 @@ fn load_app17_galaxy_blocking(app: &tauri::AppHandle, input: App17GalaxySyncInpu
             input.database_dir.clone(),
             &project_id,
             &mode,
-            worker_output.message.unwrap_or_else(|| "App17 MySQL worker returned an empty result.".to_string()),
+            worker_output
+                .message
+                .unwrap_or_else(|| "App17 MySQL worker returned an empty result.".to_string()),
         ),
-        Err(error) => load_app17_galaxy_cache_after_mysql_error(app, input.database_dir.clone(), &project_id, &mode, error),
+        Err(error) => load_app17_galaxy_cache_after_mysql_error(
+            app,
+            input.database_dir.clone(),
+            &project_id,
+            &mode,
+            error,
+        ),
     }
 }
 
-fn load_app17_galaxy_cache_after_mysql_error(app: &tauri::AppHandle, database_dir: Option<String>, project_id: &str, mode: &str, mysql_error: String) -> Result<App17GalaxyPayload, String> {
+fn load_app17_galaxy_cache_after_mysql_error(
+    app: &tauri::AppHandle,
+    database_dir: Option<String>,
+    project_id: &str,
+    mode: &str,
+    mysql_error: String,
+) -> Result<App17GalaxyPayload, String> {
     let (conn, _, _) = open_library_database(app, database_dir)?;
     let mut payload = build_app17_galaxy_payload(&conn, project_id, mode)?;
     if payload.ready {
         payload.source = "sqlite-cache".to_string();
-        payload.message = format!("Using cached App17 galaxy because MySQL refresh failed: {mysql_error}");
+        payload.message =
+            format!("Using cached App17 galaxy because MySQL refresh failed: {mysql_error}");
     } else {
         payload.source = "none".to_string();
         payload.message = format!("Cannot load App17 galaxy from local MySQL and no SQLite cache is available: {mysql_error}");
@@ -2020,14 +3719,20 @@ fn load_app17_galaxy_cache_after_mysql_error(app: &tauri::AppHandle, database_di
 }
 
 fn run_app17_galaxy_worker(input: &App17GalaxySyncInput) -> Result<App17MysqlGalaxyOutput, String> {
-    let worker = find_worker_script("app17_galaxy_worker.py").ok_or_else(|| "Cannot locate workers/app17_galaxy_worker.py.".to_string())?;
+    let worker = find_worker_script("app17_galaxy_worker.py")
+        .ok_or_else(|| "Cannot locate workers/app17_galaxy_worker.py.".to_string())?;
     let worker_temp_dir = input
         .worker_temp_dir
         .clone()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    fs::create_dir_all(&worker_temp_dir).map_err(|error| format!("Cannot create app17 galaxy temp dir {:?}: {error}", worker_temp_dir))?;
+    fs::create_dir_all(&worker_temp_dir).map_err(|error| {
+        format!(
+            "Cannot create app17 galaxy temp dir {:?}: {error}",
+            worker_temp_dir
+        )
+    })?;
     let input_path = worker_temp_dir.join(format!(
         "app17_galaxy_sync_{}_{}.json",
         std::process::id(),
@@ -2049,21 +3754,48 @@ fn run_app17_galaxy_worker(input: &App17GalaxySyncInput) -> Result<App17MysqlGal
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
         if let Ok(value) = serde_json::from_slice::<App17MysqlGalaxyOutput>(&output.stdout) {
-            return Err(value.message.unwrap_or_else(|| "App17 galaxy worker failed.".to_string()));
+            return Err(value
+                .message
+                .unwrap_or_else(|| "App17 galaxy worker failed.".to_string()));
         }
-        return Err(format!("App17 galaxy worker failed: {}{}", stderr.trim(), if stdout.trim().is_empty() { "" } else { " / stdout contained non-result output" }));
+        return Err(format!(
+            "App17 galaxy worker failed: {}{}",
+            stderr.trim(),
+            if stdout.trim().is_empty() {
+                ""
+            } else {
+                " / stdout contained non-result output"
+        }
+        ));
     }
-    serde_json::from_slice::<App17MysqlGalaxyOutput>(&output.stdout)
-        .map_err(|error| format!("Cannot parse app17 galaxy worker output: {error}; stderr={}", stderr.trim()))
+    serde_json::from_slice::<App17MysqlGalaxyOutput>(&output.stdout).map_err(|error| {
+        format!(
+            "Cannot parse app17 galaxy worker output: {error}; stderr={}",
+            stderr.trim()
+        )
+    })
 }
 
-fn write_app17_galaxy_snapshot(conn: &mut Connection, project_id: &str, output: &App17MysqlGalaxyOutput) -> Result<(), String> {
+fn write_app17_galaxy_snapshot(
+    conn: &mut Connection,
+    project_id: &str,
+    output: &App17MysqlGalaxyOutput,
+) -> Result<(), String> {
     let tx = conn.transaction().map_err(|error| error.to_string())?;
-    tx.execute("DELETE FROM app17_paper_topics WHERE project_id = ?1", params![project_id])
+    tx.execute(
+        "DELETE FROM app17_paper_topics WHERE project_id = ?1",
+        params![project_id],
+    )
         .map_err(|error| error.to_string())?;
-    tx.execute("DELETE FROM app17_hotspots WHERE project_id = ?1", params![project_id])
+    tx.execute(
+        "DELETE FROM app17_hotspots WHERE project_id = ?1",
+        params![project_id],
+    )
         .map_err(|error| error.to_string())?;
-    tx.execute("DELETE FROM app17_hotspot_reviews WHERE project_id = ?1", params![project_id])
+    tx.execute(
+        "DELETE FROM app17_hotspot_reviews WHERE project_id = ?1",
+        params![project_id],
+    )
         .map_err(|error| error.to_string())?;
 
     {
@@ -2076,7 +3808,17 @@ fn write_app17_galaxy_snapshot(conn: &mut Connection, project_id: &str, output: 
             .map_err(|error| error.to_string())?;
         for row in &output.paper_topics {
             let scoped_paper_id = scoped_id(project_id, &row.raw_paper_id);
-            stmt.execute(params![project_id, row.raw_paper_id, scoped_paper_id, row.field, row.topic_id, row.x, row.y, row.z, row.year])
+            stmt.execute(params![
+                project_id,
+                row.raw_paper_id,
+                scoped_paper_id,
+                row.field,
+                row.topic_id,
+                row.x,
+                row.y,
+                row.z,
+                row.year
+            ])
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -2114,7 +3856,13 @@ fn write_app17_galaxy_snapshot(conn: &mut Connection, project_id: &str, output: 
             )
             .map_err(|error| error.to_string())?;
         for row in &output.hotspot_reviews {
-            stmt.execute(params![project_id, row.field, row.topic_id, row.review_cn, row.created_at])
+            stmt.execute(params![
+                project_id,
+                row.field,
+                row.topic_id,
+                row.review_cn,
+                row.created_at
+            ])
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -2122,7 +3870,11 @@ fn write_app17_galaxy_snapshot(conn: &mut Connection, project_id: &str, output: 
     tx.commit().map_err(|error| error.to_string())
 }
 
-fn build_app17_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -> Result<App17GalaxyPayload, String> {
+fn build_app17_galaxy_payload(
+    conn: &Connection,
+    project_id: &str,
+    mode: &str,
+) -> Result<App17GalaxyPayload, String> {
     let mut stmt = conn
         .prepare(
             "SELECT raw_paper_id, scoped_paper_id, field, topic_id, x, y, z, year
@@ -2165,7 +3917,10 @@ fn build_app17_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -
     }
 
     let normalized = normalize_app17_coordinates(&raw_papers);
-    let mut fields = raw_papers.iter().map(|row| row.2.clone()).collect::<Vec<_>>();
+    let mut fields = raw_papers
+        .iter()
+        .map(|row| row.2.clone())
+        .collect::<Vec<_>>();
     fields.sort();
     fields.dedup();
 
@@ -2176,10 +3931,19 @@ fn build_app17_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -
         .zip(normalized.iter())
         .map(|(row, &(x, y, z))| {
             let key = (row.2.clone(), row.3);
-            topic_members.entry(key.clone()).or_default().push((x, y, z));
+            topic_members
+                .entry(key.clone())
+                .or_default()
+                .push((x, y, z));
             let color = app17_topic_color(&key.0, key.1);
             let recency = row.7.map(|year| (current_year - year).max(0)).unwrap_or(99);
-            let size = if recency >= 8 { 2.2 } else if recency >= 4 { 2.8 } else { 3.4 };
+            let size = if recency >= 8 {
+                2.2
+            } else if recency >= 4 {
+                2.8
+            } else {
+                3.4
+            };
             App17GalaxyPaperPoint {
                 raw_paper_id: row.0.clone(),
                 scoped_paper_id: row.1.clone(),
@@ -2230,10 +3994,15 @@ fn build_app17_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -
         if members.is_empty() {
             continue;
         }
-        let (sum_x, sum_y, sum_z) = members.iter().fold((0.0, 0.0, 0.0), |acc, value| (acc.0 + value.0, acc.1 + value.1, acc.2 + value.2));
+        let (sum_x, sum_y, sum_z) = members.iter().fold((0.0, 0.0, 0.0), |acc, value| {
+            (acc.0 + value.0, acc.1 + value.1, acc.2 + value.2)
+        });
         let count = members.len() as f64;
         let paper_count = row.paper_count.unwrap_or(members.len() as i64).max(1);
-        let label = row.topic_label.clone().unwrap_or_else(|| format!("{}_{}", row.field, row.topic_id));
+        let label = row
+            .topic_label
+            .clone()
+            .unwrap_or_else(|| format!("{}_{}", row.field, row.topic_id));
         let title = row
             .title_cn
             .clone()
@@ -2246,8 +4015,14 @@ fn build_app17_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -
             topic_id: row.topic_id,
             title,
             label: label.clone(),
-            summary: row.summary_cn.clone().unwrap_or_else(|| "App17 MySQL hotspot snapshot.".to_string()),
-            trend: row.trend_status.clone().unwrap_or_else(|| "Unknown".to_string()),
+            summary: row
+                .summary_cn
+                .clone()
+                .unwrap_or_else(|| "App17 MySQL hotspot snapshot.".to_string()),
+            trend: row
+                .trend_status
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string()),
             paper_count,
             x: sum_x / count,
             y: sum_y / count,
@@ -2261,7 +4036,11 @@ fn build_app17_galaxy_payload(conn: &Connection, project_id: &str, mode: &str) -
 
     Ok(App17GalaxyPayload {
         ready: true,
-        message: format!("Loaded App17 galaxy snapshot: {} papers, {} hotspots.", papers.len(), hotspots.len()),
+        message: format!(
+            "Loaded App17 galaxy snapshot: {} papers, {} hotspots.",
+            papers.len(),
+            hotspots.len()
+        ),
         source: "sqlite-cache".to_string(),
         mode: mode.to_string(),
         generated_at: now_millis_string(),
@@ -2282,21 +4061,39 @@ pub fn export_app17_visual_review_snapshot(
     const SCHEMA_VERSION: u32 = 1;
 
     if !database_path.exists() || !database_path.is_file() {
-        return Err(format!("SQLite database does not exist: {}", database_path.display()));
+        return Err(format!(
+            "SQLite database does not exist: {}",
+            database_path.display()
+        ));
     }
-    let database_path = database_path
-        .canonicalize()
-        .map_err(|error| format!("Cannot resolve database path {}: {error}", database_path.display()))?;
+    let database_path = database_path.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve database path {}: {error}",
+            database_path.display()
+        )
+    })?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| format!("Cannot open SQLite library {:?} in read-only mode: {error}", database_path))?;
+        .map_err(|error| {
+            format!(
+                "Cannot open SQLite library {:?} in read-only mode: {error}",
+                database_path
+            )
+        })?;
     let payload = build_app17_galaxy_payload(&conn, &project_id, "nebula")?;
     if !payload.ready || payload.hotspots.is_empty() {
-        return Err(format!("App17 visual review snapshot is unavailable: {}", payload.message));
+        return Err(format!(
+            "App17 visual review snapshot is unavailable: {}",
+            payload.message
+        ));
     }
 
-    fs::create_dir_all(&output_dir)
-        .map_err(|error| format!("Cannot create visual review directory {}: {error}", output_dir.display()))?;
+    fs::create_dir_all(&output_dir).map_err(|error| {
+        format!(
+            "Cannot create visual review directory {}: {error}",
+            output_dir.display()
+        )
+    })?;
     let evidence_dir = output_dir.join("evidence");
     let papers_dir = output_dir.join("papers");
     if evidence_dir.exists() {
@@ -2307,15 +4104,21 @@ pub fn export_app17_visual_review_snapshot(
         fs::remove_dir_all(&papers_dir)
             .map_err(|error| format!("Cannot clear {}: {error}", papers_dir.display()))?;
     }
-    fs::create_dir_all(&evidence_dir).map_err(|error| format!("Cannot create {}: {error}", evidence_dir.display()))?;
-    fs::create_dir_all(&papers_dir).map_err(|error| format!("Cannot create {}: {error}", papers_dir.display()))?;
+    fs::create_dir_all(&evidence_dir)
+        .map_err(|error| format!("Cannot create {}: {error}", evidence_dir.display()))?;
+    fs::create_dir_all(&papers_dir)
+        .map_err(|error| format!("Cannot create {}: {error}", papers_dir.display()))?;
 
     let mut hotspot_indexes = (0..payload.hotspots.len()).collect::<Vec<_>>();
     hotspot_indexes.sort_by(|left, right| {
         payload.hotspots[*left]
             .field
             .cmp(&payload.hotspots[*right].field)
-            .then_with(|| payload.hotspots[*left].topic_id.cmp(&payload.hotspots[*right].topic_id))
+            .then_with(|| {
+                payload.hotspots[*left]
+                    .topic_id
+                    .cmp(&payload.hotspots[*right].topic_id)
+            })
     });
 
     let mut topics = Vec::with_capacity(hotspot_indexes.len());
@@ -2352,8 +4155,12 @@ pub fn export_app17_visual_review_snapshot(
         });
     }
 
-    let database_metadata = fs::metadata(&database_path)
-        .map_err(|error| format!("Cannot read SQLite metadata {}: {error}", database_path.display()))?;
+    let database_metadata = fs::metadata(&database_path).map_err(|error| {
+        format!(
+            "Cannot read SQLite metadata {}: {error}",
+            database_path.display()
+        )
+    })?;
     let database_modified_ms = database_metadata
         .modified()
         .ok()
@@ -2405,7 +4212,8 @@ fn query_app17_visual_review_topic_papers(
              ORDER BY p.id ASC",
         )
         .map_err(|error| error.to_string())?;
-    let rows = stmt.query_map(params![project_id, field, topic_id], row_to_paper)
+    let rows = stmt
+        .query_map(params![project_id, field, topic_id], row_to_paper)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -2414,7 +4222,8 @@ fn query_app17_visual_review_topic_papers(
 
 fn write_visual_review_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let json = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
-    fs::write(path, format!("{json}\n")).map_err(|error| format!("Cannot write {}: {error}", path.display()))
+    fs::write(path, format!("{json}\n"))
+        .map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
 fn app17_hotspot_evidence_from_database_path(
@@ -2425,11 +4234,21 @@ fn app17_hotspot_evidence_from_database_path(
     max_papers: usize,
 ) -> Result<HotspotEvidenceExportResult, String> {
     if !database_path.exists() || !database_path.is_file() {
-        return Err(format!("SQLite database does not exist: {}", database_path.display()));
+        return Err(format!(
+            "SQLite database does not exist: {}",
+            database_path.display()
+        ));
     }
     let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
-    query_app17_hotspot_evidence(&conn, &database_path, project_id, field, topic_id, max_papers)
+    query_app17_hotspot_evidence(
+        &conn,
+        &database_path,
+        project_id,
+        field,
+        topic_id,
+        max_papers,
+    )
 }
 
 fn query_app17_hotspot_evidence(
@@ -2469,7 +4288,9 @@ fn query_app17_hotspot_evidence(
         )
         .map_err(|error| error.to_string())?;
     if topic_member_count == 0 {
-        return Err(format!("App17 hotspot has no paper coordinates: {field} / topic {topic_id}"));
+        return Err(format!(
+            "App17 hotspot has no paper coordinates: {field} / topic {topic_id}"
+        ));
     }
 
     let label = hotspot
@@ -2507,7 +4328,9 @@ fn query_app17_hotspot_evidence(
         )
         .map_err(|error| error.to_string())?;
     let representative_papers = representative_stmt
-        .query_map(params![project_id, field, topic_id, max_papers as i64], |row| {
+        .query_map(
+            params![project_id, field, topic_id, max_papers as i64],
+            |row| {
             Ok(EvidencePaperSnapshot {
                 id: row.get(0)?,
                 source: row.get(1)?,
@@ -2521,13 +4344,17 @@ fn query_app17_hotspot_evidence(
                 url: row.get(9)?,
                 doi: row.get(10)?,
             })
-        })
+            },
+        )
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     drop(representative_stmt);
 
-    let representative_ids = representative_papers.iter().map(|paper| paper.id.clone()).collect::<Vec<_>>();
+    let representative_ids = representative_papers
+        .iter()
+        .map(|paper| paper.id.clone())
+        .collect::<Vec<_>>();
 
     let mut year_stmt = conn
         .prepare(
@@ -2643,14 +4470,21 @@ fn build_app17_hotspot_evidence_markdown(
         .iter()
         .enumerate()
         .map(|(index, paper)| {
-            let year = paper.year.map(|value| value.to_string()).unwrap_or_else(|| "unknown".to_string());
+            let year = paper
+                .year
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
             format!(
                 "[{}] {}. {}, {}. {}",
                 index + 1,
                 paper.title,
                 paper.source,
                 year,
-                paper.url.as_deref().or(paper.doi.as_deref()).unwrap_or_default()
+                paper
+                    .url
+                    .as_deref()
+                    .or(paper.doi.as_deref())
+                    .unwrap_or_default()
             )
         })
         .collect::<Vec<_>>()
@@ -2661,12 +4495,34 @@ fn build_app17_hotspot_evidence_markdown(
         format!("- Field: {field}"),
         format!("- Paper count: {paper_count}"),
         format!("- Trend: {trend}"),
-        format!("- Keywords: {}", keywords.iter().take(16).cloned().collect::<Vec<_>>().join(", ")),
+        format!(
+            "- Keywords: {}",
+            keywords
+                .iter()
+                .take(16)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         format!("- Summary: {summary}"),
-        format!("- Year evolution: {}", if years.is_empty() { "unknown" } else { &years }),
-        format!("- Source distribution: {}", if sources.is_empty() { "unknown" } else { &sources }),
+        format!(
+            "- Year evolution: {}",
+            if years.is_empty() { "unknown" } else { &years }
+        ),
+        format!(
+            "- Source distribution: {}",
+            if sources.is_empty() {
+                "unknown"
+            } else {
+                &sources
+            }
+        ),
         "## Representative Papers".to_string(),
-        if representative_lines.is_empty() { "No representative papers found.".to_string() } else { representative_lines },
+        if representative_lines.is_empty() {
+            "No representative papers found.".to_string()
+        } else {
+            representative_lines
+        },
     ]
     .join("\n")
 }
@@ -2724,7 +4580,10 @@ fn percentile(sorted: &[f64], percentile: f64) -> f64 {
     }
 }
 
-fn read_app17_latest_reviews(conn: &Connection, project_id: &str) -> Result<HashMap<(String, i64), String>, String> {
+fn read_app17_latest_reviews(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<HashMap<(String, i64), String>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT field, topic_id, review_cn
@@ -2733,7 +4592,9 @@ fn read_app17_latest_reviews(conn: &Connection, project_id: &str) -> Result<Hash
              ORDER BY created_at DESC",
         )
         .map_err(|error| error.to_string())?;
-    let mut rows = stmt.query(params![project_id]).map_err(|error| error.to_string())?;
+    let mut rows = stmt
+        .query(params![project_id])
+        .map_err(|error| error.to_string())?;
     let mut reviews = HashMap::new();
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
         let field: String = row.get(0).map_err(|error| error.to_string())?;
@@ -2745,7 +4606,10 @@ fn read_app17_latest_reviews(conn: &Connection, project_id: &str) -> Result<Hash
 }
 
 fn app17_palette_color(index: usize) -> String {
-    const PALETTE: [&str; 10] = ["#38bdf8", "#818cf8", "#34d399", "#f472b6", "#fbbf24", "#a78bfa", "#2dd4bf", "#fb7185", "#fcd34d", "#94a3b8"];
+    const PALETTE: [&str; 10] = [
+        "#38bdf8", "#818cf8", "#34d399", "#f472b6", "#fbbf24", "#a78bfa", "#2dd4bf", "#fb7185",
+        "#fcd34d", "#94a3b8",
+    ];
     PALETTE[index % PALETTE.len()].to_string()
 }
 
@@ -2757,19 +4621,27 @@ fn app17_keywords_from_label(label: &str) -> Vec<String> {
     label
         .split('_')
         .map(str::trim)
-        .filter(|value| !value.is_empty() && value.chars().any(|character| character.is_alphabetic()))
+        .filter(|value| {
+            !value.is_empty() && value.chars().any(|character| character.is_alphabetic())
+        })
         .take(8)
         .map(str::to_string)
         .collect()
 }
 
-fn run_worker_task(task_name: &str, payload: serde_json::Value, temp_dir: Option<String>) -> Result<serde_json::Value, String> {
-    let worker = find_worker_script("task_worker.py").ok_or_else(|| "Cannot locate workers/task_worker.py.".to_string())?;
+fn run_worker_task(
+    task_name: &str,
+    payload: serde_json::Value,
+    temp_dir: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let worker = find_worker_script("task_worker.py")
+        .ok_or_else(|| "Cannot locate workers/task_worker.py.".to_string())?;
     let base_dir = temp_dir
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    fs::create_dir_all(&base_dir).map_err(|error| format!("Cannot create worker temp dir: {error}"))?;
+    fs::create_dir_all(&base_dir)
+        .map_err(|error| format!("Cannot create worker temp dir: {error}"))?;
 
     let input_path = base_dir.join(format!(
         "research_hotspots_{}_{}_{}.json",
@@ -2799,7 +4671,8 @@ fn run_worker_task(task_name: &str, payload: serde_json::Value, temp_dir: Option
         return Err(format!("Python worker failed: {}", stderr.trim()));
     }
 
-    serde_json::from_slice(&output.stdout).map_err(|error| format!("Cannot parse worker output: {error}"))
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Cannot parse worker output: {error}"))
 }
 
 struct PaperFileImportRunner {
@@ -2845,7 +4718,9 @@ impl PaperFileImportRunner {
 
     fn write_manifest(&self, status: &str, message: &str) -> Result<(), String> {
         if let Some(parent) = self.manifest_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Cannot create import manifest dir {:?}: {error}", parent))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Cannot create import manifest dir {:?}: {error}", parent)
+            })?;
         }
         let manifest = PaperFileImportManifest {
             task_id: self.task_id.clone(),
@@ -2866,18 +4741,29 @@ impl PaperFileImportRunner {
             recovery: import_recovery_info(),
         };
         let json = serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
-        fs::write(&self.manifest_path, format!("{json}\n")).map_err(|error| format!("Cannot write import manifest {:?}: {error}", self.manifest_path))
+        fs::write(&self.manifest_path, format!("{json}\n")).map_err(|error| {
+            format!(
+                "Cannot write import manifest {:?}: {error}",
+                self.manifest_path
+            )
+        })
     }
 
     fn wait_if_paused(&self) -> bool {
-        while self.control.paused.load(Ordering::SeqCst) && !self.control.cancelled.load(Ordering::SeqCst) {
+        while self.control.paused.load(Ordering::SeqCst)
+            && !self.control.cancelled.load(Ordering::SeqCst)
+        {
             self.emit("paused", "Import paused.");
             thread::sleep(Duration::from_millis(250));
         }
         !self.control.cancelled.load(Ordering::SeqCst)
     }
 
-    fn process_row(&mut self, row: HashMap<String, String>, row_index: usize) -> Result<bool, String> {
+    fn process_row(
+        &mut self,
+        row: HashMap<String, String>,
+        row_index: usize,
+    ) -> Result<bool, String> {
         if !self.wait_if_paused() {
             self.emit("cancelled", "Import cancelled.");
             return Ok(false);
@@ -2988,14 +4874,20 @@ fn run_mysql_paper_import_task(
     input: MysqlPaperImportInput,
     control: PaperImportTaskControl,
 ) -> Result<(), String> {
-    let worker = find_worker_script("mysql_import_worker.py").ok_or_else(|| "Cannot locate workers/mysql_import_worker.py.".to_string())?;
+    let worker = find_worker_script("mysql_import_worker.py")
+        .ok_or_else(|| "Cannot locate workers/mysql_import_worker.py.".to_string())?;
     let worker_temp_dir = input
         .worker_temp_dir
         .clone()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    fs::create_dir_all(&worker_temp_dir).map_err(|error| format!("Cannot create MySQL import temp dir {:?}: {error}", worker_temp_dir))?;
+    fs::create_dir_all(&worker_temp_dir).map_err(|error| {
+        format!(
+            "Cannot create MySQL import temp dir {:?}: {error}",
+            worker_temp_dir
+        )
+    })?;
 
     let input_path = worker_temp_dir.join(format!(
         "mysql_paper_import_{}_{}.json",
@@ -3008,11 +4900,20 @@ fn run_mysql_paper_import_task(
     )
     .map_err(|error| format!("Cannot write MySQL import worker input: {error}"))?;
 
-    let (conn, database_dir, database_path) = open_library_database(&app, input.database_dir.clone())?;
+    let (conn, database_dir, database_path) =
+        open_library_database(&app, input.database_dir.clone())?;
     let project_id = input.project_id.clone().unwrap_or_else(default_project_id);
     let manifest_path = import_manifest_path(&database_dir, &task_id);
-    let host_label = input.host.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or("127.0.0.1");
-    let database_label = input.database.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or("research_hotspots");
+    let host_label = input
+        .host
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("127.0.0.1");
+    let database_label = input
+        .database
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("research_hotspots");
     let source_label = format!(
         "mysql_{}_{}_papers",
         safe_manifest_label(host_label),
@@ -3067,13 +4968,21 @@ fn run_mysql_paper_import_task(
             return Ok(());
         }
 
-        let line = line.map_err(|error| format!("Cannot read MySQL import worker output: {error}"))?;
+        let line =
+            line.map_err(|error| format!("Cannot read MySQL import worker output: {error}"))?;
         if line.trim().is_empty() {
             continue;
         }
-        let event: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|error| format!("Cannot parse MySQL import worker event: {error}; line={}", line.chars().take(500).collect::<String>()))?;
-        let event_type = event.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+        let event: serde_json::Value = serde_json::from_str(&line).map_err(|error| {
+            format!(
+                "Cannot parse MySQL import worker event: {error}; line={}",
+                line.chars().take(500).collect::<String>()
+            )
+        })?;
+        let event_type = event
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
         match event_type {
             "count" => {
                 runner.total_rows = event.get("total").and_then(|value| value.as_i64());
@@ -3082,7 +4991,10 @@ fn run_mysql_paper_import_task(
             }
             "batch" => {
                 let read_rows = event.get("read").and_then(|value| value.as_i64());
-                let invalid_rows = event.get("invalidRows").and_then(|value| value.as_i64()).unwrap_or(0);
+                let invalid_rows = event
+                    .get("invalidRows")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
                 if invalid_rows > 0 {
                     runner.stats.invalid_rows += invalid_rows;
                 }
@@ -3147,7 +5059,10 @@ fn run_mysql_paper_import_task(
     }
 
     if !saw_done {
-        runner.emit("running", "MySQL worker finished without an explicit done event.");
+        runner.emit(
+            "running",
+            "MySQL worker finished without an explicit done event.",
+        );
     }
     runner.finish()
 }
@@ -3157,9 +5072,11 @@ pub fn import_paper_file_to_library_path(
     project_id: Option<String>,
     file_path: PathBuf,
 ) -> Result<PaperFileImportSummary, String> {
-    fs::create_dir_all(&database_dir).map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    fs::create_dir_all(&database_dir)
+        .map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    let conn = Connection::open(&database_path)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     initialize_library_database(&conn)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     let file_name = file_path
@@ -3216,10 +5133,15 @@ fn import_recovery_info() -> PaperImportRecoveryInfo {
 }
 
 fn import_manifest_path(database_dir: &Path, task_id: &str) -> PathBuf {
-    database_dir.join("import-manifests").join(format!("{task_id}.json"))
+    database_dir
+        .join("import-manifests")
+        .join(format!("{task_id}.json"))
 }
 
-fn import_file_with_runner(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> Result<(), String> {
+fn import_file_with_runner(
+    runner: &mut PaperFileImportRunner,
+    file_path: &PathBuf,
+) -> Result<(), String> {
     let extension = file_path
         .extension()
         .and_then(|value| value.to_str())
@@ -3248,10 +5170,14 @@ fn import_csv_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> R
         .map(normalize_import_key)
         .collect::<Vec<_>>();
     for (index, record) in reader.records().enumerate() {
-        let record = record.map_err(|error| format!("Cannot read CSV record {}: {error}", index + 1))?;
+        let record =
+            record.map_err(|error| format!("Cannot read CSV record {}: {error}", index + 1))?;
         let mut row = HashMap::new();
         for (value_index, value) in record.iter().enumerate() {
-            let key = headers.get(value_index).cloned().unwrap_or_else(|| format!("col{value_index}"));
+            let key = headers
+                .get(value_index)
+                .cloned()
+                .unwrap_or_else(|| format!("col{value_index}"));
             row.insert(key, value.trim().to_string());
         }
         if !runner.process_row(row, index + 1)? {
@@ -3261,11 +5187,16 @@ fn import_csv_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> R
     runner.finish()
 }
 
-fn import_json_lines_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> Result<(), String> {
-    let file = File::open(file_path).map_err(|error| format!("Cannot open JSONL file {:?}: {error}", file_path))?;
+fn import_json_lines_file(
+    runner: &mut PaperFileImportRunner,
+    file_path: &PathBuf,
+) -> Result<(), String> {
+    let file = File::open(file_path)
+        .map_err(|error| format!("Cannot open JSONL file {:?}: {error}", file_path))?;
     let reader = BufReader::new(file);
     for (index, line) in reader.lines().enumerate() {
-        let line = line.map_err(|error| format!("Cannot read JSONL line {}: {error}", index + 1))?;
+        let line =
+            line.map_err(|error| format!("Cannot read JSONL line {}: {error}", index + 1))?;
         if line.trim().is_empty() {
             continue;
         }
@@ -3290,8 +5221,10 @@ fn import_json_lines_file(runner: &mut PaperFileImportRunner, file_path: &PathBu
 }
 
 fn import_json_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> Result<(), String> {
-    let file = File::open(file_path).map_err(|error| format!("Cannot open JSON file {:?}: {error}", file_path))?;
-    let value: serde_json::Value = serde_json::from_reader(BufReader::new(file)).map_err(|error| format!("Cannot parse JSON file: {error}"))?;
+    let file = File::open(file_path)
+        .map_err(|error| format!("Cannot open JSON file {:?}: {error}", file_path))?;
+    let value: serde_json::Value = serde_json::from_reader(BufReader::new(file))
+        .map_err(|error| format!("Cannot parse JSON file: {error}"))?;
     let mut processed_any = false;
     match &value {
         serde_json::Value::Array(rows) => {
@@ -3345,8 +5278,12 @@ fn import_json_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> 
     runner.finish()
 }
 
-fn import_bibtex_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> Result<(), String> {
-    let file = File::open(file_path).map_err(|error| format!("Cannot open BibTeX file {:?}: {error}", file_path))?;
+fn import_bibtex_file(
+    runner: &mut PaperFileImportRunner,
+    file_path: &PathBuf,
+) -> Result<(), String> {
+    let file = File::open(file_path)
+        .map_err(|error| format!("Cannot open BibTeX file {:?}: {error}", file_path))?;
     let reader = BufReader::new(file);
     let mut entry = String::new();
     let mut in_entry = false;
@@ -3395,7 +5332,8 @@ fn import_bibtex_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -
 }
 
 fn import_ris_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> Result<(), String> {
-    let file = File::open(file_path).map_err(|error| format!("Cannot open RIS file {:?}: {error}", file_path))?;
+    let file = File::open(file_path)
+        .map_err(|error| format!("Cannot open RIS file {:?}: {error}", file_path))?;
     let reader = BufReader::new(file);
     let mut entry: HashMap<String, Vec<String>> = HashMap::new();
     let mut last_tag = String::new();
@@ -3442,7 +5380,12 @@ fn import_ris_file(runner: &mut PaperFileImportRunner, file_path: &PathBuf) -> R
     runner.finish()
 }
 
-fn update_bibtex_entry_depth(line: &str, seen_open: &mut bool, close_char: &mut char, depth: &mut i64) {
+fn update_bibtex_entry_depth(
+    line: &str,
+    seen_open: &mut bool,
+    close_char: &mut char,
+    depth: &mut i64,
+) {
     let mut quoted = false;
     let mut escaped = false;
     for character in line.chars() {
@@ -3483,7 +5426,10 @@ fn update_bibtex_entry_depth(line: &str, seen_open: &mut bool, close_char: &mut 
     }
 }
 
-fn bibtex_entry_to_import_row(entry_text: &str, entry_index: usize) -> Option<HashMap<String, String>> {
+fn bibtex_entry_to_import_row(
+    entry_text: &str,
+    entry_index: usize,
+) -> Option<HashMap<String, String>> {
     let trimmed = entry_text.trim();
     if !trimmed.starts_with('@') {
         return None;
@@ -3493,7 +5439,11 @@ fn bibtex_entry_to_import_row(entry_text: &str, entry_index: usize) -> Option<Ha
     if matches!(entry_type.as_str(), "comment" | "preamble" | "string") {
         return None;
     }
-    let close_char = if trimmed.as_bytes().get(open_index) == Some(&b'{') { '}' } else { ')' };
+    let close_char = if trimmed.as_bytes().get(open_index) == Some(&b'{') {
+        '}'
+    } else {
+        ')'
+    };
     let close_index = trimmed.rfind(close_char)?;
     let inner = &trimmed[open_index + 1..close_index];
     let (entry_key, fields_text) = split_first_top_level_comma(inner)?;
@@ -3503,12 +5453,28 @@ fn bibtex_entry_to_import_row(entry_text: &str, entry_index: usize) -> Option<Ha
     let doi = normalize_bibliography_doi(&first_bibtex_field(&fields, &["doi"]));
     let url = first_bibtex_field(&fields, &["url", "howpublished", "pdf"]);
     let categories = first_bibtex_field(&fields, &["keywords", "keyword", "subjects", "tags"]);
-    let venue = first_bibtex_field(&fields, &["journal", "journaltitle", "booktitle", "conference", "publisher", "school", "institution"]);
+    let venue = first_bibtex_field(
+        &fields,
+        &[
+            "journal",
+            "journaltitle",
+            "booktitle",
+            "conference",
+            "publisher",
+            "school",
+            "institution",
+        ],
+    );
     let year_text = first_bibtex_field(&fields, &["date", "year", "urldate", "month"]);
     let authors = normalize_bibtex_authors(&first_bibtex_field(&fields, &["author", "editor"]));
-    let source_hint = first_bibtex_field(&fields, &["archiveprefix", "eprinttype", "url", "eprint"]);
+    let source_hint =
+        first_bibtex_field(&fields, &["archiveprefix", "eprinttype", "url", "eprint"]);
     let id_seed = format!("{entry_key}:{title}:{doi}:{url}:{entry_index}");
-    let resolved_url = if url.trim().is_empty() { doi_to_url(&doi) } else { url };
+    let resolved_url = if url.trim().is_empty() {
+        doi_to_url(&doi)
+    } else {
+        url
+    };
 
     let mut row = HashMap::new();
     put_import_value(&mut row, "id", format!("bib:{}", hash_string(&id_seed)));
@@ -3517,7 +5483,11 @@ fn bibtex_entry_to_import_row(entry_text: &str, entry_index: usize) -> Option<Ha
     put_import_value(&mut row, "year", year_text.clone());
     put_import_value(&mut row, "published", year_text);
     put_import_value(&mut row, "source", normalize_import_source(&source_hint));
-    put_import_value(&mut row, "field", bibliography_field_from_terms(&categories, &venue, &entry_type));
+    put_import_value(
+        &mut row,
+        "field",
+        bibliography_field_from_terms(&categories, &venue, &entry_type),
+    );
     put_import_value(&mut row, "doi", doi);
     put_import_value(&mut row, "url", resolved_url);
     put_import_value(&mut row, "authors", authors);
@@ -3629,7 +5599,10 @@ fn clean_single_bibtex_value(raw_value: &str) -> String {
     let mut value = raw_value.trim().trim_end_matches(',').trim().to_string();
     loop {
         let trimmed = value.trim();
-        if trimmed.len() >= 2 && ((trimmed.starts_with('{') && trimmed.ends_with('}')) || (trimmed.starts_with('(') && trimmed.ends_with(')'))) {
+        if trimmed.len() >= 2
+            && ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('(') && trimmed.ends_with(')')))
+        {
             value = trimmed[1..trimmed.len() - 1].trim().to_string();
             continue;
         }
@@ -3654,7 +5627,11 @@ fn decode_latexish_text(value: &str) -> String {
                     continue;
                 }
                 if next.is_ascii_alphabetic() {
-                    while chars.peek().copied().is_some_and(|item| item.is_ascii_alphabetic() || item == '*') {
+                    while chars
+                        .peek()
+                        .copied()
+                        .is_some_and(|item| item.is_ascii_alphabetic() || item == '*')
+                    {
                         chars.next();
                     }
                     continue;
@@ -3685,7 +5662,11 @@ fn normalize_bibtex_authors(value: &str) -> String {
         .split(" and ")
         .map(|author| {
             let author = collapse_whitespace(author);
-            let parts = author.split(',').map(str::trim).filter(|part| !part.is_empty()).collect::<Vec<_>>();
+            let parts = author
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
             if parts.len() >= 2 {
                 format!("{} {}", parts[1..].join(" "), parts[0])
             } else {
@@ -3700,13 +5681,19 @@ fn normalize_bibtex_authors(value: &str) -> String {
 fn parse_ris_tag_line(line: &str) -> Option<(String, String)> {
     let bytes = line.as_bytes();
     if bytes.len() >= 5 && bytes[2] == b' ' && bytes[3] == b' ' && bytes[4] == b'-' {
-        Some((line[..2].to_string(), line.get(5..).unwrap_or_default().trim().to_string()))
+        Some((
+            line[..2].to_string(),
+            line.get(5..).unwrap_or_default().trim().to_string(),
+        ))
     } else {
         None
     }
 }
 
-fn ris_entry_to_import_row(entry: &HashMap<String, Vec<String>>, entry_index: usize) -> HashMap<String, String> {
+fn ris_entry_to_import_row(
+    entry: &HashMap<String, Vec<String>>,
+    entry_index: usize,
+) -> HashMap<String, String> {
     let title = first_ris_value(entry, &["TI", "T1", "CT"]);
     let abstract_text = first_ris_value(entry, &["AB", "N2"]);
     let doi = normalize_bibliography_doi(&first_ris_value(entry, &["DO"]));
@@ -3726,9 +5713,21 @@ fn ris_entry_to_import_row(entry: &HashMap<String, Vec<String>>, entry_index: us
     put_import_value(&mut row, "year", year_text.clone());
     put_import_value(&mut row, "published", year_text);
     put_import_value(&mut row, "source", normalize_import_source(&source_hint));
-    put_import_value(&mut row, "field", bibliography_field_from_terms(&categories, &venue, &entry_type));
+    put_import_value(
+        &mut row,
+        "field",
+        bibliography_field_from_terms(&categories, &venue, &entry_type),
+    );
     put_import_value(&mut row, "doi", doi.clone());
-    put_import_value(&mut row, "url", if url.trim().is_empty() { doi_to_url(&doi) } else { url });
+    put_import_value(
+        &mut row,
+        "url",
+        if url.trim().is_empty() {
+            doi_to_url(&doi)
+        } else {
+            url
+        },
+    );
     put_import_value(&mut row, "authors", authors);
     put_import_value(&mut row, "categories", categories);
     row
@@ -3833,7 +5832,11 @@ fn json_value_to_import_row(value: &serde_json::Value) -> Option<HashMap<String,
             serde_json::Value::Bool(value) => value.to_string(),
             serde_json::Value::Array(values) => values
                 .iter()
-                .filter_map(|item| item.as_str().map(str::to_string).or_else(|| item.as_i64().map(|number| number.to_string())))
+                .filter_map(|item| {
+                    item.as_str()
+                        .map(str::to_string)
+                        .or_else(|| item.as_i64().map(|number| number.to_string()))
+                })
                 .collect::<Vec<_>>()
                 .join("; "),
             serde_json::Value::Null => String::new(),
@@ -3844,31 +5847,122 @@ fn json_value_to_import_row(value: &serde_json::Value) -> Option<HashMap<String,
     Some(row)
 }
 
-fn normalize_import_paper(row: HashMap<String, String>, index: usize) -> Result<PaperRecord, String> {
-    let title = pick_import_value(&row, &["title", "name", "display_name", "paper_title", "标题", "题名", "论文标题", "文献标题"]);
+fn normalize_import_paper(
+    row: HashMap<String, String>,
+    index: usize,
+) -> Result<PaperRecord, String> {
+    let title = pick_import_value(
+        &row,
+        &[
+            "title",
+            "name",
+            "display_name",
+            "paper_title",
+            "标题",
+            "题名",
+            "论文标题",
+            "文献标题",
+        ],
+    );
     if title.trim().is_empty() {
         return Err("Missing title.".to_string());
     }
-    let abstract_text = pick_import_value(&row, &["abstract", "summary", "description", "摘要", "简介", "内容摘要"]);
+    let abstract_text = pick_import_value(
+        &row,
+        &[
+            "abstract",
+            "summary",
+            "description",
+            "摘要",
+            "简介",
+            "内容摘要",
+        ],
+    );
     let doi = empty_to_none(pick_import_value(&row, &["doi"]));
-    let url = empty_to_none(pick_import_value(&row, &["url", "link", "landing_page_url", "pdf_url", "链接", "网址"]));
-    let year_text = pick_import_value(&row, &["year", "publication_year", "published_year", "date", "published", "发表年份", "年份", "出版年"]);
-    let source = normalize_import_source(&pick_import_value(&row, &["source", "database", "platform", "来源", "数据源"]));
+    let url = empty_to_none(pick_import_value(
+        &row,
+        &["url", "link", "landing_page_url", "pdf_url", "链接", "网址"],
+    ));
+    let year_text = pick_import_value(
+        &row,
+        &[
+            "year",
+            "publication_year",
+            "published_year",
+            "date",
+            "published",
+            "发表年份",
+            "年份",
+            "出版年",
+        ],
+    );
+    let source = normalize_import_source(&pick_import_value(
+        &row,
+        &["source", "database", "platform", "来源", "数据源"],
+    ));
     let id = pick_import_value(&row, &["id", "paper_id", "paperid", "编号", "文献编号"]);
-    let fallback_id = format!("local:{}", hash_string(&format!("{}:{}:{}:{}", title, doi.as_deref().unwrap_or_default(), url.as_deref().unwrap_or_default(), index)));
+    let fallback_id = format!(
+        "local:{}",
+        hash_string(&format!(
+            "{}:{}:{}:{}",
+            title,
+            doi.as_deref().unwrap_or_default(),
+            url.as_deref().unwrap_or_default(),
+            index
+        ))
+    );
     let timestamp = now_millis_string();
 
     Ok(PaperRecord {
-        id: if id.trim().is_empty() { fallback_id } else { id },
+        id: if id.trim().is_empty() {
+            fallback_id
+        } else {
+            id
+        },
         project_id: None,
         source,
         title: collapse_whitespace(&title).chars().take(500).collect(),
-        abstract_text: collapse_whitespace(if abstract_text.trim().is_empty() { "Local imported paper without abstract." } else { &abstract_text }).chars().take(5000).collect(),
-        authors: empty_to_none(pick_import_value(&row, &["authors", "author", "creator", "作者", "作者列表"])),
-        categories: empty_to_none(pick_import_value(&row, &["categories", "keywords", "concepts", "tags", "关键词", "主题词"])),
+        abstract_text: collapse_whitespace(if abstract_text.trim().is_empty() {
+            "Local imported paper without abstract."
+        } else {
+            &abstract_text
+        })
+        .chars()
+        .take(5000)
+        .collect(),
+        authors: empty_to_none(pick_import_value(
+            &row,
+            &["authors", "author", "creator", "作者", "作者列表"],
+        )),
+        categories: empty_to_none(pick_import_value(
+            &row,
+            &[
+                "categories",
+                "keywords",
+                "concepts",
+                "tags",
+                "关键词",
+                "主题词",
+            ],
+        )),
         field: {
-            let field = pick_import_value(&row, &["field", "discipline", "subject", "category", "学科", "领域", "分类"]);
-            if field.trim().is_empty() { "Local Import".to_string() } else { collapse_whitespace(&field) }
+            let field = pick_import_value(
+                &row,
+                &[
+                    "field",
+                    "discipline",
+                    "subject",
+                    "category",
+                    "学科",
+                    "领域",
+                    "分类",
+                ],
+            );
+            if field.trim().is_empty() {
+                "Local Import".to_string()
+            } else {
+                collapse_whitespace(&field)
+            }
         },
         published_date: empty_to_none(year_text.clone()),
         year: extract_year(&year_text),
@@ -3997,7 +6091,11 @@ fn pressure_test_paper(index: i64) -> PaperRecord {
         source: "local".to_string(),
         title,
         abstract_text,
-        authors: Some(format!("Author {}; Author {}", index % 97, (index + 13) % 97)),
+        authors: Some(format!(
+            "Author {}; Author {}",
+            index % 97,
+            (index + 13) % 97
+        )),
         categories: Some(format!("{topic}; {method}; large library benchmark")),
         field: field.to_string(),
         published_date: Some(year.to_string()),
@@ -4021,7 +6119,11 @@ fn check_writable_dir(path: &PathBuf, label: &str, errors: &mut Vec<String>) -> 
         errors.push(format!("Cannot create {label} dir {:?}: {error}", path));
         return false;
     }
-    let test_path = path.join(format!("research_hotspots_health_{}_{}.tmp", std::process::id(), now_millis()));
+    let test_path = path.join(format!(
+        "research_hotspots_health_{}_{}.tmp",
+        std::process::id(),
+        now_millis()
+    ));
     match fs::write(&test_path, "ok") {
         Ok(_) => {
             let _ = fs::remove_file(test_path);
@@ -4034,33 +6136,207 @@ fn check_writable_dir(path: &PathBuf, label: &str, errors: &mut Vec<String>) -> 
     }
 }
 
-fn open_library_database(app: &tauri::AppHandle, database_dir: Option<String>) -> Result<(Connection, PathBuf, PathBuf), String> {
+fn default_library_resource_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    let resource_database = app
+        .path()
+        .resolve(
+            "default-library/research-hotspots-v7.sqlite",
+            BaseDirectory::Resource,
+        )
+        .map_err(|error| format!("无法解析默认论文库资源路径: {error}"))?;
+    let resource_manifest = app
+        .path()
+        .resolve(
+            "default-library/default-library-manifest.json",
+            BaseDirectory::Resource,
+        )
+        .map_err(|error| format!("无法解析默认论文库清单路径: {error}"))?;
+    if resource_database.is_file() && resource_manifest.is_file() {
+        return Ok((resource_database, resource_manifest));
+    }
+
+    if cfg!(debug_assertions) {
+        if let Some(root) = find_project_root() {
+            let development_dir = root.join("release-assets").join("default-library");
+            let development_database = development_dir.join("research-hotspots-v7.sqlite");
+            let development_manifest = development_dir.join("default-library-manifest.json");
+            if development_database.is_file() && development_manifest.is_file() {
+                return Ok((development_database, development_manifest));
+            }
+        }
+    }
+
+    Err("当前安装包未包含默认论文数据。请使用空白库或现有 SQLite 论文库。".to_string())
+}
+
+fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibraryManifest, String> {
+    let (_, manifest_path) = default_library_resource_paths(app)?;
+    let content = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("无法读取默认论文库清单 {:?}: {error}", manifest_path))?;
+    let manifest: DefaultLibraryManifest = serde_json::from_str(&content)
+        .map_err(|error| format!("默认论文库清单格式无效: {error}"))?;
+    if manifest.manifest_schema_version != 2
+        || manifest.database_schema_version != research_hotspots_core::V20_SCHEMA_VERSION
+    {
+        return Err("默认论文库清单版本与当前应用不兼容。".to_string());
+    }
+    if manifest.generator_version != "v20-seed-2"
+        || manifest.project_id.trim().is_empty()
+        || manifest.snapshot_id.trim().is_empty()
+        || manifest.membership_count != manifest.paper_count
+    {
+        return Err("默认论文库清单缺少有效的 V20 快照信息。".to_string());
+    }
+    Ok(manifest)
+}
+
+fn validate_library_location_impl(
+    app: &tauri::AppHandle,
+    database_dir: &str,
+    mode: &str,
+) -> Result<LibraryLocationValidation, String> {
+    let mode_name = mode.trim().to_ascii_lowercase();
+    let mode = FirstRunMode::parse(&mode_name).map_err(|_| "未知的论文库初始化方式。".to_string())?;
+    if database_dir.trim().is_empty() {
+        return Err("请先选择论文库目录。".to_string());
+    }
+
+    let database_dir = PathBuf::from(database_dir.trim());
+    let seed_size = if mode == FirstRunMode::Seed { Some(load_default_library_manifest(app)?.size_bytes) } else { None };
+    let core = research_hotspots_core::validate_first_run_location(
+        &database_dir,
+        mode,
+        &default_project_id(),
+        seed_size,
+    )?;
+    let existing_database_valid = core.existing.is_some();
+    let (paper_count, hotspot_count, membership_count, snapshot_id, database_schema_version) = core.existing
+        .as_ref()
+        .map(|value| (value.paper_count, value.hotspot_count, value.membership_count, value.snapshot_id.clone(), Some(value.schema_version)))
+        .unwrap_or((0, 0, 0, None, None));
+    let message = match core.message.as_str() {
+        "ok" => "目录检查通过。".to_string(),
+        "LIBRARY_DIRECTORY_NOT_WRITABLE" => "所选目录不可写，请选择其他目录。".to_string(),
+        "EXISTING_LIBRARY_NOT_FOUND" => "所选目录中未找到 research-hotspots-v7.sqlite。".to_string(),
+        "TARGET_ALREADY_EXISTS" => "所选目录已包含有效论文库。请选择“使用现有库”，应用不会覆盖它。".to_string(),
+        "TARGET_DATABASE_INVALID" => "所选目录已包含同名但无效的数据库。请移走该文件或选择其他目录。".to_string(),
+        "INSUFFICIENT_DISK_SPACE" => format!("可用空间不足：至少需要 {} MB。", core.required_space_bytes / 1024 / 1024),
+        error => error.to_string(),
+    };
+
+    Ok(LibraryLocationValidation {
+        valid: core.valid,
+        database_dir: database_dir.to_string_lossy().to_string(),
+        database_path: core.database_path.to_string_lossy().to_string(),
+        writable: core.writable,
+        available_space_bytes: core.available_space_bytes,
+        required_space_bytes: core.required_space_bytes,
+        existing_database: core.existing_database,
+        existing_database_valid,
+        paper_count,
+        hotspot_count,
+        membership_count,
+        requires_modeling: existing_database_valid && snapshot_id.is_none(),
+        snapshot_id,
+        database_schema_version,
+        message,
+    })
+}
+
+fn create_empty_library(database_path: &Path) -> Result<(), String> {
+    create_empty_library_atomically(database_path, &default_project_id())
+        .map(|_| ())
+        .map_err(|error| match error.as_str() {
+            "TARGET_ALREADY_EXISTS" => "目标目录已存在论文库，应用不会覆盖它。".to_string(),
+            _ => format!("空白论文库安全初始化失败: {error}"),
+        })
+}
+
+fn install_seed_library(
+    app: &tauri::AppHandle,
+    database_path: &Path,
+) -> Result<(), String> {
+    if database_path.exists() {
+        return Err("目标目录已存在论文库，应用不会覆盖它。".to_string());
+    }
+    let (seed_path, _) = default_library_resource_paths(app)?;
+    let manifest = load_default_library_manifest(app)?;
+    let expectation = SeedExpectation {
+        sha256: manifest.sha256,
+        size_bytes: manifest.size_bytes,
+        schema_version: manifest.database_schema_version,
+        project_id: manifest.project_id,
+        snapshot_id: manifest.snapshot_id,
+        paper_count: manifest.paper_count,
+        hotspot_count: manifest.hotspot_count,
+        membership_count: manifest.membership_count,
+    };
+    install_seed_library_atomically(&seed_path, database_path, &expectation).map(|_| ()).map_err(|error| match error.as_str() {
+        "TARGET_ALREADY_EXISTS" => "目标目录已存在论文库，应用不会覆盖它。".to_string(),
+        _ => format!("默认论文库安全安装失败: {error}"),
+    })
+}
+
+fn validate_database_file(database_path: &Path) -> Result<LibraryFileValidation, String> {
+    let project_id = default_project_id();
+    let verified = validate_library_candidate_file(database_path, &project_id)
+        .map_err(|error| format!("SQLite 论文库验证失败: {error}"))?;
+    Ok(LibraryFileValidation {
+        schema_version: verified.schema_version,
+        snapshot_id: verified.snapshot_id,
+        paper_count: verified.paper_count,
+        hotspot_count: verified.hotspot_count,
+        membership_count: verified.membership_count,
+        integrity_check: "ok".to_string(),
+    })
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| format!("无法读取文件 {:?}: {error}", path))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("无法计算 SHA-256: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn open_library_database(
+    app: &tauri::AppHandle,
+    database_dir: Option<String>,
+) -> Result<(Connection, PathBuf, PathBuf), String> {
     let database_dir = resolve_database_dir(app, database_dir)?;
-    fs::create_dir_all(&database_dir).map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    fs::create_dir_all(&database_dir)
+        .map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
+    recover_interrupted_restore(&database_dir)?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    let conn = Connection::open(&database_path).map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
+    let conn = Connection::open(&database_path)
+        .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     initialize_library_database(&conn)?;
     Ok((conn, database_dir, database_path))
 }
 
-fn resolve_database_dir(app: &tauri::AppHandle, database_dir: Option<String>) -> Result<PathBuf, String> {
+fn resolve_database_dir(
+    _app: &tauri::AppHandle,
+    database_dir: Option<String>,
+) -> Result<PathBuf, String> {
     if let Some(value) = database_dir.filter(|value| !value.trim().is_empty()) {
         return Ok(PathBuf::from(value));
     }
 
+    if cfg!(debug_assertions) {
     if let Some(root) = find_project_root() {
         return Ok(root.join("data").join("library"));
     }
-
-    let d_drive = PathBuf::from(r"D:\ResearchHotspotsDesktop\library");
-    if PathBuf::from(r"D:\").exists() {
-        return Ok(d_drive);
     }
 
-    app.path()
-        .app_data_dir()
-        .map(|path| path.join("library"))
-        .map_err(|error| format!("Cannot resolve app data directory: {error}"))
+    Err("论文库尚未配置。请先完成首次启动设置。".to_string())
 }
 
 fn initialize_library_database(conn: &Connection) -> Result<(), String> {
@@ -4139,7 +6415,11 @@ fn initialize_library_database(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|error| error.to_string())?;
-    let _ = conn.execute("ALTER TABLE papers ADD COLUMN search_blob TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE papers ADD COLUMN search_blob TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    research_hotspots_core::ensure_v20_schema(conn)?;
     Ok(())
 }
 
@@ -4162,8 +6442,17 @@ fn row_to_paper(row: &rusqlite::Row<'_>) -> rusqlite::Result<PaperRecord> {
     })
 }
 
-fn count_facets(conn: &Connection, field_expr: &str, project_id: &str, limit: i64) -> Result<Vec<CountFacet>, String> {
-    let null_guard = if field_expr.contains("year") { "AND year IS NOT NULL" } else { "" };
+fn count_facets(
+    conn: &Connection,
+    field_expr: &str,
+    project_id: &str,
+    limit: i64,
+) -> Result<Vec<CountFacet>, String> {
+    let null_guard = if field_expr.contains("year") {
+        "AND year IS NOT NULL"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT {field_expr} AS value, COUNT(*) AS count
          FROM papers
@@ -4174,7 +6463,8 @@ fn count_facets(conn: &Connection, field_expr: &str, project_id: &str, limit: i6
          LIMIT ?2"
     );
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    let rows = stmt.query_map(params![project_id, limit], |row| {
+    let rows = stmt
+        .query_map(params![project_id, limit], |row| {
         Ok(CountFacet {
             value: row.get(0)?,
             count: row.get(1)?,
@@ -4194,7 +6484,9 @@ fn normalize_query(value: Option<String>) -> Option<String> {
 }
 
 fn normalize_filter(value: Option<String>) -> Option<String> {
-    value.map(|value| value.trim().to_string()).filter(|value| !value.is_empty() && value != "all")
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "all")
 }
 
 fn paper_search_blob(paper: &PaperRecord) -> String {
@@ -4250,13 +6542,19 @@ fn now_millis_string() -> String {
     now_millis().to_string()
 }
 
-fn cluster_group_to_hotspot(project_id: &str, group: ClusterGroup, index: usize, timestamp: &str) -> HotspotRecord {
+fn cluster_group_to_hotspot(
+    project_id: &str,
+    group: ClusterGroup,
+    index: usize,
+    timestamp: &str,
+) -> HotspotRecord {
     let keywords = sorted_keywords(&group.keyword_counts, 12);
     let keyword_weights = keyword_weights(&group.keyword_counts, &keywords);
     let years = sorted_years(&group.years);
     let trend = infer_trend(&years);
     let confidence = (0.38 + ((group.paper_count + 1) as f64).ln() / 8.0).min(0.96);
-    let representative_ids = ranked_representative_ids(&group.representative_candidates, &keywords, 18);
+    let representative_ids =
+        ranked_representative_ids(&group.representative_candidates, &keywords, 18);
     let analysis = build_hotspot_analysis(&group, &keywords, &years, &representative_ids);
     let title = keywords
         .iter()
@@ -4271,7 +6569,8 @@ fn cluster_group_to_hotspot(project_id: &str, group: ClusterGroup, index: usize,
     let coordinates = HotspotCoordinates {
         x: (angle.cos() * distance).round() as i64,
         y: (angle.sin() * distance).round() as i64,
-        z: ((confidence - 0.5) * 34.0 + analysis.recent_momentum * 18.0 + (index % 7) as f64 - 3.0).round() as i64,
+        z: ((confidence - 0.5) * 34.0 + analysis.recent_momentum * 18.0 + (index % 7) as f64 - 3.0)
+            .round() as i64,
     };
     let evolution = years
         .iter()
@@ -4289,9 +6588,23 @@ fn cluster_group_to_hotspot(project_id: &str, group: ClusterGroup, index: usize,
             }
         })
         .collect::<Vec<_>>();
-    let label = keywords.iter().take(5).cloned().collect::<Vec<_>>().join("_");
-    let summary_keywords = keywords.iter().take(6).cloned().collect::<Vec<_>>().join("、");
-    let warnings = if analysis.warnings.is_empty() { "质量信号稳定".to_string() } else { analysis.warnings.join("；") };
+    let label = keywords
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("_");
+    let summary_keywords = keywords
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("、");
+    let warnings = if analysis.warnings.is_empty() {
+        "质量信号稳定".to_string()
+    } else {
+        analysis.warnings.join("；")
+    };
 
     HotspotRecord {
         id: scoped_id(project_id, &format!("sqlite-cluster:{:x}:{}", stable_hash(&cluster_key), index + 1)),
@@ -4325,12 +6638,23 @@ fn cluster_group_to_hotspot(project_id: &str, group: ClusterGroup, index: usize,
 }
 
 fn sorted_count_facets_from_map(counts: &HashMap<String, i64>, limit: usize) -> Vec<CountFacet> {
-    let mut rows = counts.iter().map(|(value, count)| (value.clone(), *count)).collect::<Vec<_>>();
+    let mut rows = counts
+        .iter()
+        .map(|(value, count)| (value.clone(), *count))
+        .collect::<Vec<_>>();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    rows.into_iter().take(limit).map(|(value, count)| CountFacet { value, count }).collect()
+    rows.into_iter()
+        .take(limit)
+        .map(|(value, count)| CountFacet { value, count })
+        .collect()
 }
 
-fn build_hotspot_analysis(group: &ClusterGroup, keywords: &[String], years: &[(i64, i64)], representative_ids: &[String]) -> HotspotAnalysis {
+fn build_hotspot_analysis(
+    group: &ClusterGroup,
+    keywords: &[String],
+    years: &[(i64, i64)],
+    representative_ids: &[String],
+) -> HotspotAnalysis {
     let total_keyword_hits = group.keyword_counts.values().copied().sum::<i64>().max(1) as f64;
     let top_keyword_hits = keywords
         .iter()
@@ -4339,7 +6663,8 @@ fn build_hotspot_analysis(group: &ClusterGroup, keywords: &[String], years: &[(i
         .sum::<i64>() as f64;
     let keyword_focus = round_metric(top_keyword_hits / total_keyword_hits);
     let expected_representatives = group.paper_count.min(18).max(1) as f64;
-    let representative_coverage = round_metric(representative_ids.len() as f64 / expected_representatives);
+    let representative_coverage =
+        round_metric(representative_ids.len() as f64 / expected_representatives);
     let recent_momentum = round_metric(recent_momentum_score(years));
     let source_diversity = round_metric(source_diversity_score(&group.source_counts));
     let mut warnings = Vec::new();
@@ -4367,8 +6692,16 @@ fn build_hotspot_analysis(group: &ClusterGroup, keywords: &[String], years: &[(i
     }
 }
 
-fn ranked_representative_ids(candidates: &[RepresentativeCandidate], keywords: &[String], limit: usize) -> Vec<String> {
-    let keyword_set = keywords.iter().take(8).map(|keyword| keyword.to_lowercase()).collect::<HashSet<_>>();
+fn ranked_representative_ids(
+    candidates: &[RepresentativeCandidate],
+    keywords: &[String],
+    limit: usize,
+) -> Vec<String> {
+    let keyword_set = keywords
+        .iter()
+        .take(8)
+        .map(|keyword| keyword.to_lowercase())
+        .collect::<HashSet<_>>();
     let mut rows = candidates
         .iter()
         .map(|candidate| {
@@ -4377,12 +6710,26 @@ fn ranked_representative_ids(candidates: &[RepresentativeCandidate], keywords: &
                 .iter()
                 .filter(|term| keyword_set.contains(&term.to_lowercase()))
                 .count() as f64;
-            let year_score = candidate.year.map(|year| ((year - 2000).max(0) as f64 / 30.0).min(1.0)).unwrap_or(0.0);
-            let source_score = if candidate.source.trim().is_empty() { 0.0 } else { 0.16 };
-            (candidate.id.clone(), candidate.evidence_score + overlap * 1.35 + year_score * 0.42 + source_score)
+            let year_score = candidate
+                .year
+                .map(|year| ((year - 2000).max(0) as f64 / 30.0).min(1.0))
+                .unwrap_or(0.0);
+            let source_score = if candidate.source.trim().is_empty() {
+                0.0
+            } else {
+                0.16
+            };
+            (
+                candidate.id.clone(),
+                candidate.evidence_score + overlap * 1.35 + year_score * 0.42 + source_score,
+            )
         })
         .collect::<Vec<_>>();
-    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0)));
+    rows.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     let mut seen = HashSet::new();
     let mut output = Vec::new();
@@ -4397,13 +6744,38 @@ fn ranked_representative_ids(candidates: &[RepresentativeCandidate], keywords: &
     output
 }
 
-fn candidate_evidence_score(title: &str, abstract_text: &str, year: Option<i64>, doi: Option<&str>, url: Option<&str>, terms: &[String]) -> f64 {
-    let title_score = if title.chars().count() >= 12 { 0.7 } else { 0.2 };
+fn candidate_evidence_score(
+    title: &str,
+    abstract_text: &str,
+    year: Option<i64>,
+    doi: Option<&str>,
+    url: Option<&str>,
+    terms: &[String],
+) -> f64 {
+    let title_score = if title.chars().count() >= 12 {
+        0.7
+    } else {
+        0.2
+    };
     let abstract_len = abstract_text.chars().count();
-    let abstract_score = if abstract_len >= 260 { 1.2 } else if abstract_len >= 120 { 0.82 } else if abstract_len >= 60 { 0.45 } else { 0.08 };
+    let abstract_score = if abstract_len >= 260 {
+        1.2
+    } else if abstract_len >= 120 {
+        0.82
+    } else if abstract_len >= 60 {
+        0.45
+    } else {
+        0.08
+    };
     let metadata_score = year.map(|_| 0.28).unwrap_or(0.0)
-        + doi.filter(|value| !value.trim().is_empty()).map(|_| 0.32).unwrap_or(0.0)
-        + url.filter(|value| !value.trim().is_empty()).map(|_| 0.18).unwrap_or(0.0);
+        + doi
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| 0.32)
+            .unwrap_or(0.0)
+        + url
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| 0.18)
+            .unwrap_or(0.0);
     let term_score = terms.len().min(14) as f64 * 0.08;
     title_score + abstract_score + metadata_score + term_score
 }
@@ -4413,7 +6785,11 @@ fn recent_momentum_score(years: &[(i64, i64)]) -> f64 {
         return 0.0;
     }
     let last_year = years.last().map(|(year, _)| *year).unwrap_or_default();
-    let recent = years.iter().filter(|(year, _)| *year >= last_year - 2).map(|(_, count)| *count).sum::<i64>() as f64;
+    let recent = years
+        .iter()
+        .filter(|(year, _)| *year >= last_year - 2)
+        .map(|(_, count)| *count)
+        .sum::<i64>() as f64;
     let previous = years
         .iter()
         .filter(|(year, _)| *year < last_year - 2 && *year >= last_year - 5)
@@ -4434,7 +6810,11 @@ fn source_diversity_score(counts: &HashMap<String, i64>) -> f64 {
         .values()
         .map(|count| {
             let p = *count as f64 / total;
-            if p <= 0.0 { 0.0 } else { -p * p.log2() }
+            if p <= 0.0 {
+                0.0
+            } else {
+                -p * p.log2()
+            }
         })
         .sum::<f64>();
     let max_entropy = (counts.len() as f64).log2().max(1.0);
@@ -4445,26 +6825,49 @@ fn assign_similar_hotspots(hotspots: &mut [HotspotRecord]) {
     let mut relations = vec![Vec::<SimilarHotspotRelation>::new(); hotspots.len()];
     for index in 0..hotspots.len() {
         for next_index in (index + 1)..hotspots.len() {
-            let score = hotspot_keyword_similarity(&hotspots[index].keywords, &hotspots[next_index].keywords)
-                + if hotspots[index].field == hotspots[next_index].field { 0.08 } else { 0.0 };
+            let score = hotspot_keyword_similarity(
+                &hotspots[index].keywords,
+                &hotspots[next_index].keywords,
+            ) + if hotspots[index].field == hotspots[next_index].field {
+                0.08
+            } else {
+                0.0
+            };
             if score <= 0.02 {
                 continue;
             }
             let rounded = (score * 100.0).round() / 100.0;
-            relations[index].push(SimilarHotspotRelation { hotspot_id: hotspots[next_index].id.clone(), score: rounded });
-            relations[next_index].push(SimilarHotspotRelation { hotspot_id: hotspots[index].id.clone(), score: rounded });
+            relations[index].push(SimilarHotspotRelation {
+                hotspot_id: hotspots[next_index].id.clone(),
+                score: rounded,
+            });
+            relations[next_index].push(SimilarHotspotRelation {
+                hotspot_id: hotspots[index].id.clone(),
+                score: rounded,
+            });
         }
     }
     for (index, mut rows) in relations.into_iter().enumerate() {
-        rows.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.hotspot_id.cmp(&b.hotspot_id)));
+        rows.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.hotspot_id.cmp(&b.hotspot_id))
+        });
         rows.truncate(8);
         hotspots[index].similar_hotspots = rows;
     }
 }
 
 fn hotspot_keyword_similarity(left: &[String], right: &[String]) -> f64 {
-    let left = left.iter().map(|value| value.to_lowercase()).collect::<HashSet<_>>();
-    let right = right.iter().map(|value| value.to_lowercase()).collect::<HashSet<_>>();
+    let left = left
+        .iter()
+        .map(|value| value.to_lowercase())
+        .collect::<HashSet<_>>();
+    let right = right
+        .iter()
+        .map(|value| value.to_lowercase())
+        .collect::<HashSet<_>>();
     if left.is_empty() && right.is_empty() {
         return 0.0;
     }
@@ -4474,9 +6877,15 @@ fn hotspot_keyword_similarity(left: &[String], right: &[String]) -> f64 {
 }
 
 fn sorted_keywords(counts: &HashMap<String, i64>, limit: usize) -> Vec<String> {
-    let mut rows = counts.iter().map(|(keyword, count)| (keyword.clone(), *count)).collect::<Vec<_>>();
+    let mut rows = counts
+        .iter()
+        .map(|(keyword, count)| (keyword.clone(), *count))
+        .collect::<Vec<_>>();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    rows.into_iter().take(limit).map(|(keyword, _)| keyword).collect()
+    rows.into_iter()
+        .take(limit)
+        .map(|(keyword, _)| keyword)
+        .collect()
 }
 
 fn keyword_weights(counts: &HashMap<String, i64>, keywords: &[String]) -> Vec<KeywordWeight> {
@@ -4491,7 +6900,10 @@ fn keyword_weights(counts: &HashMap<String, i64>, keywords: &[String]) -> Vec<Ke
 }
 
 fn sorted_years(years: &HashMap<i64, i64>) -> Vec<(i64, i64)> {
-    let mut rows = years.iter().map(|(year, count)| (*year, *count)).collect::<Vec<_>>();
+    let mut rows = years
+        .iter()
+        .map(|(year, count)| (*year, *count))
+        .collect::<Vec<_>>();
     rows.sort_by_key(|(year, _)| *year);
     rows
 }
@@ -4510,7 +6922,11 @@ fn infer_trend(years: &[(i64, i64)]) -> String {
     }
 }
 
-fn weighted_token_counts(title: &str, abstract_text: &str, categories: Option<&str>) -> HashMap<String, i64> {
+fn weighted_token_counts(
+    title: &str,
+    abstract_text: &str,
+    categories: Option<&str>,
+) -> HashMap<String, i64> {
     let mut counts = HashMap::new();
     add_weighted_terms(&mut counts, title, 4);
     add_weighted_terms(&mut counts, categories.unwrap_or_default(), 3);
@@ -4549,7 +6965,10 @@ fn extract_terms(text: &str) -> Vec<String> {
 fn flush_ascii_term(output: &mut Vec<String>, value: &mut String) {
     let token = value.trim_matches('-').to_lowercase();
     value.clear();
-    if token.len() < 3 || token.chars().all(|character| character.is_ascii_digit()) || is_stopword(&token) {
+    if token.len() < 3
+        || token.chars().all(|character| character.is_ascii_digit())
+        || is_stopword(&token)
+    {
         return;
     }
     output.push(token);
@@ -4640,21 +7059,41 @@ fn is_stopword(value: &str) -> bool {
 fn normalize_group_key(value: &str) -> String {
     let normalized = value
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string();
-    if normalized.is_empty() { "local".to_string() } else { normalized }
+    if normalized.is_empty() {
+        "local".to_string()
+    } else {
+        normalized
+    }
 }
 
 fn safe_manifest_label(value: &str) -> String {
     let normalized = value
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '_' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string();
-    if normalized.is_empty() { "mysql".to_string() } else { normalized }
+    if normalized.is_empty() {
+        "mysql".to_string()
+    } else {
+        normalized
+    }
 }
 
 fn capitalize_ascii(value: &str) -> String {
@@ -4736,6 +7175,120 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn cluster_registry_rejects_same_project_and_allows_independent_keys() {
+        let registry = ClusterTaskRegistry::default();
+        let database_a = PathBuf::from("D:/library-a/research-hotspots-v7.sqlite");
+        let database_b = PathBuf::from("D:/library-b/research-hotspots-v7.sqlite");
+        let key_a_project_1 = cluster_task_key(&database_a, "project-1");
+        let key_a_project_2 = cluster_task_key(&database_a, "project-2");
+        let key_b_project_1 = cluster_task_key(&database_b, "project-1");
+
+        let _first = registry
+            .try_acquire(key_a_project_1.clone())
+            .expect("first task should acquire permit");
+        assert_eq!(
+            registry.try_acquire(key_a_project_1).err().as_deref(),
+            Some(CLUSTER_ALREADY_RUNNING)
+        );
+        let _different_project = registry
+            .try_acquire(key_a_project_2)
+            .expect("different project should run independently");
+        let _different_database = registry
+            .try_acquire(key_b_project_1)
+            .expect("different database should run independently");
+        assert_eq!(registry.running_count(), 3);
+    }
+
+    #[test]
+    fn cluster_registry_releases_permit_after_success_error_and_panic() {
+        let registry = ClusterTaskRegistry::default();
+        let key = "D:/library/research-hotspots-v7.sqlite::project-1".to_string();
+
+        {
+            let _permit = registry
+                .try_acquire(key.clone())
+                .expect("success path permit");
+        }
+        assert_eq!(registry.running_count(), 0);
+
+        let error_result: Result<(), String> = (|| {
+            let _permit = registry.try_acquire(key.clone())?;
+            Err("simulated cluster error".to_string())
+        })();
+        assert_eq!(error_result.unwrap_err(), "simulated cluster error");
+        assert_eq!(registry.running_count(), 0);
+
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _permit = registry
+                .try_acquire(key.clone())
+                .expect("panic path permit");
+            panic!("simulated cluster panic");
+        }));
+        assert!(panic_result.is_err());
+        assert_eq!(registry.running_count(), 0);
+        let _reacquired = registry
+            .try_acquire(key)
+            .expect("permit should be reusable after panic");
+    }
+
+    #[test]
+    fn background_cluster_helper_matches_direct_cluster_result() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "research-hotspots-background-cluster-{}",
+            now_millis()
+        ));
+        fs::create_dir_all(&base_dir).expect("cluster test dir");
+        let database_path = base_dir.join("research-hotspots-v7.sqlite");
+        let project_id = "unit-background-cluster";
+        let direct_result = {
+            let mut conn = Connection::open(&database_path).expect("sqlite database");
+            initialize_library_database(&conn).expect("schema should initialize");
+            upsert_paper_rows(
+                &mut conn,
+                project_id,
+                vec![
+                    test_paper(
+                        "background-1",
+                        "Retrieval Grounded Scientific Agents",
+                        "Retrieval evidence agents validate citations and synthesize research.",
+                        "Artificial Intelligence",
+                        2026,
+                        Some("10.0000/background-1"),
+                    ),
+                    test_paper(
+                        "background-2",
+                        "Graph Retrieval Evidence Systems",
+                        "Graph retrieval systems organize evidence and scientific citations.",
+                        "Artificial Intelligence",
+                        2025,
+                        Some("10.0000/background-2"),
+                    ),
+                ],
+            )
+            .expect("insert papers");
+            cluster_library_connection(&conn, project_id).expect("direct cluster")
+        };
+
+        let background_result = cluster_library_from_database_path(database_path, project_id)
+            .expect("background helper cluster");
+        assert_eq!(background_result.before_count, direct_result.before_count);
+        assert_eq!(background_result.cluster_count, direct_result.cluster_count);
+        assert_eq!(
+            background_result
+                .hotspots
+                .iter()
+                .map(|hotspot| &hotspot.id)
+                .collect::<Vec<_>>(),
+            direct_result
+                .hotspots
+                .iter()
+                .map(|hotspot| &hotspot.id)
+                .collect::<Vec<_>>()
+        );
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
     fn import_normalization_accepts_chinese_json_aliases() {
         let value = serde_json::json!({
             "文献编号": "cn-sample-001",
@@ -4757,23 +7310,52 @@ mod tests {
         assert_eq!(paper.title, "知识图谱信号驱动的科研热点演化分析");
         assert_eq!(paper.year, Some(2024));
         assert_eq!(paper.field, "Knowledge Graph");
-        assert_eq!(paper.url.as_deref(), Some("https://example.org/cn-sample-001"));
-        assert!(paper.authors.as_deref().unwrap_or_default().contains("王明"));
-        assert!(paper.categories.as_deref().unwrap_or_default().contains("热点演化"));
+        assert_eq!(
+            paper.url.as_deref(),
+            Some("https://example.org/cn-sample-001")
+        );
+        assert!(paper
+            .authors
+            .as_deref()
+            .unwrap_or_default()
+            .contains("王明"));
+        assert!(paper
+            .categories
+            .as_deref()
+            .unwrap_or_default()
+            .contains("热点演化"));
     }
 
     #[test]
     fn import_normalization_accepts_english_csv_aliases_and_defaults() {
         let mut row = HashMap::new();
-        row.insert(normalize_import_key("paper_id"), "en-sample-001".to_string());
-        row.insert(normalize_import_key("display_name"), "Citation-Grounded Review Generation with Evidence Profiles".to_string());
+        row.insert(
+            normalize_import_key("paper_id"),
+            "en-sample-001".to_string(),
+        );
+        row.insert(
+            normalize_import_key("display_name"),
+            "Citation-Grounded Review Generation with Evidence Profiles".to_string(),
+        );
         row.insert(normalize_import_key("published"), "2025-11-04".to_string());
         row.insert(normalize_import_key("database"), "OpenAlex".to_string());
-        row.insert(normalize_import_key("discipline"), "Artificial Intelligence".to_string());
-        row.insert(normalize_import_key("landing_page_url"), "https://example.org/en-sample-001".to_string());
-        row.insert(normalize_import_key("DOI"), "10.0000/en-sample-001".to_string());
+        row.insert(
+            normalize_import_key("discipline"),
+            "Artificial Intelligence".to_string(),
+        );
+        row.insert(
+            normalize_import_key("landing_page_url"),
+            "https://example.org/en-sample-001".to_string(),
+        );
+        row.insert(
+            normalize_import_key("DOI"),
+            "10.0000/en-sample-001".to_string(),
+        );
         row.insert(normalize_import_key("creator"), "Chen Yu".to_string());
-        row.insert(normalize_import_key("tags"), "evidence profile; citation audit".to_string());
+        row.insert(
+            normalize_import_key("tags"),
+            "evidence profile; citation audit".to_string(),
+        );
 
         let paper = normalize_import_paper(row, 2).expect("English aliases should normalize");
 
@@ -4781,11 +7363,20 @@ mod tests {
         assert_eq!(paper.source, "openalex");
         assert_eq!(paper.year, Some(2025));
         assert_eq!(paper.field, "Artificial Intelligence");
-        assert_eq!(paper.abstract_text, "Local imported paper without abstract.");
+        assert_eq!(
+            paper.abstract_text,
+            "Local imported paper without abstract."
+        );
         assert_eq!(paper.doi.as_deref(), Some("10.0000/en-sample-001"));
-        assert_eq!(paper.url.as_deref(), Some("https://example.org/en-sample-001"));
+        assert_eq!(
+            paper.url.as_deref(),
+            Some("https://example.org/en-sample-001")
+        );
         assert_eq!(paper.authors.as_deref(), Some("Chen Yu"));
-        assert_eq!(paper.categories.as_deref(), Some("evidence profile; citation audit"));
+        assert_eq!(
+            paper.categories.as_deref(),
+            Some("evidence profile; citation audit")
+        );
     }
 
     #[test]
@@ -4863,15 +7454,27 @@ mod tests {
         let cluster = cluster_library_connection(&conn, project_id).expect("cluster should pass");
         assert_eq!(cluster.before_count, 3);
         assert!(cluster.cluster_count >= 3);
-        assert!(cluster.hotspots.iter().any(|hotspot| hotspot.field == "Artificial Intelligence"));
-        assert!(cluster.hotspots.iter().all(|hotspot| !hotspot.analysis.evidence_paper_ids.is_empty()));
-        assert!(cluster.hotspots.iter().all(|hotspot| hotspot.confidence > 0.0));
+        assert!(cluster
+            .hotspots
+            .iter()
+            .any(|hotspot| hotspot.field == "Artificial Intelligence"));
+        assert!(cluster
+            .hotspots
+            .iter()
+            .all(|hotspot| !hotspot.analysis.evidence_paper_ids.is_empty()));
+        assert!(cluster
+            .hotspots
+            .iter()
+            .all(|hotspot| hotspot.confidence > 0.0));
     }
 
     #[test]
     fn hotspot_evidence_export_traces_representative_papers() {
-        let root = find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
-        let base_dir = root.join("work").join(format!("rust-hotspot-evidence-{}", now_millis()));
+        let root =
+            find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+        let base_dir = root
+            .join("work")
+            .join(format!("rust-hotspot-evidence-{}", now_millis()));
         fs::create_dir_all(&base_dir).expect("evidence temp dir");
         let database_path = base_dir.join("research-hotspots-v7.sqlite");
         let project_id = "unit-hotspot-evidence";
@@ -4911,13 +7514,21 @@ mod tests {
             .expect("upsert evidence rows");
         }
 
-        let star_map = export_star_map_from_database_path(database_path.clone(), Some(project_id.to_string())).expect("star map export");
+        let star_map =
+            export_star_map_from_database_path(database_path.clone(), Some(project_id.to_string()))
+                .expect("star map export");
         assert!(star_map.evidence_profile.evidence_coverage > 0.0);
         assert!(star_map.evidence_profile.evolution_coverage > 0.0);
         assert!(star_map.evidence_profile.source_distribution_coverage > 0.0);
         assert_eq!(star_map.evidence_profile.sample_signal_count, 0);
 
-        let export = export_hotspot_evidence_from_database_path(database_path, Some(project_id.to_string()), None, 8).expect("hotspot evidence export");
+        let export = export_hotspot_evidence_from_database_path(
+            database_path,
+            Some(project_id.to_string()),
+            None,
+            8,
+        )
+        .expect("hotspot evidence export");
         assert!(!export.selected_hotspot_id.is_empty());
         assert!(!export.hotspot_keywords.is_empty());
         assert!(!export.representative_ids.is_empty());
@@ -4925,7 +7536,9 @@ mod tests {
         assert!(export.missing_representative_ids.is_empty());
         assert!(!export.year_evolution.is_empty());
         assert!(!export.source_distribution.is_empty());
-        assert!(export.evidence_profile_markdown.contains("Representative Papers"));
+        assert!(export
+            .evidence_profile_markdown
+            .contains("Representative Papers"));
         assert!(export
             .representative_papers
             .iter()
@@ -4957,7 +7570,12 @@ mod tests {
             Some("10.0000/app17-placeholder"),
         );
         placeholder_paper.source = "arxiv".to_string();
-        upsert_paper_rows(&mut conn, project_id, vec![complete_paper, placeholder_paper]).expect("upsert app17 evidence papers");
+        upsert_paper_rows(
+            &mut conn,
+            project_id,
+            vec![complete_paper, placeholder_paper],
+        )
+        .expect("upsert app17 evidence papers");
 
         conn.execute(
             "INSERT INTO app17_hotspots
@@ -4976,7 +7594,10 @@ mod tests {
             ],
         )
         .expect("insert app17 hotspot");
-        for (raw_id, year) in [("app17-complete", 2024_i64), ("app17-placeholder", 2026_i64)] {
+        for (raw_id, year) in [
+            ("app17-complete", 2024_i64),
+            ("app17-placeholder", 2026_i64),
+        ] {
             conn.execute(
                 "INSERT INTO app17_paper_topics
                  (project_id, raw_paper_id, scoped_paper_id, field, topic_id, x, y, z, year)
@@ -5006,22 +7627,52 @@ mod tests {
         )
         .expect("query app17 hotspot evidence");
 
-        assert_eq!(evidence.selected_hotspot_id, "app17:Artificial Intelligence:7");
+        assert_eq!(
+            evidence.selected_hotspot_id,
+            "app17:Artificial Intelligence:7"
+        );
         assert_eq!(evidence.hotspot_paper_count, 2);
         assert_eq!(evidence.representative_papers.len(), 2);
-        assert!(evidence.representative_papers[0].id.ends_with(":app17-complete"));
-        assert_eq!(evidence.year_evolution.iter().map(|item| item.count).sum::<i64>(), 2);
-        assert_eq!(evidence.source_distribution.iter().map(|item| item.count).sum::<i64>(), 2);
-        assert!(evidence.source_distribution.iter().any(|item| item.value == "openalex"));
-        assert!(evidence.source_distribution.iter().any(|item| item.value == "arxiv"));
+        assert!(evidence.representative_papers[0]
+            .id
+            .ends_with(":app17-complete"));
+        assert_eq!(
+            evidence
+                .year_evolution
+                .iter()
+                .map(|item| item.count)
+                .sum::<i64>(),
+            2
+        );
+        assert_eq!(
+            evidence
+                .source_distribution
+                .iter()
+                .map(|item| item.count)
+                .sum::<i64>(),
+            2
+        );
+        assert!(evidence
+            .source_distribution
+            .iter()
+            .any(|item| item.value == "openalex"));
+        assert!(evidence
+            .source_distribution
+            .iter()
+            .any(|item| item.value == "arxiv"));
         assert!(evidence.missing_representative_ids.is_empty());
-        assert!(evidence.evidence_profile_markdown.contains("App17 Hotspot Evidence"));
+        assert!(evidence
+            .evidence_profile_markdown
+            .contains("App17 Hotspot Evidence"));
     }
 
     #[test]
     fn bibliography_file_import_accepts_bibtex_and_ris() {
-        let root = find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
-        let base_dir = root.join("work").join(format!("rust-bibliography-import-{}", now_millis()));
+        let root =
+            find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+        let base_dir = root
+            .join("work")
+            .join(format!("rust-bibliography-import-{}", now_millis()));
         let library_dir = base_dir.join("library");
         fs::create_dir_all(&library_dir).expect("library dir");
         let project_id = "unit-bibliography-import";
@@ -5080,19 +7731,34 @@ ER  -
         )
         .expect("write ris sample");
 
-        let bib_import = import_paper_file_to_library_path(library_dir.clone(), Some(project_id.to_string()), bib_path).expect("bib import");
+        let bib_import = import_paper_file_to_library_path(
+            library_dir.clone(),
+            Some(project_id.to_string()),
+            bib_path,
+        )
+        .expect("bib import");
         assert_eq!(bib_import.processed_rows, 2);
         assert_eq!(bib_import.inserted, 2);
         assert_eq!(bib_import.invalid_rows, 0);
 
-        let ris_import = import_paper_file_to_library_path(library_dir.clone(), Some(project_id.to_string()), ris_path).expect("ris import");
+        let ris_import = import_paper_file_to_library_path(
+            library_dir.clone(),
+            Some(project_id.to_string()),
+            ris_path,
+        )
+        .expect("ris import");
         assert_eq!(ris_import.processed_rows, 2);
         assert_eq!(ris_import.inserted, 2);
         assert_eq!(ris_import.invalid_rows, 0);
 
-        let conn = Connection::open(library_dir.join("research-hotspots-v7.sqlite")).expect("sqlite database");
+        let conn = Connection::open(library_dir.join("research-hotspots-v7.sqlite"))
+            .expect("sqlite database");
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+                params![project_id],
+                |row| row.get(0),
+            )
             .expect("paper count");
         assert_eq!(count, 4);
         let year_count: i64 = conn
@@ -5100,7 +7766,11 @@ ER  -
             .expect("year count");
         assert_eq!(year_count, 4);
         let doi_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1 AND doi IS NOT NULL", params![project_id], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM papers WHERE project_id = ?1 AND doi IS NOT NULL",
+                params![project_id],
+                |row| row.get(0),
+            )
             .expect("doi count");
         assert_eq!(doi_count, 3);
         let keyword_count: i64 = conn
@@ -5114,8 +7784,11 @@ ER  -
 
     #[test]
     fn paper_file_import_is_idempotent_for_resume_recovery() {
-        let root = find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
-        let base_dir = root.join("work").join(format!("rust-import-recovery-{}", now_millis()));
+        let root =
+            find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+        let base_dir = root
+            .join("work")
+            .join(format!("rust-import-recovery-{}", now_millis()));
         let library_dir = base_dir.join("library");
         fs::create_dir_all(&library_dir).expect("library dir");
         let project_id = "unit-import-recovery";
@@ -5128,35 +7801,56 @@ ER  -
         )
         .expect("write jsonl sample");
 
-        let first_import = import_paper_file_to_library_path(library_dir.clone(), Some(project_id.to_string()), jsonl_path.clone()).expect("first import");
+        let first_import = import_paper_file_to_library_path(
+            library_dir.clone(),
+            Some(project_id.to_string()),
+            jsonl_path.clone(),
+        )
+        .expect("first import");
         assert_eq!(first_import.processed_rows, 2);
         assert_eq!(first_import.inserted, 2);
         assert_eq!(first_import.updated, 0);
         assert!(first_import.recovery.safe_to_rerun);
         assert_eq!(first_import.recovery.batch_size, 1000);
-        let first_manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&first_import.manifest_path).expect("first manifest file")).expect("first manifest json");
+        let first_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&first_import.manifest_path).expect("first manifest file"),
+        )
+        .expect("first manifest json");
         assert_eq!(first_manifest["status"], "done");
         assert_eq!(first_manifest["processedRows"], 2);
         assert_eq!(first_manifest["inserted"], 2);
         assert_eq!(first_manifest["recovery"]["safeToRerun"], true);
         assert_eq!(first_manifest["recovery"]["batchSize"], 1000);
 
-        let second_import = import_paper_file_to_library_path(library_dir.clone(), Some(project_id.to_string()), jsonl_path).expect("second import");
+        let second_import = import_paper_file_to_library_path(
+            library_dir.clone(),
+            Some(project_id.to_string()),
+            jsonl_path,
+        )
+        .expect("second import");
         assert_eq!(second_import.processed_rows, 2);
         assert_eq!(second_import.inserted, 0);
         assert_eq!(second_import.updated, 2);
         assert_eq!(second_import.invalid_rows, 0);
         assert_eq!(second_import.duplicate_rows, 0);
         assert!(second_import.recovery.strategy.contains("Re-run"));
-        let second_manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&second_import.manifest_path).expect("second manifest file")).expect("second manifest json");
+        let second_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&second_import.manifest_path).expect("second manifest file"),
+        )
+        .expect("second manifest json");
         assert_eq!(second_manifest["status"], "done");
         assert_eq!(second_manifest["processedRows"], 2);
         assert_eq!(second_manifest["inserted"], 0);
         assert_eq!(second_manifest["updated"], 2);
 
-        let conn = Connection::open(library_dir.join("research-hotspots-v7.sqlite")).expect("sqlite database");
+        let conn = Connection::open(library_dir.join("research-hotspots-v7.sqlite"))
+            .expect("sqlite database");
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+                params![project_id],
+                |row| row.get(0),
+            )
             .expect("paper count");
         assert_eq!(count, 2);
 
@@ -5166,8 +7860,11 @@ ER  -
 
     #[test]
     fn sqlite_backup_restore_roundtrip_preserves_library() {
-        let root = find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
-        let base_dir = root.join("work").join(format!("rust-backup-restore-{}", now_millis()));
+        let root =
+            find_project_root().unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+        let base_dir = root
+            .join("work")
+            .join(format!("rust-backup-restore-{}", now_millis()));
         let library_dir = base_dir.join("library");
         let backup_dir = base_dir.join("backups");
         fs::create_dir_all(&library_dir).expect("library dir");
@@ -5182,36 +7879,71 @@ ER  -
                 &mut conn,
                 project_id,
                 vec![
-                    test_paper("backup-1", "Backup Restore Retrieval Evidence", "Evidence before backup.", "Artificial Intelligence", 2026, Some("10.0000/backup-1")),
-                    test_paper("backup-2", "Backup Restore Knowledge Graph", "Graph evidence before backup.", "Knowledge Graph", 2025, Some("10.0000/backup-2")),
+                    test_paper(
+                        "backup-1",
+                        "Backup Restore Retrieval Evidence",
+                        "Evidence before backup.",
+                        "Artificial Intelligence",
+                        2026,
+                        Some("10.0000/backup-1"),
+                    ),
+                    test_paper(
+                        "backup-2",
+                        "Backup Restore Knowledge Graph",
+                        "Graph evidence before backup.",
+                        "Knowledge Graph",
+                        2025,
+                        Some("10.0000/backup-2"),
+                    ),
                 ],
             )
             .expect("initial upsert");
         }
 
-        let backup = backup_library_database_path(&library_dir, Some(backup_dir.clone()), project_id).expect("backup should pass");
+        let backup =
+            backup_library_database_path(&library_dir, Some(backup_dir.clone()), project_id)
+                .expect("backup should pass");
         assert_eq!(backup.paper_count, 2);
         assert!(PathBuf::from(&backup.backup_path).exists());
         assert!(backup.size_bytes > 0);
 
         {
             let conn = Connection::open(&database_path).expect("sqlite database");
-            conn.execute("DELETE FROM papers WHERE id = ?1 AND project_id = ?2", params![scoped_id(project_id, "backup-1"), project_id])
+            conn.execute(
+                "DELETE FROM papers WHERE id = ?1 AND project_id = ?2",
+                params![scoped_id(project_id, "backup-1"), project_id],
+            )
                 .expect("delete one active row");
             let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+                    params![project_id],
+                    |row| row.get(0),
+                )
                 .expect("count after delete");
             assert_eq!(count, 1);
         }
 
-        let restore = restore_library_database_path(&library_dir, &PathBuf::from(&backup.backup_path), project_id).expect("restore should pass");
+        let restore = restore_library_database_path(
+            &library_dir,
+            &PathBuf::from(&backup.backup_path),
+            project_id,
+        )
+        .expect("restore should pass");
         assert_eq!(restore.paper_count, 2);
-        assert!(restore.previous_backup_path.as_deref().is_some_and(|path| PathBuf::from(path).exists()));
+        assert!(restore
+            .previous_backup_path
+            .as_deref()
+            .is_some_and(|path| PathBuf::from(path).exists()));
 
         {
             let conn = Connection::open(&database_path).expect("sqlite database");
             let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM papers WHERE project_id = ?1", params![project_id], |row| row.get(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
+                    params![project_id],
+                    |row| row.get(0),
+                )
                 .expect("count after restore");
             assert_eq!(count, 2);
         }
@@ -5219,7 +7951,14 @@ ER  -
         fs::remove_dir_all(&base_dir).expect("cleanup backup restore temp dir");
     }
 
-    fn test_paper(id: &str, title: &str, abstract_text: &str, field: &str, year: i64, doi: Option<&str>) -> PaperRecord {
+    fn test_paper(
+        id: &str,
+        title: &str,
+        abstract_text: &str,
+        field: &str,
+        year: i64,
+        doi: Option<&str>,
+    ) -> PaperRecord {
         PaperRecord {
             id: id.to_string(),
             project_id: None,
@@ -5245,11 +7984,17 @@ ER  -
             .unwrap_or_else(|| std::env::current_dir().expect("current dir"))
             .join("data")
             .join("pressure-test-evidence");
-        let result = run_library_pressure_test_in_dir(base_dir.clone(), 100_000, true).expect("pressure test should pass");
+        let result = run_library_pressure_test_in_dir(base_dir.clone(), 100_000, true)
+            .expect("pressure test should pass");
         println!("{}", result.summary);
         println!(
             "rows={} insert_ms={} query_ms={} cluster_ms={} total_ms={} size_bytes={}",
-            result.rows, result.insert_ms, result.query_ms, result.cluster_ms, result.total_ms, result.size_bytes
+            result.rows,
+            result.insert_ms,
+            result.query_ms,
+            result.cluster_ms,
+            result.total_ms,
+            result.size_bytes
         );
         assert_eq!(result.rows, 100_000);
         assert!(result.insert_ms > 0);
@@ -5264,11 +8009,18 @@ ER  -
 pub fn run() {
     tauri::Builder::default()
         .manage(PaperImportTaskRegistry::default())
+        .manage(ClusterTaskRegistry::default())
+        .manage(LibraryMutationRegistry::default())
+        .manage(AiTaskRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            get_library_setup_state,
+            validate_library_location,
+            initialize_library,
             paper_library_status,
             backup_paper_library,
+            inspect_paper_library_backup,
             restore_paper_library,
             query_paper_library,
             paper_library_facets,
@@ -5288,6 +8040,14 @@ pub fn run() {
             load_app17_galaxy,
             get_app17_galaxy_payload,
             get_app17_hotspot_evidence,
+            get_v20_analysis_state,
+            get_v20_hotspot_snapshot,
+            get_v20_galaxy_payload,
+            set_app_credential,
+            get_app_credential_status,
+            delete_app_credential,
+            ai_chat,
+            cancel_ai_task,
             write_text_file,
             read_markdown_exports,
             run_cleaner_worker,

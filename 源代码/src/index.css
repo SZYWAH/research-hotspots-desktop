@@ -835,12 +835,24 @@ button:focus-visible {
   .library-paper-scroll {
     min-height: 0;
     flex: 1;
-    margin-top: 12px;
+    margin-top: 8px;
     margin-right: -4px;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 4px;
     scrollbar-gutter: stable;
+  }
+
+  .library-diagnostics-panel {
+    flex-shrink: 0;
+    max-height: 260px;
+    margin-top: 8px;
+    overflow-y: auto;
+    border: 1px solid rgb(var(--color-line) / 0.3);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    background: rgb(var(--color-surface) / 0.56);
+    overscroll-behavior: contain;
   }
 
   .library-pagination {
@@ -1004,7 +1016,8 @@ button:focus-visible {
   }
 
   .paper-row {
-    @apply grid grid-cols-[34px_1fr] gap-3 border p-3 transition;
+    @apply grid grid-cols-[34px_1fr] gap-2.5 border p-2 transition;
+    position: relative;
     border-color: rgb(var(--color-line) / 0.32);
     background: rgba(255,255,255,0.022);
     border-radius: var(--radius-md);
@@ -1015,6 +1028,68 @@ button:focus-visible {
     background: rgba(255,255,255,0.044);
   }
 
+  .paper-row-active {
+    border-color: rgb(var(--color-cyan) / 0.38);
+    background: rgb(var(--color-cyan) / 0.075);
+    box-shadow: inset 3px 0 0 rgb(var(--color-cyan) / 0.72);
+  }
+
+  .paper-row-active:hover {
+    border-color: rgb(var(--color-cyan) / 0.48);
+    background: rgb(var(--color-cyan) / 0.09);
+  }
+
+  .paper-row-main {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    border-radius: 6px;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+    transition: transform 120ms ease;
+  }
+
+  .paper-row-main:active {
+    transform: translateY(1px);
+  }
+
+  .paper-row-main:focus-visible {
+    outline: 2px solid rgb(var(--color-cyan) / 0.72);
+    outline-offset: 4px;
+  }
+
+  .paper-row-title {
+    @apply block text-sm font-medium text-ink transition-colors;
+  }
+
+  .paper-row-abstract {
+    @apply mt-1.5 text-sm leading-5 text-ink/55;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    overflow: hidden;
+  }
+
+  @media (max-width: 1279px) {
+    .paper-row {
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .paper-row-abstract {
+      margin-top: 8px;
+      line-height: 24px;
+      -webkit-line-clamp: 2;
+    }
+  }
+
+  .paper-row-main:hover .paper-row-title,
+  .paper-row-active .paper-row-title {
+    color: rgb(var(--color-cyan) / 0.94);
+  }
+
   .paper-index {
     @apply grid h-7 w-7 place-items-center border bg-transparent text-xs text-ink/45;
     border-color: rgb(var(--color-line) / 0.42);
@@ -1023,6 +1098,42 @@ button:focus-visible {
 
   .paper-index-active {
     @apply border-cyan/50 bg-cyan/10 text-cyan;
+  }
+
+  .unsaved-paper-dialog {
+    width: min(460px, calc(100vw - 32px));
+    max-width: none;
+    margin: auto;
+    overflow: hidden;
+    border: 1px solid rgb(var(--color-line) / 0.5);
+    border-radius: var(--radius-lg);
+    padding: 0;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012)),
+      rgb(var(--color-panel));
+    color: rgb(var(--color-ink));
+    box-shadow: var(--shadow-float);
+  }
+
+  .unsaved-paper-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.64);
+    backdrop-filter: blur(3px);
+  }
+
+  .unsaved-paper-dialog-body {
+    @apply grid gap-5 p-5;
+  }
+
+  .unsaved-paper-dialog h2 {
+    @apply m-0 text-lg font-semibold text-ink;
+  }
+
+  .unsaved-paper-dialog p {
+    @apply m-0 mt-2 text-sm leading-6 text-ink/55;
+  }
+
+  .unsaved-paper-dialog-actions {
+    @apply flex flex-wrap items-center justify-end gap-2;
   }
 
   .library-filter-strip {
@@ -3788,6 +3899,177 @@ button:focus-visible {
     @apply mt-4 text-xs leading-5 text-ink/40;
   }
 
+  .library-setup-shell {
+    @apply grid h-screen place-items-center overflow-auto px-6 py-8 text-ink;
+    background:
+      linear-gradient(120deg, rgb(var(--color-cyan) / 0.045), transparent 42%),
+      linear-gradient(180deg, #101115 0%, #080809 58%);
+  }
+
+  .library-setup-workspace {
+    width: min(920px, 100%);
+    border: 1px solid rgb(var(--color-line) / 0.42);
+    border-radius: var(--radius-lg);
+    background: rgba(15, 16, 18, 0.97);
+    box-shadow: var(--shadow-float), inset 0 1px 0 rgba(255,255,255,0.045);
+  }
+
+  .library-setup-header {
+    @apply grid items-start gap-4 border-b px-6 py-5;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    border-color: rgb(var(--color-line) / 0.34);
+  }
+
+  .library-setup-header h1 {
+    @apply m-0 mt-1 text-2xl font-semibold text-ink;
+  }
+
+  .library-setup-header p {
+    @apply m-0 mt-2 text-sm leading-6 text-ink/50;
+  }
+
+  .library-setup-edition {
+    @apply border px-2.5 py-1.5 text-xs font-medium text-ink/60;
+    border-color: rgb(var(--color-cyan) / 0.2);
+    border-radius: var(--radius-md);
+    background: rgb(var(--color-cyan) / 0.055);
+  }
+
+  .library-setup-section {
+    @apply border-b px-6 py-5;
+    border-color: rgb(var(--color-line) / 0.28);
+  }
+
+  .library-setup-section-title {
+    @apply mb-4 flex items-start gap-3;
+  }
+
+  .library-setup-section-title > span {
+    @apply grid h-7 w-7 shrink-0 place-items-center border text-xs font-semibold text-cyan;
+    border-color: rgb(var(--color-cyan) / 0.24);
+    border-radius: 50%;
+    background: rgb(var(--color-cyan) / 0.07);
+  }
+
+  .library-setup-section-title strong,
+  .library-setup-section-title small,
+  .library-setup-option strong,
+  .library-setup-option small {
+    @apply block;
+  }
+
+  .library-setup-section-title strong,
+  .library-setup-option strong {
+    @apply text-sm font-semibold text-ink/90;
+  }
+
+  .library-setup-section-title small,
+  .library-setup-option small {
+    @apply mt-1 text-xs leading-5 text-ink/45;
+  }
+
+  .library-setup-path-row {
+    @apply flex min-w-0 items-center gap-3;
+  }
+
+  .library-setup-path {
+    @apply min-w-0 flex-1 truncate border px-3 py-2.5 text-sm text-ink/65;
+    border-color: rgb(var(--color-line) / 0.38);
+    border-radius: var(--radius-md);
+    background: rgba(0,0,0,0.28);
+  }
+
+  .library-setup-options {
+    @apply grid gap-2.5;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .library-setup-option {
+    @apply flex min-h-[104px] items-start gap-3 border p-3 text-left transition;
+    border-color: rgb(var(--color-line) / 0.34);
+    border-radius: var(--radius-md);
+    background: rgba(255,255,255,0.018);
+  }
+
+  .library-setup-option:hover:not(:disabled) {
+    border-color: rgb(var(--color-cyan) / 0.3);
+    background: rgb(var(--color-cyan) / 0.045);
+  }
+
+  .library-setup-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.38;
+  }
+
+  .library-setup-option-active {
+    border-color: rgb(var(--color-cyan) / 0.42);
+    background: rgb(var(--color-cyan) / 0.075);
+  }
+
+  .library-setup-radio {
+    @apply grid h-5 w-5 shrink-0 place-items-center border text-cyan;
+    border-color: rgb(var(--color-line) / 0.7);
+    border-radius: 50%;
+  }
+
+  .library-setup-option-active .library-setup-radio {
+    border-color: rgb(var(--color-cyan) / 0.68);
+    background: rgb(var(--color-cyan) / 0.12);
+  }
+
+  .library-setup-footer {
+    @apply flex items-center justify-between gap-4 px-6 py-4;
+  }
+
+  .library-setup-message {
+    @apply flex min-w-0 items-center gap-2 text-xs leading-5 text-ink/50;
+  }
+
+  .library-setup-message svg {
+    @apply shrink-0 text-cyan/75;
+  }
+
+  .library-setup-error {
+    @apply text-danger/80;
+  }
+
+  .library-setup-error svg {
+    @apply text-danger/80;
+  }
+
+  .icon-text-button,
+  .primary-button {
+    @apply inline-flex shrink-0 items-center justify-center gap-2 border px-3 py-2.5 text-sm font-medium transition;
+    border-radius: var(--radius-md);
+  }
+
+  .icon-text-button {
+    border-color: rgb(var(--color-line) / 0.5);
+    background: rgba(255,255,255,0.025);
+    color: rgb(var(--color-ink) / 0.72);
+  }
+
+  .icon-text-button:hover:not(:disabled) {
+    border-color: rgb(var(--color-cyan) / 0.3);
+    color: rgb(var(--color-ink) / 0.94);
+  }
+
+  .primary-button {
+    border-color: rgb(var(--color-cyan) / 0.42);
+    background: rgb(var(--color-cyan) / 0.14);
+    color: rgb(var(--color-ink) / 0.96);
+  }
+
+  .primary-button:hover:not(:disabled) {
+    background: rgb(var(--color-cyan) / 0.2);
+  }
+
+  .icon-text-button:disabled,
+  .primary-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.46;
+  }
+
   @media (max-width: 1279px) {
     .settings-side {
       position: static;
@@ -3810,6 +4092,18 @@ button:focus-visible {
 
     .settings-summary-row + .settings-summary-row {
       border-left: 1px solid rgb(var(--color-line) / 0.28);
+    }
+  }
+
+  @media (max-width: 760px) {
+    .library-setup-options {
+      grid-template-columns: 1fr;
+    }
+
+    .library-setup-footer,
+    .library-setup-path-row {
+      align-items: stretch;
+      flex-direction: column;
     }
   }
 

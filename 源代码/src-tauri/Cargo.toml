@@ -1,14 +1,63 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.20.0"
-description = "Research hotspots desktop workstation"
-authors = ["local"]
+version = "0.21.0-beta.2"
+description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
+authors = ["Research Hotspots Desktop"]
 edition = "2021"
 default-run = "research-hotspots-desktop"
+autobins = false
+
+[features]
+default = []
+dev-tools = []
+
+[[bin]]
+name = "research-hotspots-desktop"
+path = "src/main.rs"
+
+[[bin]]
+name = "audit_library"
+path = "src/bin/audit_library.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "export_app17_visual_review"
+path = "src/bin/export_app17_visual_review.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "export_hotspot_evidence"
+path = "src/bin/export_hotspot_evidence.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "export_star_map"
+path = "src/bin/export_star_map.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "import_library"
+path = "src/bin/import_library.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "prepare_default_library"
+path = "src/bin/prepare_default_library.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "audit_windows_first_run"
+path = "src/bin/audit_windows_first_run.rs"
+required-features = ["dev-tools"]
 
 [lib]
 name = "research_hotspots_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+test = false
+
+[workspace]
+members = ["core"]
+resolver = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -21,3 +70,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 csv = "1"
+sha2 = "0.10"
+fs2 = "0.4"
+research-hotspots-core = { path = "core" }
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["sync", "time", "macros"] }

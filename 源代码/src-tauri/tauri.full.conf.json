@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../release-assets/default-library/research-hotspots-v7.sqlite": "default-library/research-hotspots-v7.sqlite",
+      "../release-assets/default-library/default-library-manifest.json": "default-library/default-library-manifest.json"
+    }
+  }
+}

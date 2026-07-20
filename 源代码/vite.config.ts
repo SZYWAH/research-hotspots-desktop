@@ -1,9 +1,13 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import packageMetadata from "./package.json";
 
-const appVersion = "0.20.0";
+const appVersion = packageMetadata.version;
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, mode }) => {
+  const env = loadEnv(mode, ".", "");
+  const buildRevision = env.VITE_BUILD_REVISION || "working-tree";
+  return ({
   base: "./",
   // Serve only the generated snapshot. The sibling config file contains a
   // local database path and must never become a public Vite asset.
@@ -22,6 +26,7 @@ export default defineConfig(({ command }) => ({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    __BUILD_REVISION__: JSON.stringify(buildRevision),
   },
   server: {
     host: "127.0.0.1",
@@ -33,4 +38,5 @@ export default defineConfig(({ command }) => ({
   },
   clearScreen: false,
   envPrefix: ["VITE_"],
-}));
+  });
+});

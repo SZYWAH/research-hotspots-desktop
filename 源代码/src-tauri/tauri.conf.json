@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Research Hotspots Desktop",
-  "version": "0.20.0",
+  "version": "0.21.0-beta.2",
   "identifier": "com.local.research-hotspots-desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -26,7 +26,23 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Research Hotspots Desktop",
+    "copyright": "Copyright © 2026 Research Hotspots Desktop",
+    "shortDescription": "Local-first research hotspot analysis and scientific literature exploration",
+    "longDescription": "Research Hotspots Desktop provides local literature management, research hotspot analysis, evidence reports, and an interactive scientific galaxy visualization.",
+    "icon": ["icons/icon.ico"],
+    "externalBin": [],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": true
+      }
+    }
   }
 }
