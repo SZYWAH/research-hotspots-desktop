@@ -1580,7 +1580,7 @@ fn recover_interrupted_restore(database_dir: &Path) -> Result<(), String> {
     let value: serde_json::Value = serde_json::from_slice(
         &fs::read(&marker_path).map_err(|error| format!("Cannot read restore marker: {error}"))?,
     )
-    .map_err(|error| format!("Cannot parse restore marker: {error}"))?;
+        .map_err(|error| format!("Cannot parse restore marker: {error}"))?;
     let path_value = |key: &str| {
         value
             .get(key)
@@ -2381,7 +2381,7 @@ fn cluster_library_connection(
                         .iter()
                         .enumerate()
                         .max_by_key(|(_, hotspot)| hotspot.paper_count)
-                        .map(|(index, _)| index)
+                .map(|(index, _)| index)
                         .unwrap_or(0)
                 })
         });
@@ -2400,27 +2400,27 @@ fn cluster_library_connection(
     let snapshot_hotspots = hotspots
         .iter()
         .map(|hotspot| {
-            Ok(SnapshotHotspot {
-                hotspot_id: hotspot.id.clone(),
-                payload_json: serde_json::to_string(hotspot).map_err(|error| error.to_string())?,
-                x: hotspot.coordinates.x as f64,
-                y: hotspot.coordinates.y as f64,
-                z: hotspot.coordinates.z as f64,
-                paper_count: hotspot.paper_count,
-                updated_at: hotspot.updated_at.clone(),
-            })
+        Ok(SnapshotHotspot {
+            hotspot_id: hotspot.id.clone(),
+            payload_json: serde_json::to_string(hotspot).map_err(|error| error.to_string())?,
+            x: hotspot.coordinates.x as f64,
+            y: hotspot.coordinates.y as f64,
+            z: hotspot.coordinates.z as f64,
+            paper_count: hotspot.paper_count,
+            updated_at: hotspot.updated_at.clone(),
+        })
         })
         .collect::<Result<Vec<_>, String>>()?;
     write_snapshot_transaction(
         conn,
         &SnapshotWriteInput {
-            snapshot_id: snapshot_id.clone(),
-            project_id: project_id.to_string(),
-            algorithm_version: V20_ALGORITHM_VERSION.to_string(),
-            paper_count: before_count,
-            created_at: timestamp.clone(),
-            hotspots: snapshot_hotspots,
-            memberships: memberships.clone(),
+        snapshot_id: snapshot_id.clone(),
+        project_id: project_id.to_string(),
+        algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+        paper_count: before_count,
+        created_at: timestamp.clone(),
+        hotspots: snapshot_hotspots,
+        memberships: memberships.clone(),
         },
     )?;
 
@@ -2688,11 +2688,11 @@ pub fn export_hotspot_evidence_from_database_path(
                 .iter()
                 .find(|hotspot| hotspot.id == relation.hotspot_id)
                 .map(|hotspot| EvidenceSimilarHotspot {
-                    hotspot_id: relation.hotspot_id.clone(),
-                    title: hotspot.title.clone(),
-                    field: hotspot.field.clone(),
-                    score: relation.score,
-                })
+                hotspot_id: relation.hotspot_id.clone(),
+                title: hotspot.title.clone(),
+                field: hotspot.field.clone(),
+                score: relation.score,
+            })
         })
         .collect::<Vec<_>>();
     let year_evolution = selected
@@ -3272,20 +3272,20 @@ fn run_health_check(
 
     let (database_dir_value, database_path_value, database_dir_writable) =
         match resolve_database_dir(&app, database_dir) {
-            Ok(path) => {
-                let writable = check_writable_dir(&path, "database", &mut errors);
-                let database_path = path.join("research-hotspots-v7.sqlite");
-                (
-                    Some(path.to_string_lossy().to_string()),
-                    Some(database_path.to_string_lossy().to_string()),
-                    writable,
-                )
-            }
-            Err(error) => {
-                errors.push(error);
-                (None, None, false)
-            }
-        };
+        Ok(path) => {
+            let writable = check_writable_dir(&path, "database", &mut errors);
+            let database_path = path.join("research-hotspots-v7.sqlite");
+            (
+                Some(path.to_string_lossy().to_string()),
+                Some(database_path.to_string_lossy().to_string()),
+                writable,
+            )
+        }
+        Err(error) => {
+            errors.push(error);
+            (None, None, false)
+        }
+    };
 
     let temp_dir = worker_temp_dir
         .filter(|value| !value.trim().is_empty())
@@ -3552,8 +3552,8 @@ fn build_v20_galaxy_payload(
         .memberships
         .iter()
         .filter_map(|membership| {
-            let hotspot = hotspot_by_id.get(membership.hotspot_id.as_str())?;
-            Some(App17GalaxyPaperPoint {
+        let hotspot = hotspot_by_id.get(membership.hotspot_id.as_str())?;
+        Some(App17GalaxyPaperPoint {
                 raw_paper_id: membership.paper_id.clone(),
                 scoped_paper_id: scoped_id(project_id, &membership.paper_id),
                 field: hotspot.field.clone(),
@@ -3561,8 +3561,8 @@ fn build_v20_galaxy_payload(
                 x: membership.x,
                 y: membership.y,
                 z: membership.z,
-                year: years.get(&membership.paper_id).copied().flatten(),
-                color: app17_topic_color(&hotspot.field, hotspot.topic_id),
+            year: years.get(&membership.paper_id).copied().flatten(),
+            color: app17_topic_color(&hotspot.field, hotspot.topic_id),
                 size: if membership
                     .representative_rank
                     .is_some_and(|rank| rank <= 10)
@@ -3765,7 +3765,7 @@ fn run_app17_galaxy_worker(input: &App17GalaxySyncInput) -> Result<App17MysqlGal
                 ""
             } else {
                 " / stdout contained non-result output"
-            }
+        }
         ));
     }
     serde_json::from_slice::<App17MysqlGalaxyOutput>(&output.stdout).map_err(|error| {
@@ -3786,17 +3786,17 @@ fn write_app17_galaxy_snapshot(
         "DELETE FROM app17_paper_topics WHERE project_id = ?1",
         params![project_id],
     )
-    .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?;
     tx.execute(
         "DELETE FROM app17_hotspots WHERE project_id = ?1",
         params![project_id],
     )
-    .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?;
     tx.execute(
         "DELETE FROM app17_hotspot_reviews WHERE project_id = ?1",
         params![project_id],
     )
-    .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?;
 
     {
         let mut stmt = tx
@@ -3819,7 +3819,7 @@ fn write_app17_galaxy_snapshot(
                 row.z,
                 row.year
             ])
-            .map_err(|error| error.to_string())?;
+                .map_err(|error| error.to_string())?;
         }
     }
 
@@ -3863,7 +3863,7 @@ fn write_app17_galaxy_snapshot(
                 row.review_cn,
                 row.created_at
             ])
-            .map_err(|error| error.to_string())?;
+                .map_err(|error| error.to_string())?;
         }
     }
 
@@ -4331,19 +4331,19 @@ fn query_app17_hotspot_evidence(
         .query_map(
             params![project_id, field, topic_id, max_papers as i64],
             |row| {
-                Ok(EvidencePaperSnapshot {
-                    id: row.get(0)?,
-                    source: row.get(1)?,
-                    title: row.get(2)?,
-                    abstract_text: row.get(3)?,
-                    authors: row.get(4)?,
-                    categories: row.get(5)?,
-                    field: row.get(6)?,
-                    published_date: row.get(7)?,
-                    year: row.get(8)?,
-                    url: row.get(9)?,
-                    doi: row.get(10)?,
-                })
+            Ok(EvidencePaperSnapshot {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                title: row.get(2)?,
+                abstract_text: row.get(3)?,
+                authors: row.get(4)?,
+                categories: row.get(5)?,
+                field: row.get(6)?,
+                published_date: row.get(7)?,
+                year: row.get(8)?,
+                url: row.get(9)?,
+                doi: row.get(10)?,
+            })
             },
         )
         .map_err(|error| error.to_string())?
@@ -6331,9 +6331,9 @@ fn resolve_database_dir(
     }
 
     if cfg!(debug_assertions) {
-        if let Some(root) = find_project_root() {
-            return Ok(root.join("data").join("library"));
-        }
+    if let Some(root) = find_project_root() {
+        return Ok(root.join("data").join("library"));
+    }
     }
 
     Err("论文库尚未配置。请先完成首次启动设置。".to_string())
@@ -6465,14 +6465,14 @@ fn count_facets(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let rows = stmt
         .query_map(params![project_id, limit], |row| {
-            Ok(CountFacet {
-                value: row.get(0)?,
-                count: row.get(1)?,
-            })
+        Ok(CountFacet {
+            value: row.get(0)?,
+            count: row.get(1)?,
         })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+    })
+    .map_err(|error| error.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| error.to_string())?;
     Ok(rows)
 }
 
@@ -7913,7 +7913,7 @@ ER  -
                 "DELETE FROM papers WHERE id = ?1 AND project_id = ?2",
                 params![scoped_id(project_id, "backup-1"), project_id],
             )
-            .expect("delete one active row");
+                .expect("delete one active row");
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
