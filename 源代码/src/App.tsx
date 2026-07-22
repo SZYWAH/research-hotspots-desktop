@@ -15,6 +15,7 @@ import {
   ArrowRight,
   Atom,
   BookOpen,
+  Bot,
   BrainCircuit,
   Check,
   CheckCircle2,
@@ -64,6 +65,8 @@ import {
   type GalaxyPerformanceSnapshot,
   type GalaxySystemViewMode,
 } from "./components/App17GalaxyCanvas";
+import { AgentWorkspace } from "./components/AgentWorkspace";
+import { readAgentVisualReviewScenario } from "./lib/agentVisualReview";
 
 const threeConsole = (THREE as unknown as {
   setConsoleFunction?: (handler: ((type: string, message: string, ...args: unknown[]) => void) | null) => void;
@@ -207,6 +210,7 @@ import { DISCIPLINES } from "./types";
 
 const navItems: Array<{ id: ActiveView; label: string; icon: LucideIcon; hint: string }> = [
   { id: "dashboard", label: "总览", icon: Home, hint: "流程与状态" },
+  { id: "agent", label: "研究 Agent", icon: Bot, hint: "监督式研究" },
   { id: "search", label: "文献工作台", icon: Search, hint: "检索与导入" },
   { id: "pipeline", label: "分析流水线", icon: Activity, hint: "清洗与建模" },
   { id: "galaxy", label: "科研星图", icon: Orbit, hint: "热点空间" },
@@ -339,8 +343,9 @@ function galaxySessionCacheKey(databaseDir: string, projectId: string) {
 
 export default function App() {
   const galaxyVisualReview = isGalaxyVisualReviewMode();
+  const agentVisualReviewScenario = useMemo(readAgentVisualReviewScenario, []);
   const galaxyVisualReviewIntent = useMemo(readGalaxyVisualReviewIntent, []);
-  const [activeView, setActiveView] = useState<ActiveView>(() => galaxyVisualReview ? "galaxy" : "dashboard");
+  const [activeView, setActiveView] = useState<ActiveView>(() => galaxyVisualReview ? "galaxy" : agentVisualReviewScenario ? "agent" : "dashboard");
   const [galaxyVisited, setGalaxyVisited] = useState(galaxyVisualReview);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -650,7 +655,7 @@ export default function App() {
             <Database size={14} />
             本地数据层
           </div>
-          <div>SQLite 承载论文主库，IndexedDB 保留设置、热点、报告与任务日志。</div>
+          <div>SQLite 承载论文主库与 Agent 运行，IndexedDB 保留界面设置和兼容数据。</div>
           <div className="mt-2 text-ink/35">v{__APP_VERSION__} · {libraryStatus ? formatBytes(libraryStatus.sizeBytes) : "loading"}</div>
         </div>
       </aside>
@@ -658,6 +663,21 @@ export default function App() {
       <section ref={workspaceRef} className="workspace">
         {activeView === "dashboard" && (
           <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
+        )}
+        {activeView === "agent" && settings && activeProject && (
+          <AgentWorkspace
+            settings={settings}
+            activeProject={activeProject}
+            libraryStatus={libraryStatus}
+            v20Snapshot={v20Snapshot}
+            visualReviewScenario={agentVisualReviewScenario}
+            onNavigate={setActiveView}
+            onOpenPaper={(paperId, title) => {
+              setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
+              setActiveView("search");
+            }}
+            onNotice={setNotice}
+          />
         )}
         {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {(activeView === "galaxy" || galaxyVisited) && settings && activeProject && (
