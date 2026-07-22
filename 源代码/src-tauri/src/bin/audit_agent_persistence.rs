@@ -5,8 +5,8 @@ use std::{
 
 use research_hotspots_core::{
     agent::{
-        AgentAutomationMode, AgentBudget, AgentPlan, AgentPlanStep, AgentRiskLevel, AgentRunStatus,
-        AgentSuccessCriterion,
+        AgentAutomationMode, AgentBudget, AgentPlan, AgentPlanStep, AgentRiskLevel, AgentRunKind,
+        AgentRunStatus, AgentSuccessCriterion,
     },
     agent_store::{migrate_library_file, AgentRepository, NewAgentRun},
     ensure_v20_schema,
@@ -28,7 +28,7 @@ fn main() -> Result<(), String> {
     remove_owned_files(
         &database,
         &root.join("too-new.sqlite"),
-        &root.join("agent-v8.pre-schema-v10.1000.sqlite"),
+        &root.join("agent-v8.pre-schema-v11.1000.sqlite"),
     )?;
     let conn = Connection::open(&database).map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE papers(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,source TEXT NOT NULL,title TEXT NOT NULL,abstract TEXT NOT NULL,field TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,search_blob TEXT NOT NULL DEFAULT '');").map_err(|e|e.to_string())?;
@@ -38,7 +38,7 @@ fn main() -> Result<(), String> {
     drop(conn);
     let migration = migrate_library_file(&database, "project-default", 1000, true)?;
     if migration.previous_version != 8
-        || migration.current_version != 10
+        || migration.current_version != 11
         || migration.backup_path.as_ref().is_none_or(|p| !p.exists())
     {
         return Err("migration audit failed".into());
@@ -53,7 +53,7 @@ fn main() -> Result<(), String> {
     let too_new = root.join("too-new.sqlite");
     let too_new_conn = Connection::open(&too_new).map_err(|e| e.to_string())?;
     too_new_conn
-        .pragma_update(None, "user_version", 11)
+        .pragma_update(None, "user_version", 12)
         .map_err(|e| e.to_string())?;
     drop(too_new_conn);
     if migrate_library_file(&too_new, "project-default", 1001, true).unwrap_err()
@@ -67,6 +67,8 @@ fn main() -> Result<(), String> {
         id: "audit-run".into(),
         project_id: "project-default".into(),
         snapshot_id: None,
+        run_kind: AgentRunKind::ResearchReport,
+        task_input: json!({}),
         automation_mode: AgentAutomationMode::Supervised,
         objective: "Audit persistence".into(),
         budget: AgentBudget::default(),
@@ -154,7 +156,7 @@ fn prepare_owned_root(root: &Path) -> Result<(), String> {
     if !drive_path.to_ascii_uppercase().starts_with("D:\\") {
         return Err(format!("AGENT_PERSISTENCE_AUDIT_REQUIRES_D_DRIVE:{text}"));
     }
-    fs::write(canonical.join(".agent-persistence-audit-owned"),"Only agent-v8.sqlite*, too-new.sqlite*, and the schema-v10 audit backup are managed by this audit.\n").map_err(|error|error.to_string())
+    fs::write(canonical.join(".agent-persistence-audit-owned"),"Only agent-v8.sqlite*, too-new.sqlite*, and the schema-v11 audit backup are managed by this audit.\n").map_err(|error|error.to_string())
 }
 
 fn remove_owned_files(database: &Path, too_new: &Path, backup: &Path) -> Result<(), String> {

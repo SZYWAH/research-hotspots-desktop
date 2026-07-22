@@ -6,7 +6,7 @@ use std::{
 use research_hotspots_core::{
     agent::{
         canonical_value_sha256, AgentAutomationMode, AgentBudget, AgentPlan, AgentPlanStep,
-        AgentRiskLevel, AgentRunStatus, AgentStepStatus, AgentSuccessCriterion,
+        AgentRiskLevel, AgentRunKind, AgentRunStatus, AgentStepStatus, AgentSuccessCriterion,
     },
     agent_executor::{
         evaluate_completion_gate, governed_action_hash, CompletionDisposition, CompletionGateInput,
@@ -29,7 +29,7 @@ const WRITER_PROFILE: &str = "audit-writer-profile";
 fn main() -> Result<(), String> {
     let root = parse_root()?;
     prepare_owned_root(&root)?;
-    let database = root.join("agent-executor-v10.sqlite");
+    let database = root.join("agent-executor-v11.sqlite");
     remove_owned_database_files(&database)?;
 
     let connection = Connection::open(&database).map_err(|error| error.to_string())?;
@@ -55,7 +55,7 @@ fn main() -> Result<(), String> {
     let schema_version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| error.to_string())?;
-    if schema_version != 10 || LIBRARY_SCHEMA_VERSION != 10 {
+    if schema_version != 11 || LIBRARY_SCHEMA_VERSION != 11 {
         return Err(format!(
             "AGENT_EXECUTOR_AUDIT_SCHEMA_MISMATCH:{schema_version}:{}",
             LIBRARY_SCHEMA_VERSION
@@ -119,6 +119,8 @@ fn audit_supervised_write_and_completion(
         id: run_id.into(),
         project_id: PROJECT_ID.into(),
         snapshot_id: Some(SNAPSHOT_ID.into()),
+        run_kind: AgentRunKind::ResearchReport,
+        task_input: json!({}),
         automation_mode: AgentAutomationMode::Supervised,
         objective: "Produce a governed local evidence report".into(),
         budget: AgentBudget::default(),
@@ -362,6 +364,7 @@ fn audit_supervised_write_and_completion(
         paper_count: 3,
         hotspot_count: 1,
         membership_count: 3,
+        library_revision: 0,
         generated_at: "audit".into(),
     };
     let gate = evaluate_completion_gate(CompletionGateInput {
@@ -412,6 +415,8 @@ fn audit_stale_lease_receipt_and_recovery(
         id: run_id.into(),
         project_id: PROJECT_ID.into(),
         snapshot_id: Some(SNAPSHOT_ID.into()),
+        run_kind: AgentRunKind::ResearchReport,
+        task_input: json!({}),
         automation_mode: AgentAutomationMode::Supervised,
         objective: "Audit lease recovery".into(),
         budget: AgentBudget::default(),
@@ -784,7 +789,7 @@ fn prepare_owned_root(root: &Path) -> Result<(), String> {
     }
     fs::write(
         canonical.join(".agent-executor-audit-owned"),
-        "Only files named agent-executor-v10.sqlite* are managed by this audit.\n",
+        "Only files named agent-executor-v11.sqlite* are managed by this audit.\n",
     )
     .map_err(|error| error.to_string())
 }
