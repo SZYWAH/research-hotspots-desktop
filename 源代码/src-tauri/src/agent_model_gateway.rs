@@ -53,6 +53,10 @@ pub struct AgentModelProfile {
     pub anthropic_version: Option<String>,
     #[serde(default)]
     pub allow_local_http: bool,
+    #[serde(default)]
+    pub input_usd_per_million: Option<f64>,
+    #[serde(default)]
+    pub output_usd_per_million: Option<f64>,
 }
 
 impl AgentModelProfile {
@@ -499,6 +503,20 @@ fn validate_request(
             ModelGatewayErrorCode::InvalidRequest,
             false,
             "A bounded model name is required.",
+        ));
+    }
+    if [
+        profile.input_usd_per_million,
+        profile.output_usd_per_million,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|rate| !rate.is_finite() || rate < 0.0)
+    {
+        return Err(ModelGatewayError::new(
+            ModelGatewayErrorCode::InvalidRequest,
+            false,
+            "Model token pricing must be finite and non-negative.",
         ));
     }
     if credential.trim().is_empty() || credential.contains(['\r', '\n']) {
@@ -1638,6 +1656,8 @@ mod tests {
             native_structured_output: true,
             anthropic_version: None,
             allow_local_http: true,
+            input_usd_per_million: None,
+            output_usd_per_million: None,
         }
     }
 

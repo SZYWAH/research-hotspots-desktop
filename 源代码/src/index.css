@@ -4603,6 +4603,20 @@ button:focus-visible {
   .agent-new-run-footer { @apply flex items-center justify-between gap-4 border-t pt-4; border-color: rgb(var(--color-line) / 0.32); }
   .agent-new-run-footer > div { @apply flex max-w-[540px] items-start gap-2 text-[10px] leading-5 text-ink/30; }
   .agent-new-run-footer svg { @apply mt-0.5 shrink-0 text-cyan/55; }
+  .agent-task-kind-grid { @apply mt-2 grid grid-cols-3 gap-2; }
+  .agent-task-kind-grid button { @apply flex min-h-[68px] flex-col items-start border px-3 py-2 text-left; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-sm); background: rgb(var(--color-panel-soft) / 0.22); }
+  .agent-task-kind-grid button:hover { border-color: rgb(var(--color-cyan) / 0.3); }
+  .agent-task-kind-grid button.active { border-color: rgb(var(--color-cyan) / 0.58); background: rgb(var(--color-cyan) / 0.07); box-shadow: inset 2px 0 0 rgb(var(--color-cyan) / 0.8); }
+  .agent-task-kind-grid strong { @apply text-xs text-ink/80; }
+  .agent-task-kind-grid span { @apply mt-1 text-[10px] leading-4 text-ink/35; }
+  .agent-resource-picker { @apply flex items-center justify-between gap-3 border p-3; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-sm); background: rgb(var(--color-panel-soft) / 0.24); }
+  .agent-resource-picker > div { @apply min-w-0; }
+  .agent-resource-picker strong { @apply block text-xs text-ink/70; }
+  .agent-resource-picker span { @apply mt-1 block truncate text-[10px] text-ink/35; }
+  .agent-export-fields { @apply space-y-3; }
+  .agent-operation-inline { @apply mt-3 grid max-w-[520px] grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 text-[10px] text-ink/40; }
+  .agent-operation-inline strong { @apply font-mono text-cyan/65; }
+  .agent-operation-inline progress { @apply col-span-2 h-1.5 w-full overflow-hidden; accent-color: rgb(var(--color-cyan)); }
 
   @media (max-width: 1599px) {
     .agent-workbench { grid-template-columns: 260px minmax(520px, 1fr); }
@@ -4623,6 +4637,7 @@ button:focus-visible {
     .agent-header-actions { @apply items-stretch; }
     .agent-snapshot-badge { @apply hidden; }
     .agent-audit-grid { @apply grid-cols-2; }
+    .agent-task-kind-grid { @apply grid-cols-2; }
   }
 
   @media (prefers-reduced-motion: reduce) {
