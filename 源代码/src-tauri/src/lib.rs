@@ -13,8 +13,11 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use research_hotspots_core::agent::{AgentAutomationMode, AgentBudget};
-use research_hotspots_core::agent_store::{migrate_library_file, AgentRepository, AgentRunRecord, AgentRunSnapshot, NewAgentRun};
+use research_hotspots_core::agent::{AgentAutomationMode, AgentBudget, AgentModelRole, AgentRunStatus};
+use research_hotspots_core::agent_store::{
+    migrate_library_file, AgentArtifactRecord, AgentRepository, AgentRunOverview, AgentRunRecord,
+    AgentRunSnapshot, NewAgentRun,
+};
 use research_hotspots_core::{
     atomic_replace_file_with_rollback, create_empty_library_atomically,
     install_seed_library_atomically,
@@ -102,6 +105,17 @@ struct AgentCreateRunInput { database_dir: Option<String>, id: String, project_i
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentRunQueryInput { database_dir: Option<String>, run_id: String }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentArtifactQueryInput { database_dir: Option<String>, run_id: String, artifact_id: String }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDraftModelProfiles {
+    planner: research_hotspots_core::agent_store::AgentModelProfileReference,
+    writer: Option<research_hotspots_core::agent_store::AgentModelProfileReference>,
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentRunListInput { database_dir: Option<String>, project_id: Option<String>, limit: Option<u32>, offset: Option<u32> }
@@ -8045,6 +8059,28 @@ fn agent_create_run(app: tauri::AppHandle, input: AgentCreateRunInput) -> Result
 fn agent_get_run(app: tauri::AppHandle, input: AgentRunQueryInput) -> Result<AgentRunSnapshot, String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.snapshot(&input.run_id) }
 #[tauri::command]
 fn agent_list_runs(app: tauri::AppHandle, input: AgentRunListInput) -> Result<Vec<AgentRunRecord>, String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.list_runs(&input.project_id.unwrap_or_else(default_project_id), input.limit.unwrap_or(50), input.offset.unwrap_or(0)) }
+#[tauri::command]
+fn agent_get_run_overview(app: tauri::AppHandle, input: AgentRunQueryInput) -> Result<AgentRunOverview, String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.overview(&input.run_id) }
+#[tauri::command]
+fn agent_get_artifact(app: tauri::AppHandle, input: AgentArtifactQueryInput) -> Result<AgentArtifactRecord, String> { let (conn, _, _) = open_library_database(&app, input.database_dir)?; AgentRepository::new(&conn)?.artifact(&input.run_id, &input.artifact_id) }
+#[tauri::command]
+fn agent_get_draft_model_profiles(app: tauri::AppHandle, input: AgentRunQueryInput) -> Result<AgentDraftModelProfiles, String> {
+    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let repository = AgentRepository::new(&conn)?;
+    let run = repository.get_run(&input.run_id)?.ok_or("AGENT_RUN_NOT_FOUND")?;
+    if run.status != AgentRunStatus::Draft {
+        return Err("AGENT_RUN_NOT_DRAFT".into());
+    }
+    let planner = repository
+        .latest_model_profile_before(AgentModelRole::Planner, run.created_at_ms)?
+        .ok_or("AGENT_DRAFT_PLANNER_PROFILE_NOT_FOUND")?;
+    let writer = repository
+        .latest_model_profile_before(AgentModelRole::Writer, run.created_at_ms)?;
+    Ok(AgentDraftModelProfiles {
+        planner: research_hotspots_core::agent_store::AgentModelProfileReference { profile_id: planner.id, config_sha256: planner.config_sha256 },
+        writer: writer.map(|profile| research_hotspots_core::agent_store::AgentModelProfileReference { profile_id: profile.id, config_sha256: profile.config_sha256 }),
+    })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -8060,7 +8096,12 @@ pub fn run() {
             agent_create_run,
             agent_get_run,
             agent_list_runs,
+            agent_get_run_overview,
+            agent_get_artifact,
+            agent_get_draft_model_profiles,
             agent_runtime::agent_save_model_profile,
+            agent_runtime::agent_configure_model_credential,
+            agent_runtime::agent_test_model_profile,
             agent_runtime::agent_plan_run,
             agent_runtime::agent_execute_run,
             agent_runtime::agent_decide_plan,

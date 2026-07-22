@@ -19,6 +19,22 @@ fn read_app_credential(_project_id: &str, _service: &str) -> Option<String> {
     None
 }
 
+struct CredentialStatus {
+    configured: bool,
+}
+
+fn set_app_credential(
+    _project_id: String,
+    _service: String,
+    secret: String,
+) -> Result<CredentialStatus, String> {
+    Ok(CredentialStatus { configured: !secret.trim().is_empty() })
+}
+
+fn get_app_credential_status(_project_id: String, _service: String) -> CredentialStatus {
+    CredentialStatus { configured: false }
+}
+
 fn normalized_database_key(database_path: &Path) -> String {
     database_path
         .to_string_lossy()

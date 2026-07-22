@@ -42,7 +42,10 @@ use super::agent_model_gateway::{
     ModelAttemptHook, ModelAttemptHookError, ModelAttemptKind, ModelCancelHandle,
     ModelCancellation, ModelMessage, ModelMessageRole, ModelPurpose, StructuredModelRequest,
 };
-use super::{normalized_database_key, now_millis, open_library_database, read_app_credential};
+use super::{
+    get_app_credential_status, normalized_database_key, now_millis, open_library_database,
+    read_app_credential, set_app_credential,
+};
 
 static AGENT_RUNTIME_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -62,6 +65,42 @@ pub struct AgentSaveModelProfileInput {
     pub database_dir: Option<String>,
     pub role: AgentModelRole,
     pub profile: AgentModelProfile,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentModelCredentialInput {
+    pub project_id: String,
+    pub profile: AgentModelProfile,
+    #[serde(default)]
+    pub secret: Option<String>,
+    #[serde(default)]
+    pub legacy_service: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelCredentialStatus {
+    pub configured: bool,
+    pub migrated_legacy_credential: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTestModelProfileInput {
+    pub project_id: String,
+    pub profile: AgentModelProfile,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelTestResult {
+    pub connected: bool,
+    pub protocol: AgentModelProtocol,
+    pub model: String,
+    pub elapsed_ms: u128,
+    pub retry_count: usize,
+    pub fallback_used: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1572,6 +1611,89 @@ pub async fn agent_save_model_profile(
     })
     .await
     .map_err(|error| format!("AGENT_PROFILE_TASK_FAILED:{error}"))?
+}
+
+#[tauri::command]
+pub async fn agent_configure_model_credential(
+    input: AgentModelCredentialInput,
+) -> Result<AgentModelCredentialStatus, String> {
+    if input.project_id.trim().is_empty() {
+        return Err("AGENT_MODEL_PROJECT_REQUIRED".into());
+    }
+    let endpoint = endpoint_for_profile(&input.profile).map_err(|error| error.to_string())?;
+    let endpoint_origin = endpoint.origin().ascii_serialization();
+    validate_profile_protocol(&input.profile, &endpoint_origin)?;
+    let service = credential_service_for_profile(&endpoint_origin, input.profile.protocol)?;
+    let mut migrated_legacy_credential = false;
+    if let Some(secret) = input.secret.filter(|value| !value.trim().is_empty()) {
+        set_app_credential(input.project_id.clone(), service.clone(), secret)?;
+    } else if read_app_credential(&input.project_id, &service).is_none() {
+        if let Some(legacy_service) = input.legacy_service.as_deref() {
+            if !matches!(legacy_service, "ai-deepseek" | "ai-openai-compatible") {
+                return Err("AGENT_MODEL_LEGACY_CREDENTIAL_FORBIDDEN".into());
+            }
+            let origin_matches_legacy = match legacy_service {
+                "ai-deepseek" => endpoint_origin == "https://api.deepseek.com",
+                "ai-openai-compatible" => endpoint_origin == "https://api.openai.com",
+                _ => false,
+            };
+            if !origin_matches_legacy {
+                return Err("AGENT_MODEL_LEGACY_CREDENTIAL_ORIGIN_MISMATCH".into());
+            }
+            if let Some(secret) = read_app_credential(&input.project_id, legacy_service) {
+                set_app_credential(input.project_id.clone(), service.clone(), secret)?;
+                migrated_legacy_credential = true;
+            }
+        }
+    }
+    let configured = get_app_credential_status(input.project_id, service).configured
+        || development_environment_for_origin(&endpoint_origin)
+            .and_then(|name| std::env::var(name).ok())
+            .is_some_and(|secret| !secret.trim().is_empty());
+    Ok(AgentModelCredentialStatus {
+        configured,
+        migrated_legacy_credential,
+    })
+}
+
+#[tauri::command]
+pub async fn agent_test_model_profile(
+    input: AgentTestModelProfileInput,
+) -> Result<AgentModelTestResult, String> {
+    let record = saved_model_profile_record(AgentModelRole::Planner, input.profile.clone(), timestamp_ms())?;
+    let selection = selection_from_record(&record)?;
+    let credential = read_model_credential(&input.project_id, &selection)?;
+    let request = StructuredModelRequest {
+        purpose: ModelPurpose::Planner,
+        schema_name: "agent_connection_test".into(),
+        schema: json!({
+            "type": "object",
+            "properties": { "ok": { "type": "boolean" } },
+            "required": ["ok"],
+            "additionalProperties": false
+        }),
+        messages: vec![
+            ModelMessage { role: ModelMessageRole::System, content: "Return the requested JSON only.".into() },
+            ModelMessage { role: ModelMessageRole::User, content: "Return {\"ok\":true}.".into() },
+        ],
+        max_output_tokens: 32,
+        max_response_bytes: 32 * 1024,
+        temperature: Some(0.0),
+        allow_structure_repair: false,
+    };
+    let (_, cancellation) = ModelCancellation::channel();
+    let result = AgentModelGateway::default()
+        .execute_structured::<Value>(&input.profile, &credential, &request, cancellation)
+        .await
+        .map_err(|error| format!("AGENT_MODEL_TEST_{}:{}", format!("{:?}", error.code).to_uppercase(), error.message))?;
+    Ok(AgentModelTestResult {
+        connected: result.value.get("ok").and_then(Value::as_bool) == Some(true),
+        protocol: result.protocol,
+        model: input.profile.model,
+        elapsed_ms: result.elapsed_ms,
+        retry_count: result.retry_count,
+        fallback_used: result.fallback_used,
+    })
 }
 
 #[tauri::command]

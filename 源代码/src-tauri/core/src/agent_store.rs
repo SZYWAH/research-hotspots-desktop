@@ -244,6 +244,37 @@ pub struct AgentRunSnapshot {
     pub current_lease: Option<AgentLease>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentArtifactMetadata {
+    pub id: String,
+    pub run_id: String,
+    pub step_id: Option<String>,
+    pub artifact_kind: String,
+    pub content_sha256: String,
+    pub snapshot_id: Option<String>,
+    pub audit: Option<Value>,
+    pub review_status: Option<String>,
+    pub supersedes_artifact_id: Option<String>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunOverview {
+    pub run: AgentRunRecord,
+    pub plan: Option<AgentPlan>,
+    pub steps: Vec<AgentStepRecord>,
+    pub artifacts: Vec<AgentArtifactMetadata>,
+    pub approvals: Vec<AgentApprovalRecord>,
+    pub questions: Vec<AgentQuestionRecord>,
+    pub answers: Vec<AgentAnswerRecord>,
+    pub artifact_reviews: Vec<AgentArtifactReviewRecord>,
+    pub model_profiles: Vec<AgentModelProfileRecord>,
+    pub current_lease: Option<AgentLease>,
+    pub event_cursor: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLease {
@@ -637,10 +668,19 @@ impl<'a> AgentRepository<'a> {
         let library = self.library_instance_id(input.now_ms)?;
         let budget = json_text(&input.budget, AGENT_PLAN_MAX_BYTES)?;
         let usage = json_text(&AgentBudgetUsage::default(), AGENT_EVENT_MAX_BYTES)?;
-        let tx = self
-            .conn
-            .unchecked_transaction()
+        let tx = Transaction::new_unchecked(self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        let active_run_id: Option<String> = tx
+            .query_row(
+                "SELECT id FROM agent_runs WHERE library_instance_id=?1 AND project_id=?2 AND status NOT IN ('completed','cancelled','failed') ORDER BY updated_at_ms DESC,id LIMIT 1",
+                params![library, input.project_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(active_run_id) = active_run_id {
+            return Err(format!("AGENT_ACTIVE_RUN_EXISTS:{active_run_id}"));
+        }
         tx.execute("INSERT INTO agent_runs(id,library_instance_id,project_id,snapshot_id,automation_mode,status,objective,budget_json,budget_usage_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,'draft',?6,?7,?8,?9,?9)",params![input.id,library,input.project_id,input.snapshot_id,enum_text(input.automation_mode)?,input.objective,budget,usage,input.now_ms]).map_err(|e|e.to_string())?;
         append_event(
             &tx,
@@ -1603,6 +1643,21 @@ impl<'a> AgentRepository<'a> {
             .query_row(
                 "SELECT id,role,protocol,model,endpoint_origin,config_json,config_sha256,created_at_ms FROM agent_model_profiles WHERE config_sha256=?1",
                 params![config_hash],
+                row_to_model_profile,
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn latest_model_profile_before(
+        &self,
+        role: AgentModelRole,
+        created_at_ms: i64,
+    ) -> Result<Option<AgentModelProfileRecord>, String> {
+        self.conn
+            .query_row(
+                "SELECT id,role,protocol,model,endpoint_origin,config_json,config_sha256,created_at_ms FROM agent_model_profiles WHERE role=?1 AND created_at_ms<=?2 ORDER BY created_at_ms DESC,id DESC LIMIT 1",
+                params![enum_text(role)?, created_at_ms],
                 row_to_model_profile,
             )
             .optional()
@@ -2714,6 +2769,102 @@ impl<'a> AgentRepository<'a> {
             .map_err(|e| e.to_string())?;
         Ok(events)
     }
+
+    pub fn artifact(&self, run_id: &str, artifact_id: &str) -> Result<AgentArtifactRecord, String> {
+        let artifact = self
+            .conn
+            .query_row(
+                "SELECT id,run_id,step_id,artifact_kind,content_json,content_sha256,snapshot_id,audit_json,review_status,supersedes_artifact_id,created_at_ms FROM agent_artifacts WHERE run_id=?1 AND id=?2",
+                params![run_id, artifact_id],
+                row_to_artifact,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("AGENT_ARTIFACT_NOT_FOUND")?;
+        let actual_hash = canonical_value_sha256(&artifact.content)?;
+        if actual_hash != artifact.content_sha256 {
+            return Err("AGENT_ARTIFACT_HASH_MISMATCH".into());
+        }
+        Ok(artifact)
+    }
+
+    pub fn overview(&self, id: &str) -> Result<AgentRunOverview, String> {
+        let run = self.get_run(id)?.ok_or("AGENT_RUN_NOT_FOUND")?;
+        let plan = run
+            .current_plan_version
+            .map(|version| {
+                self.conn
+                    .query_row(
+                        "SELECT plan_json FROM agent_plans WHERE run_id=?1 AND version=?2",
+                        params![id, version],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|error| error.to_string())
+                    .and_then(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+            })
+            .transpose()?;
+        let steps = if let Some(version) = run.current_plan_version {
+            let mut statement = self.conn.prepare("SELECT run_id,plan_version,step_id,ordinal,title,tool_name,tool_version,registry_hash,input_json,resolved_input_json,action_hash,pending_approval_hash,pending_approval_requested_at_ms,risk,status,attempts,operation_key,recovery_count,observation_json,last_error_code,started_at_ms,finished_at_ms,updated_at_ms FROM agent_steps WHERE run_id=?1 AND plan_version=?2 ORDER BY ordinal").map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id, version], row_to_step)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        } else {
+            Vec::new()
+        };
+        let artifacts = {
+            let mut statement = self.conn.prepare("SELECT id,run_id,step_id,artifact_kind,content_sha256,snapshot_id,audit_json,review_status,supersedes_artifact_id,created_at_ms FROM agent_artifacts WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id], |row| {
+                    Ok(AgentArtifactMetadata {
+                        id: row.get(0)?,
+                        run_id: row.get(1)?,
+                        step_id: row.get(2)?,
+                        artifact_kind: row.get(3)?,
+                        content_sha256: row.get(4)?,
+                        snapshot_id: row.get(5)?,
+                        audit: row.get::<_, Option<String>>(6)?.map(parse_sql_json).transpose()?,
+                        review_status: row.get(7)?,
+                        supersedes_artifact_id: row.get(8)?,
+                        created_at_ms: row.get(9)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        let approvals = {
+            let mut statement=self.conn.prepare("SELECT id,run_id,decision_sequence,plan_version,step_id,approval_kind,decision,approved_hash,risk,registry_hash,tool_version,model_profile_hash,actor_id,policy_reason,created_at_ms FROM agent_approvals WHERE run_id=?1 ORDER BY decision_sequence").map_err(|error|error.to_string())?;
+            let rows = statement.query_map(params![id], row_to_approval).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            rows
+        };
+        let questions = {
+            let mut statement=self.conn.prepare("SELECT id,run_id,plan_version,step_id,prompt,answer_type,options_json,requires_replan,created_at_ms FROM agent_questions WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error|error.to_string())?;
+            let rows = statement.query_map(params![id], row_to_question).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            rows
+        };
+        let answers = {
+            let mut statement=self.conn.prepare("SELECT id,question_id,run_id,answer_json,actor_id,created_at_ms FROM agent_answers WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error|error.to_string())?;
+            let rows = statement.query_map(params![id], row_to_answer).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            rows
+        };
+        let artifact_reviews = {
+            let mut statement=self.conn.prepare("SELECT id,artifact_id,run_id,decision_sequence,artifact_sha256,decision,actor_id,reason,created_at_ms FROM agent_artifact_reviews WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error|error.to_string())?;
+            let rows = statement.query_map(params![id], row_to_artifact_review).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            rows
+        };
+        let model_profiles = {
+            let mut statement=self.conn.prepare("SELECT DISTINCT p.id,p.role,p.protocol,p.model,p.endpoint_origin,p.config_json,p.config_sha256,p.created_at_ms FROM agent_model_profiles p JOIN agent_plans ap ON ap.run_id=?1 AND (ap.planner_profile_hash=p.config_sha256 OR ap.writer_profile_hash=p.config_sha256) ORDER BY p.created_at_ms,p.id").map_err(|error|error.to_string())?;
+            let rows = statement.query_map(params![id], row_to_model_profile).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            rows
+        };
+        let current_lease = self.conn.query_row("SELECT run_id,owner_id,lease_token,generation,acquired_at_ms,heartbeat_at_ms,expires_at_ms FROM agent_run_leases WHERE run_id=?1",params![id],row_to_lease).optional().map_err(|error|error.to_string())?;
+        let event_cursor = self.conn.query_row("SELECT COALESCE(MAX(sequence),0) FROM agent_events WHERE run_id=?1",params![id],|row| row.get(0)).map_err(|error|error.to_string())?;
+        Ok(AgentRunOverview { run, plan, steps, artifacts, approvals, questions, answers, artifact_reviews, model_profiles, current_lease, event_cursor })
+    }
     pub fn snapshot(&self, id: &str) -> Result<AgentRunSnapshot, String> {
         let run = self.get_run(id)?.ok_or("AGENT_RUN_NOT_FOUND")?;
         let plan = run
@@ -3273,6 +3424,65 @@ mod tests {
         let s = r.snapshot("r").unwrap();
         assert_eq!(s.steps.len(), 1);
         assert_eq!(s.events.len(), 3)
+    }
+
+    #[test]
+    fn workspace_overview_is_lightweight_and_only_one_run_can_be_active() {
+        let connection = db();
+        let repository = AgentRepository::new(&connection).unwrap();
+        add(&repository);
+        let conflict = repository
+            .create_run(NewAgentRun {
+                id: "second".into(),
+                project_id: "p".into(),
+                snapshot_id: Some("s".into()),
+                automation_mode: AgentAutomationMode::Supervised,
+                objective: "Second research run".into(),
+                budget: AgentBudget::default(),
+                now_ms: 2,
+            })
+            .unwrap_err();
+        assert_eq!(conflict, "AGENT_ACTIVE_RUN_EXISTS:r");
+
+        repository
+            .transition_run("r", AgentRunStatus::Cancelled, None, 3)
+            .unwrap();
+        repository
+            .create_run(NewAgentRun {
+                id: "second".into(),
+                project_id: "p".into(),
+                snapshot_id: Some("s".into()),
+                automation_mode: AgentAutomationMode::Supervised,
+                objective: "Second research run".into(),
+                budget: AgentBudget::default(),
+                now_ms: 4,
+            })
+            .unwrap();
+        let content = json!({"largeReport":"content is loaded only on demand"});
+        repository
+            .put_artifact(&AgentArtifactRecord {
+                id: "workspace-artifact".into(),
+                run_id: "second".into(),
+                step_id: None,
+                artifact_kind: "report_draft".into(),
+                content: content.clone(),
+                content_sha256: canonical_value_sha256(&content).unwrap(),
+                snapshot_id: Some("s".into()),
+                audit: None,
+                review_status: Some("approved".into()),
+                supersedes_artifact_id: None,
+                created_at_ms: 5,
+            })
+            .unwrap();
+
+        let overview = repository.overview("second").unwrap();
+        assert_eq!(overview.artifacts.len(), 1);
+        assert_eq!(overview.artifacts[0].id, "workspace-artifact");
+        assert_eq!(overview.event_cursor, 1);
+        assert_eq!(
+            repository.artifact("second", "workspace-artifact").unwrap().content,
+            content
+        );
     }
     #[test]
     fn lease_expiry_is_exclusive() {
