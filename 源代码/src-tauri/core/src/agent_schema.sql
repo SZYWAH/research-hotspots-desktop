@@ -2,6 +2,8 @@ CREATE TABLE IF NOT EXISTS agent_meta(
  key TEXT PRIMARY KEY,value TEXT NOT NULL,created_at_ms INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_runs(
  id TEXT PRIMARY KEY,library_instance_id TEXT NOT NULL,project_id TEXT NOT NULL,snapshot_id TEXT,
+ run_kind TEXT NOT NULL DEFAULT 'research_report' CHECK(run_kind IN('research_report','paper_file_import','paper_mysql_import','library_clean','v20_modeling','report_export')),
+ task_input_json TEXT NOT NULL DEFAULT '{}',
  automation_mode TEXT NOT NULL CHECK(automation_mode IN('advisor','supervised')),
  status TEXT NOT NULL CHECK(status IN('draft','planning','awaiting_plan_approval','ready','running','awaiting_action_approval','awaiting_user','evaluating','paused','cancelling','cancelled','failed','completed')),
  objective TEXT NOT NULL,budget_json TEXT NOT NULL,budget_usage_json TEXT NOT NULL,current_plan_version INTEGER,
@@ -76,6 +78,41 @@ CREATE TABLE IF NOT EXISTS agent_model_profiles(
  protocol TEXT NOT NULL CHECK(protocol IN('openai_chat_completions','openai_responses','anthropic_messages')),
  model TEXT NOT NULL,endpoint_origin TEXT NOT NULL,config_json TEXT NOT NULL,config_sha256 TEXT NOT NULL UNIQUE,
  created_at_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_resource_grants(
+ id TEXT PRIMARY KEY,run_id TEXT,library_instance_id TEXT NOT NULL,project_id TEXT NOT NULL,
+ grant_kind TEXT NOT NULL CHECK(grant_kind IN('import_file','mysql_profile','export_directory')),
+ locator TEXT NOT NULL,metadata_json TEXT NOT NULL,fingerprint_sha256 TEXT NOT NULL,
+ created_at_ms INTEGER NOT NULL,expires_at_ms INTEGER,revoked_at_ms INTEGER,consumed_at_ms INTEGER,
+ FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE RESTRICT);
+CREATE INDEX IF NOT EXISTS idx_agent_resource_grants_run ON agent_resource_grants(run_id,created_at_ms DESC);
+CREATE TABLE IF NOT EXISTS agent_operations(
+ id TEXT PRIMARY KEY,run_id TEXT NOT NULL,step_id TEXT NOT NULL,operation_key TEXT NOT NULL UNIQUE,
+ operation_kind TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN('queued','running','pause_requested','paused','cancel_requested','cancelling','committing','succeeded','failed','cancelled')),
+ phase TEXT NOT NULL,processed_count INTEGER NOT NULL DEFAULT 0,total_count INTEGER,
+ bytes_processed INTEGER NOT NULL DEFAULT 0,total_bytes INTEGER,started_at_ms INTEGER,
+ heartbeat_at_ms INTEGER,finished_at_ms INTEGER,recovery_count INTEGER NOT NULL DEFAULT 0,
+ result_json TEXT,error_code TEXT,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,
+ FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE RESTRICT);
+CREATE INDEX IF NOT EXISTS idx_agent_operations_run ON agent_operations(run_id,updated_at_ms DESC);
+CREATE TABLE IF NOT EXISTS agent_import_staging_papers(
+ operation_id TEXT NOT NULL,row_index INTEGER NOT NULL,paper_id TEXT NOT NULL,project_id TEXT NOT NULL,
+ paper_json TEXT NOT NULL,dedupe_key TEXT NOT NULL,row_sha256 TEXT NOT NULL,
+ PRIMARY KEY(operation_id,row_index),FOREIGN KEY(operation_id) REFERENCES agent_operations(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_agent_import_staging_dedupe ON agent_import_staging_papers(operation_id,dedupe_key);
+CREATE TABLE IF NOT EXISTS agent_model_calls(
+ id TEXT PRIMARY KEY,run_id TEXT NOT NULL,step_id TEXT,model_role TEXT NOT NULL,
+ purpose TEXT NOT NULL,protocol TEXT NOT NULL,model TEXT NOT NULL,profile_hash TEXT NOT NULL,
+ request_id TEXT,input_tokens INTEGER,output_tokens INTEGER,total_tokens INTEGER,
+ elapsed_ms INTEGER NOT NULL DEFAULT 0,retry_count INTEGER NOT NULL DEFAULT 0,
+ structure_repair_count INTEGER NOT NULL DEFAULT 0,fallback_used INTEGER NOT NULL DEFAULT 0,
+ status TEXT NOT NULL CHECK(status IN('started','succeeded','failed','cancelled','abandoned')),
+ estimated_cost_microusd INTEGER,pricing_hash TEXT,error_code TEXT,
+ created_at_ms INTEGER NOT NULL,finished_at_ms INTEGER,
+ FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE RESTRICT);
+CREATE INDEX IF NOT EXISTS idx_agent_model_calls_run ON agent_model_calls(run_id,created_at_ms,id);
+CREATE TABLE IF NOT EXISTS library_operation_leases(
+ lease_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,lease_token TEXT NOT NULL,generation INTEGER NOT NULL,
+ operation_kind TEXT NOT NULL,heartbeat_at_ms INTEGER NOT NULL,expires_at_ms INTEGER NOT NULL);
 CREATE TRIGGER IF NOT EXISTS agent_events_no_update BEFORE UPDATE ON agent_events BEGIN SELECT RAISE(ABORT,'AGENT_EVENTS_IMMUTABLE'); END;
 CREATE TRIGGER IF NOT EXISTS agent_events_no_delete BEFORE DELETE ON agent_events BEGIN SELECT RAISE(ABORT,'AGENT_EVENTS_IMMUTABLE'); END;
 CREATE TRIGGER IF NOT EXISTS agent_approvals_no_update BEFORE UPDATE ON agent_approvals BEGIN SELECT RAISE(ABORT,'AGENT_APPROVALS_IMMUTABLE'); END;

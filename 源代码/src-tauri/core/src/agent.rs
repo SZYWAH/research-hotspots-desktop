@@ -21,6 +21,17 @@ pub enum AgentAutomationMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentRunKind {
+    ResearchReport,
+    PaperFileImport,
+    PaperMysqlImport,
+    LibraryClean,
+    V20Modeling,
+    ReportExport,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentRunStatus {
     Draft,
     Planning,

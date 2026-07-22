@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 
 use crate::agent::{
     validate_action, validate_question_request, validate_storable_json, AgentAction, AgentPlan,
-    AgentPlanStep, AgentQuestionRequest, AgentQuestionType, AgentRiskLevel, AgentSuccessCriterion,
-    AGENT_OBJECTIVE_MAX_BYTES, AGENT_PLAN_MAX_BYTES,
+    AgentPlanStep, AgentQuestionRequest, AgentQuestionType, AgentRiskLevel, AgentRunKind,
+    AgentSuccessCriterion, AGENT_OBJECTIVE_MAX_BYTES, AGENT_PLAN_MAX_BYTES,
 };
 use crate::agent_tools::AgentToolRegistry;
 
@@ -344,6 +344,114 @@ pub fn build_flagship_research_plan(
         objective: objective.trim().into(),
         assumptions: draft.assumptions.clone(),
         success_criteria,
+        steps,
+    })
+}
+
+pub fn build_governed_task_plan(
+    run_kind: AgentRunKind,
+    draft: &AgentPlanDraft,
+    objective: &str,
+    task_input: &Value,
+    version: u32,
+    registry: &AgentToolRegistry,
+) -> Result<AgentPlan, String> {
+    if run_kind == AgentRunKind::ResearchReport {
+        return build_flagship_research_plan(draft, objective, version, registry);
+    }
+    draft.validate()?;
+    let text = |key: &str| {
+        task_input
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("AGENT_TASK_INPUT_REQUIRED:{key}"))
+    };
+    let reference =
+        |step_id: &str, pointer: &str| json!({"$ref":{"stepId":step_id,"pointer":pointer}});
+    let specifications: Vec<(&str, &str, &str, Value)> = match run_kind {
+        AgentRunKind::PaperFileImport | AgentRunKind::PaperMysqlImport => {
+            let grant = text("resourceGrantId")?;
+            vec![
+                (
+                    "preview-import",
+                    "Preview the authorized paper source",
+                    "preview_paper_import",
+                    json!({"resourceGrantId":grant}),
+                ),
+                (
+                    "commit-import",
+                    "Import the staged papers atomically",
+                    "import_papers",
+                    json!({"resourceGrantId":text("resourceGrantId")?,"previewHash":reference("preview-import","/previewHash")}),
+                ),
+            ]
+        }
+        AgentRunKind::LibraryClean => vec![
+            (
+                "preview-clean",
+                "Preview deterministic library cleaning",
+                "preview_library_clean",
+                json!({}),
+            ),
+            (
+                "commit-clean",
+                "Apply the approved cleaning transaction",
+                "clean_paper_library",
+                json!({"libraryRevision":reference("preview-clean","/libraryRevision"),"previewHash":reference("preview-clean","/previewHash")}),
+            ),
+        ],
+        AgentRunKind::V20Modeling => vec![
+            (
+                "inspect-modeling",
+                "Inspect the modeling input revision",
+                "inspect_v20_modeling_input",
+                json!({}),
+            ),
+            (
+                "rebuild-snapshot",
+                "Build and atomically activate a V20 snapshot",
+                "rebuild_v20_snapshot",
+                json!({"libraryRevision":reference("inspect-modeling","/libraryRevision"),"paperCount":reference("inspect-modeling","/paperCount")}),
+            ),
+        ],
+        AgentRunKind::ReportExport => {
+            let formats = task_input
+                .get("formats")
+                .cloned()
+                .unwrap_or_else(|| json!(["md", "html"]));
+            vec![(
+                "export-report",
+                "Export the approved report artifact",
+                "export_report_artifact",
+                json!({"reportArtifactId":text("reportArtifactId")?,"resourceGrantId":text("resourceGrantId")?,"formats":formats}),
+            )]
+        }
+        AgentRunKind::ResearchReport => unreachable!(),
+    };
+    let steps = specifications
+        .into_iter()
+        .map(|(id, title, tool, input)| {
+            let definition = registry.get(tool)?;
+            registry.validate_planned_call(tool, &definition.version, definition.risk, &input)?;
+            Ok(AgentPlanStep {
+                id: id.into(),
+                title: title.into(),
+                tool: tool.into(),
+                input,
+                risk: definition.risk,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(AgentPlan{
+        version,
+        objective:objective.trim().into(),
+        assumptions:draft.assumptions.clone(),
+        success_criteria:vec![
+            AgentSuccessCriterion{id:"approved-impact".into(),description:"Every high-risk action is approved against its resolved parameters and current library revision.".into()},
+            AgentSuccessCriterion{id:"atomic-result".into(),description:"The deterministic task gate verifies one atomic result and its receipt.".into()},
+        ],
         steps,
     })
 }

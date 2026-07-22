@@ -13,6 +13,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::agent::AgentRunKind;
 use crate::agent::{
     action_approval_hash, canonical_value_sha256, plan_approval_hash, validate_budget,
     validate_error_code, validate_plan, validate_question_request, validate_run_transition,
@@ -44,6 +45,8 @@ pub struct AgentRunRecord {
     pub library_instance_id: String,
     pub project_id: String,
     pub snapshot_id: Option<String>,
+    pub run_kind: AgentRunKind,
+    pub task_input: Value,
     pub automation_mode: AgentAutomationMode,
     pub status: AgentRunStatus,
     pub objective: String,
@@ -310,6 +313,8 @@ pub struct NewAgentRun {
     pub id: String,
     pub project_id: String,
     pub snapshot_id: Option<String>,
+    pub run_kind: AgentRunKind,
+    pub task_input: Value,
     pub automation_mode: AgentAutomationMode,
     pub objective: String,
     pub budget: AgentBudget,
@@ -324,6 +329,9 @@ pub fn ensure_agent_schema(conn: &Connection) -> Result<(), String> {
         && !table_sql(conn, "agent_runs")?.is_some_and(|sql| sql.contains("awaiting_user"))
     {
         return Err("AGENT_SCHEMA_V10_MIGRATION_REQUIRED".into());
+    }
+    if table_exists(conn, "agent_runs")? && !table_has_column(conn, "agent_runs", "run_kind")? {
+        return Err("AGENT_SCHEMA_V11_MIGRATION_REQUIRED".into());
     }
     conn.execute_batch(include_str!("agent_schema.sql"))
         .map_err(|e| e.to_string())
@@ -410,7 +418,7 @@ pub fn migrate_library_file(
             .file_stem()
             .and_then(|v| v.to_str())
             .ok_or("AGENT_MIGRATION_FILE_NAME_INVALID")?;
-        let backup_path = parent.join(format!("{stem}.pre-schema-v10.{now_ms}.sqlite"));
+        let backup_path = parent.join(format!("{stem}.pre-schema-v11.{now_ms}.sqlite"));
         if backup_path.exists() {
             return Err("AGENT_MIGRATION_BACKUP_EXISTS".into());
         }
@@ -477,10 +485,11 @@ pub fn migrate_library_file(
         }
         if previous == 9 {
             migrate_v9_agent_schema(&tx)?;
-        } else {
+        } else if previous == 8 {
             tx.execute_batch(include_str!("agent_schema.sql"))
                 .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         }
+        migrate_v11_agent_schema(&tx)?;
         let foreign_key_errors: i64 = tx
             .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
                 row.get(0)
@@ -578,6 +587,38 @@ fn migrate_v9_agent_schema(tx: &Transaction<'_>) -> Result<(), String> {
         .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))
 }
 
+fn migrate_v11_agent_schema(tx: &Transaction<'_>) -> Result<(), String> {
+    if !table_has_column(tx, "agent_runs", "run_kind")? {
+        tx.execute(
+            "ALTER TABLE agent_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'research_report' CHECK(run_kind IN('research_report','paper_file_import','paper_mysql_import','library_clean','v20_modeling','report_export'))",
+            [],
+        ).map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
+    }
+    if !table_has_column(tx, "agent_runs", "task_input_json")? {
+        tx.execute(
+            "ALTER TABLE agent_runs ADD COLUMN task_input_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )
+        .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
+    }
+    if table_exists(tx, "v20_analysis_snapshots")?
+        && !table_has_column(tx, "v20_analysis_snapshots", "library_revision")?
+    {
+        tx.execute(
+            "ALTER TABLE v20_analysis_snapshots ADD COLUMN library_revision INTEGER NOT NULL DEFAULT 0",
+            [],
+        ).map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS library_revision_state(
+           project_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0,updated_at_ms INTEGER NOT NULL DEFAULT 0);
+         INSERT OR IGNORE INTO library_revision_state(project_id,revision,updated_at_ms)
+           SELECT DISTINCT project_id,0,0 FROM papers;",
+    ).map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
+    tx.execute_batch(include_str!("agent_schema.sql"))
+        .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))
+}
+
 fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
@@ -664,6 +705,7 @@ impl<'a> AgentRepository<'a> {
             return Err("AGENT_RUN_OBJECTIVE_TOO_LARGE".into());
         }
         validate_storable_json(&Value::String(input.objective.clone()))?;
+        validate_storable_json(&input.task_input)?;
         validate_budget(&input.budget)?;
         let library = self.library_instance_id(input.now_ms)?;
         let budget = json_text(&input.budget, AGENT_PLAN_MAX_BYTES)?;
@@ -681,13 +723,14 @@ impl<'a> AgentRepository<'a> {
         if let Some(active_run_id) = active_run_id {
             return Err(format!("AGENT_ACTIVE_RUN_EXISTS:{active_run_id}"));
         }
-        tx.execute("INSERT INTO agent_runs(id,library_instance_id,project_id,snapshot_id,automation_mode,status,objective,budget_json,budget_usage_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,'draft',?6,?7,?8,?9,?9)",params![input.id,library,input.project_id,input.snapshot_id,enum_text(input.automation_mode)?,input.objective,budget,usage,input.now_ms]).map_err(|e|e.to_string())?;
+        let task_input = value_text(&input.task_input, AGENT_EVENT_MAX_BYTES)?;
+        tx.execute("INSERT INTO agent_runs(id,library_instance_id,project_id,snapshot_id,run_kind,task_input_json,automation_mode,status,objective,budget_json,budget_usage_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,'draft',?8,?9,?10,?11,?11)",params![input.id,library,input.project_id,input.snapshot_id,enum_text(input.run_kind)?,task_input,enum_text(input.automation_mode)?,input.objective,budget,usage,input.now_ms]).map_err(|e|e.to_string())?;
         append_event(
             &tx,
             &input.id,
             "run_created",
             None,
-            &json!({"status":"draft"}),
+            &json!({"status":"draft","runKind":enum_text(input.run_kind)?}),
             input.now_ms,
         )?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -695,7 +738,7 @@ impl<'a> AgentRepository<'a> {
             .ok_or_else(|| "AGENT_RUN_CREATE_FAILED".into())
     }
     pub fn get_run(&self, id: &str) -> Result<Option<AgentRunRecord>, String> {
-        self.conn.query_row("SELECT id,library_instance_id,project_id,snapshot_id,automation_mode,status,objective,budget_json,budget_usage_json,current_plan_version,decision_summary_json,last_error_code,created_at_ms,updated_at_ms,completed_at_ms FROM agent_runs WHERE id=?1",params![id],row_to_run).optional().map_err(|e|e.to_string())
+        self.conn.query_row("SELECT id,library_instance_id,project_id,snapshot_id,run_kind,task_input_json,automation_mode,status,objective,budget_json,budget_usage_json,current_plan_version,decision_summary_json,last_error_code,created_at_ms,updated_at_ms,completed_at_ms FROM agent_runs WHERE id=?1",params![id],row_to_run).optional().map_err(|e|e.to_string())
     }
     pub fn list_runs(
         &self,
@@ -703,7 +746,7 @@ impl<'a> AgentRepository<'a> {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<AgentRunRecord>, String> {
-        let mut s=self.conn.prepare("SELECT id,library_instance_id,project_id,snapshot_id,automation_mode,status,objective,budget_json,budget_usage_json,current_plan_version,decision_summary_json,last_error_code,created_at_ms,updated_at_ms,completed_at_ms FROM agent_runs WHERE project_id=?1 ORDER BY updated_at_ms DESC,id LIMIT ?2 OFFSET ?3").map_err(|e|e.to_string())?;
+        let mut s=self.conn.prepare("SELECT id,library_instance_id,project_id,snapshot_id,run_kind,task_input_json,automation_mode,status,objective,budget_json,budget_usage_json,current_plan_version,decision_summary_json,last_error_code,created_at_ms,updated_at_ms,completed_at_ms FROM agent_runs WHERE project_id=?1 ORDER BY updated_at_ms DESC,id LIMIT ?2 OFFSET ?3").map_err(|e|e.to_string())?;
         let rows = s
             .query_map(params![project, limit.clamp(1, 100), offset], row_to_run)
             .map_err(|e| e.to_string())?
@@ -2788,6 +2831,19 @@ impl<'a> AgentRepository<'a> {
         Ok(artifact)
     }
 
+    pub fn artifact_by_id(&self, artifact_id: &str) -> Result<AgentArtifactRecord, String> {
+        let artifact = self.conn.query_row(
+            "SELECT id,run_id,step_id,artifact_kind,content_json,content_sha256,snapshot_id,audit_json,review_status,supersedes_artifact_id,created_at_ms FROM agent_artifacts WHERE id=?1",
+            params![artifact_id],
+            row_to_artifact,
+        ).optional().map_err(|error| error.to_string())?.ok_or("AGENT_ARTIFACT_NOT_FOUND")?;
+        let actual_hash = canonical_value_sha256(&artifact.content)?;
+        if actual_hash != artifact.content_sha256 {
+            return Err("AGENT_ARTIFACT_HASH_MISMATCH".into());
+        }
+        Ok(artifact)
+    }
+
     pub fn overview(&self, id: &str) -> Result<AgentRunOverview, String> {
         let run = self.get_run(id)?.ok_or("AGENT_RUN_NOT_FOUND")?;
         let plan = run
@@ -2800,7 +2856,9 @@ impl<'a> AgentRepository<'a> {
                         |row| row.get::<_, String>(0),
                     )
                     .map_err(|error| error.to_string())
-                    .and_then(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+                    .and_then(|value| {
+                        serde_json::from_str(&value).map_err(|error| error.to_string())
+                    })
             })
             .transpose()?;
         let steps = if let Some(version) = run.current_plan_version {
@@ -2825,7 +2883,10 @@ impl<'a> AgentRepository<'a> {
                         artifact_kind: row.get(3)?,
                         content_sha256: row.get(4)?,
                         snapshot_id: row.get(5)?,
-                        audit: row.get::<_, Option<String>>(6)?.map(parse_sql_json).transpose()?,
+                        audit: row
+                            .get::<_, Option<String>>(6)?
+                            .map(parse_sql_json)
+                            .transpose()?,
                         review_status: row.get(7)?,
                         supersedes_artifact_id: row.get(8)?,
                         created_at_ms: row.get(9)?,
@@ -2838,32 +2899,71 @@ impl<'a> AgentRepository<'a> {
         };
         let approvals = {
             let mut statement=self.conn.prepare("SELECT id,run_id,decision_sequence,plan_version,step_id,approval_kind,decision,approved_hash,risk,registry_hash,tool_version,model_profile_hash,actor_id,policy_reason,created_at_ms FROM agent_approvals WHERE run_id=?1 ORDER BY decision_sequence").map_err(|error|error.to_string())?;
-            let rows = statement.query_map(params![id], row_to_approval).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id], row_to_approval)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
             rows
         };
         let questions = {
             let mut statement=self.conn.prepare("SELECT id,run_id,plan_version,step_id,prompt,answer_type,options_json,requires_replan,created_at_ms FROM agent_questions WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error|error.to_string())?;
-            let rows = statement.query_map(params![id], row_to_question).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id], row_to_question)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
             rows
         };
         let answers = {
             let mut statement=self.conn.prepare("SELECT id,question_id,run_id,answer_json,actor_id,created_at_ms FROM agent_answers WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error|error.to_string())?;
-            let rows = statement.query_map(params![id], row_to_answer).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id], row_to_answer)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
             rows
         };
         let artifact_reviews = {
             let mut statement=self.conn.prepare("SELECT id,artifact_id,run_id,decision_sequence,artifact_sha256,decision,actor_id,reason,created_at_ms FROM agent_artifact_reviews WHERE run_id=?1 ORDER BY created_at_ms,id").map_err(|error|error.to_string())?;
-            let rows = statement.query_map(params![id], row_to_artifact_review).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id], row_to_artifact_review)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
             rows
         };
         let model_profiles = {
             let mut statement=self.conn.prepare("SELECT DISTINCT p.id,p.role,p.protocol,p.model,p.endpoint_origin,p.config_json,p.config_sha256,p.created_at_ms FROM agent_model_profiles p JOIN agent_plans ap ON ap.run_id=?1 AND (ap.planner_profile_hash=p.config_sha256 OR ap.writer_profile_hash=p.config_sha256) ORDER BY p.created_at_ms,p.id").map_err(|error|error.to_string())?;
-            let rows = statement.query_map(params![id], row_to_model_profile).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![id], row_to_model_profile)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
             rows
         };
         let current_lease = self.conn.query_row("SELECT run_id,owner_id,lease_token,generation,acquired_at_ms,heartbeat_at_ms,expires_at_ms FROM agent_run_leases WHERE run_id=?1",params![id],row_to_lease).optional().map_err(|error|error.to_string())?;
-        let event_cursor = self.conn.query_row("SELECT COALESCE(MAX(sequence),0) FROM agent_events WHERE run_id=?1",params![id],|row| row.get(0)).map_err(|error|error.to_string())?;
-        Ok(AgentRunOverview { run, plan, steps, artifacts, approvals, questions, answers, artifact_reviews, model_profiles, current_lease, event_cursor })
+        let event_cursor = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(sequence),0) FROM agent_events WHERE run_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(AgentRunOverview {
+            run,
+            plan,
+            steps,
+            artifacts,
+            approvals,
+            questions,
+            answers,
+            artifact_reviews,
+            model_profiles,
+            current_lease,
+            event_cursor,
+        })
     }
     pub fn snapshot(&self, id: &str) -> Result<AgentRunSnapshot, String> {
         let run = self.get_run(id)?.ok_or("AGENT_RUN_NOT_FOUND")?;
@@ -3212,20 +3312,22 @@ fn row_to_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRunRecord> {
         library_instance_id: r.get(1)?,
         project_id: r.get(2)?,
         snapshot_id: r.get(3)?,
-        automation_mode: enum_parse(&r.get::<_, String>(4)?).map_err(sql_error)?,
-        status: enum_parse(&r.get::<_, String>(5)?).map_err(sql_error)?,
-        objective: r.get(6)?,
-        budget: parse_json(r.get(7)?)?,
-        budget_usage: parse_json(r.get(8)?)?,
-        current_plan_version: r.get::<_, Option<i64>>(9)?.map(|v| v as u32),
+        run_kind: enum_parse(&r.get::<_, String>(4)?).map_err(sql_error)?,
+        task_input: parse_sql_json(r.get(5)?)?,
+        automation_mode: enum_parse(&r.get::<_, String>(6)?).map_err(sql_error)?,
+        status: enum_parse(&r.get::<_, String>(7)?).map_err(sql_error)?,
+        objective: r.get(8)?,
+        budget: parse_json(r.get(9)?)?,
+        budget_usage: parse_json(r.get(10)?)?,
+        current_plan_version: r.get::<_, Option<i64>>(11)?.map(|v| v as u32),
         decision_summary: r
-            .get::<_, Option<String>>(10)?
+            .get::<_, Option<String>>(12)?
             .map(parse_json)
             .transpose()?,
-        last_error_code: r.get(11)?,
-        created_at_ms: r.get(12)?,
-        updated_at_ms: r.get(13)?,
-        completed_at_ms: r.get(14)?,
+        last_error_code: r.get(13)?,
+        created_at_ms: r.get(14)?,
+        updated_at_ms: r.get(15)?,
+        completed_at_ms: r.get(16)?,
     })
 }
 fn row_to_step(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentStepRecord> {
@@ -3388,6 +3490,8 @@ mod tests {
             id: "r".into(),
             project_id: "p".into(),
             snapshot_id: Some("s".into()),
+            run_kind: AgentRunKind::ResearchReport,
+            task_input: json!({}),
             automation_mode: AgentAutomationMode::Supervised,
             objective: "Research".into(),
             budget: AgentBudget::default(),
@@ -3436,6 +3540,8 @@ mod tests {
                 id: "second".into(),
                 project_id: "p".into(),
                 snapshot_id: Some("s".into()),
+                run_kind: AgentRunKind::ResearchReport,
+                task_input: json!({}),
                 automation_mode: AgentAutomationMode::Supervised,
                 objective: "Second research run".into(),
                 budget: AgentBudget::default(),
@@ -3452,6 +3558,8 @@ mod tests {
                 id: "second".into(),
                 project_id: "p".into(),
                 snapshot_id: Some("s".into()),
+                run_kind: AgentRunKind::ResearchReport,
+                task_input: json!({}),
                 automation_mode: AgentAutomationMode::Supervised,
                 objective: "Second research run".into(),
                 budget: AgentBudget::default(),
@@ -3480,7 +3588,10 @@ mod tests {
         assert_eq!(overview.artifacts[0].id, "workspace-artifact");
         assert_eq!(overview.event_cursor, 1);
         assert_eq!(
-            repository.artifact("second", "workspace-artifact").unwrap().content,
+            repository
+                .artifact("second", "workspace-artifact")
+                .unwrap()
+                .content,
             content
         );
     }
@@ -3755,7 +3866,7 @@ mod tests {
     }
 
     #[test]
-    fn v9_file_migrates_to_v10_with_backup_and_new_contract() {
+    fn v9_file_migrates_to_v11_with_backup_and_new_contract() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -3771,7 +3882,7 @@ mod tests {
         ));
         cleanup_test_file(&database);
         let expected_backup = database.with_file_name(format!(
-            "{}.pre-schema-v10.123.sqlite",
+            "{}.pre-schema-v11.123.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&expected_backup);
@@ -3780,7 +3891,7 @@ mod tests {
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
         let migration = migrate_library_file(&database, "project-default", 123, true).unwrap();
         assert_eq!(migration.previous_version, 9);
-        assert_eq!(migration.current_version, 10);
+        assert_eq!(migration.current_version, 11);
         let backup = migration.backup_path.unwrap();
         let backup_hash = crate::sha256_file(&backup).unwrap();
         assert_eq!(
@@ -3791,7 +3902,7 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .contains("pre-schema-v10"));
+            .contains("pre-schema-v11"));
         assert_eq!(
             crate::validate_library_candidate_file(&backup, "project-default").unwrap(),
             before_state
@@ -3804,7 +3915,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         assert_same_v20_state(
             &crate::validate_library_candidate_connection(&connection, "project-default").unwrap(),
@@ -3860,7 +3971,7 @@ mod tests {
     }
 
     #[test]
-    fn v8_seed_shape_migrates_directly_to_v10() {
+    fn v8_seed_shape_migrates_directly_to_v11() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -3874,7 +3985,7 @@ mod tests {
         let migration = migrate_library_file(&database, "project-default", 456, false).unwrap();
         assert_eq!(
             (migration.previous_version, migration.current_version),
-            (8, 10)
+            (8, 11)
         );
         assert!(migration.backup_path.is_none());
         let connection = Connection::open(&database).unwrap();
@@ -3888,26 +3999,26 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         drop(connection);
         cleanup_test_file(&database);
     }
 
     #[test]
-    fn repeated_v10_open_is_idempotent_and_does_not_create_another_backup() {
+    fn repeated_v11_open_is_idempotent_and_does_not_create_another_backup() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
             .join("agent-schema-tests");
         fs::create_dir_all(&directory).unwrap();
-        let database = directory.join(format!("v10-idempotent-{}.sqlite", std::process::id()));
+        let database = directory.join(format!("v11-idempotent-{}.sqlite", std::process::id()));
         let first_backup = database.with_file_name(format!(
-            "{}.pre-schema-v10.1003.sqlite",
+            "{}.pre-schema-v11.1003.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let second_backup = database.with_file_name(format!(
-            "{}.pre-schema-v10.1004.sqlite",
+            "{}.pre-schema-v11.1004.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let first_partial = first_backup.with_file_name(format!(
@@ -3921,14 +4032,14 @@ mod tests {
         fs::write(&first_partial, b"stale-partial").unwrap();
 
         let first = migrate_library_file(&database, "project-default", 1003, true).unwrap();
-        assert_eq!((first.previous_version, first.current_version), (8, 10));
+        assert_eq!((first.previous_version, first.current_version), (8, 11));
         assert_eq!(first.backup_path.as_deref(), Some(first_backup.as_path()));
         assert!(!first_partial.exists());
         let first_state =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
 
         let second = migrate_library_file(&database, "project-default", 1004, true).unwrap();
-        assert_eq!((second.previous_version, second.current_version), (10, 10));
+        assert_eq!((second.previous_version, second.current_version), (11, 11));
         assert!(second.backup_path.is_none());
         assert!(!second_backup.exists());
         assert_eq!(
@@ -3949,13 +4060,13 @@ mod tests {
             .join("target")
             .join("agent-schema-tests");
         fs::create_dir_all(&directory).unwrap();
-        let database = directory.join(format!("v10-concurrent-{}.sqlite", std::process::id()));
+        let database = directory.join(format!("v11-concurrent-{}.sqlite", std::process::id()));
         let backup_one = database.with_file_name(format!(
-            "{}.pre-schema-v10.2001.sqlite",
+            "{}.pre-schema-v11.2001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let backup_two = database.with_file_name(format!(
-            "{}.pre-schema-v10.2002.sqlite",
+            "{}.pre-schema-v11.2002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         for path in [&database, &backup_one, &backup_two] {
@@ -3987,7 +4098,7 @@ mod tests {
         assert_eq!(
             results
                 .iter()
-                .filter(|result| result.previous_version == 10 && result.backup_path.is_none())
+                .filter(|result| result.previous_version == 11 && result.backup_path.is_none())
                 .count(),
             1
         );
@@ -4000,7 +4111,7 @@ mod tests {
         );
         let migrated =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
-        assert_eq!(migrated.schema_version, 10);
+        assert_eq!(migrated.schema_version, 11);
         assert_eq!(
             (
                 migrated.paper_count,
@@ -4024,7 +4135,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v0-existing-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v10.3001.sqlite",
+            "{}.pre-schema-v11.3001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4058,7 +4169,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_v10_backup_path_rejects_migration_without_touching_v8_source() {
+    fn existing_v11_backup_path_rejects_migration_without_touching_v8_source() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4066,7 +4177,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v8-backup-exists-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v10.1001.sqlite",
+            "{}.pre-schema-v11.1001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4113,13 +4224,13 @@ mod tests {
             std::process::id()
         ));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v10.1002.sqlite",
+            "{}.pre-schema-v11.1002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
         cleanup_test_file(&backup);
         // This is a valid V20 library tagged as schema v9, but it deliberately lacks
-        // the v9 Agent tables. The v10 Agent DDL therefore fails after the online
+        // the v9 Agent tables. The v11 Agent DDL therefore fails after the online
         // backup has already been created and validated.
         create_v20_migration_fixture(&database, 9);
 

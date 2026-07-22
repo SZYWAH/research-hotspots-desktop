@@ -1,7 +1,11 @@
 CREATE TABLE IF NOT EXISTS v20_analysis_snapshots (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, algorithm_version TEXT NOT NULL,
   paper_count INTEGER NOT NULL, hotspot_count INTEGER NOT NULL, membership_count INTEGER NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('writing','ready','failed')), created_at TEXT NOT NULL
+  status TEXT NOT NULL CHECK(status IN ('writing','ready','failed')), created_at TEXT NOT NULL,
+  library_revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS library_revision_state (
+  project_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_v20_snapshots_project_created ON v20_analysis_snapshots(project_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS v20_hotspots (

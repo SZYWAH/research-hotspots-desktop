@@ -425,7 +425,7 @@ fn completion_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{AgentBudget, AgentBudgetUsage};
+    use crate::agent::{AgentBudget, AgentBudgetUsage, AgentRunKind};
 
     fn completed_run() -> AgentRunRecord {
         AgentRunRecord {
@@ -433,6 +433,8 @@ mod tests {
             library_instance_id: "library-1".into(),
             project_id: "project".into(),
             snapshot_id: Some("snapshot".into()),
+            run_kind: AgentRunKind::ResearchReport,
+            task_input: json!({}),
             automation_mode: AgentAutomationMode::Supervised,
             status: AgentRunStatus::Evaluating,
             objective: "Build a traceable report".into(),
@@ -581,6 +583,7 @@ mod tests {
             hotspot_count: 1,
             membership_count: 3,
             generated_at: "now".into(),
+            library_revision: 0,
         }
     }
 
