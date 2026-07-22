@@ -11,6 +11,8 @@ import type {
   AgentRunOverview,
   AgentRunRecord,
   AgentRunSnapshot,
+  AgentRunKind,
+  AgentResourceGrant,
 } from "../agentTypes";
 import { normalizeAgentError } from "./agentUiModel";
 
@@ -34,7 +36,9 @@ export interface AgentDesktopClient {
   configureCredential(input: { projectId: string; profile: AgentModelProfile; secret?: string; legacyService?: string }): Promise<{ configured: boolean; migratedLegacyCredential: boolean }>;
   testModel(input: { projectId: string; profile: AgentModelProfile }): Promise<AgentModelTestResult>;
   saveModelProfile(context: AgentDatabaseContext, role: AgentModelRole, profile: AgentModelProfile): Promise<AgentModelProfileReference>;
-  createRun(context: AgentDatabaseContext, input: { id: string; automationMode: AgentAutomationMode; objective: string; budget: AgentBudget }): Promise<AgentRunRecord>;
+  createResourceGrant(context: AgentDatabaseContext, input: { grantKind: AgentResourceGrant["grantKind"]; locator: string; metadata?: unknown; expiresAtMs?: number }): Promise<AgentResourceGrant>;
+  revokeResourceGrant(context: AgentDatabaseContext, grantId: string): Promise<void>;
+  createRun(context: AgentDatabaseContext, input: { id: string; automationMode: AgentAutomationMode; objective: string; budget: AgentBudget; runKind: AgentRunKind; taskInput: unknown }): Promise<AgentRunRecord>;
   planRun(context: AgentDatabaseContext, runId: string, planner: AgentModelProfileReference, writer?: AgentModelProfileReference): Promise<AgentRunSnapshot>;
   executeRun(context: AgentDatabaseContext, runId: string): Promise<AgentRunSnapshot>;
   decidePlan(context: AgentDatabaseContext, input: { runId: string; decision: "approved" | "rejected" | "revoked"; actorId: string; reason?: string }): Promise<AgentRunSnapshot>;
@@ -78,6 +82,8 @@ export function createAgentDesktopClient(): AgentDesktopClient {
     configureCredential: (input) => agentInvoke("agent_configure_model_credential", input),
     testModel: (input) => agentInvoke("agent_test_model_profile", input),
     saveModelProfile: (context, role, profile) => agentInvoke("agent_save_model_profile", { databaseDir: context.databaseDir, role, profile }),
+    createResourceGrant: (context, input) => agentInvoke("agent_create_resource_grant", { databaseDir: context.databaseDir, projectId: context.projectId, ...input }),
+    revokeResourceGrant: (context, grantId) => agentInvoke("agent_revoke_resource_grant", { databaseDir: context.databaseDir, grantId }),
     createRun: (context, input) => agentInvoke("agent_create_run", { databaseDir: context.databaseDir, projectId: context.projectId, ...input }),
     planRun: (context, runId, planner, writer) => agentInvoke("agent_plan_run", { databaseDir: context.databaseDir, runId, planner, writer }),
     executeRun: (context, runId) => agentInvoke("agent_execute_run", { databaseDir: context.databaseDir, runId }),

@@ -18,6 +18,7 @@ export type AgentRiskLevel = "read" | "write" | "high";
 export type AgentModelRole = "planner" | "writer";
 export type AgentModelProtocol = "openai_chat_completions" | "openai_responses" | "anthropic_messages";
 export type AgentQuestionType = "choice" | "text" | "confirm";
+export type AgentRunKind = "research_report" | "paper_file_import" | "paper_mysql_import" | "library_clean" | "v20_modeling" | "report_export";
 
 export type AgentBudget = {
   maxSteps: number;
@@ -42,6 +43,8 @@ export type AgentRunRecord = {
   libraryInstanceId: string;
   projectId: string;
   snapshotId?: string;
+  runKind: AgentRunKind;
+  taskInput: unknown;
   automationMode: AgentAutomationMode;
   status: AgentRunStatus;
   objective: string;
@@ -147,6 +150,9 @@ export type AgentArtifactReviewRecord = { id: string; artifactId: string; runId:
 export type AgentModelProfileRecord = { id: string; role: AgentModelRole; protocol: AgentModelProtocol; model: string; endpointOrigin: string; config: unknown; configSha256: string; createdAtMs: number };
 export type AgentModelProfileReference = { profileId: string; configSha256: string };
 export type AgentLease = { runId: string; ownerId: string; leaseToken: string; generation: number; acquiredAtMs: number; heartbeatAtMs: number; expiresAtMs: number };
+export type AgentOperation = { id: string; runId: string; stepId: string; operationKey: string; operationKind: string; status: "queued" | "running" | "pause_requested" | "paused" | "cancel_requested" | "cancelling" | "committing" | "succeeded" | "failed" | "cancelled"; phase: string; processedCount: number; totalCount?: number; bytesProcessed: number; totalBytes?: number; startedAtMs?: number; heartbeatAtMs?: number; finishedAtMs?: number; recoveryCount: number; result?: unknown; errorCode?: string; createdAtMs: number; updatedAtMs: number };
+export type AgentModelUsageSummary = { callCount: number; inputTokens: number; outputTokens: number; totalTokens: number; elapsedMs: number; retryCount: number; structureRepairCount: number; estimatedCostMicrousd?: number };
+export type AgentResourceGrant = { id: string; runId?: string; libraryInstanceId: string; projectId: string; grantKind: "import_file" | "mysql_profile" | "export_directory"; locator: string; metadata: unknown; fingerprintSha256: string; createdAtMs: number; expiresAtMs?: number; revokedAtMs?: number; consumedAtMs?: number };
 
 export type AgentRunOverview = {
   run: AgentRunRecord;
@@ -159,6 +165,9 @@ export type AgentRunOverview = {
   artifactReviews: AgentArtifactReviewRecord[];
   modelProfiles: AgentModelProfileRecord[];
   currentLease?: AgentLease;
+  currentOperation?: AgentOperation;
+  modelUsage?: AgentModelUsageSummary;
+  libraryRevision?: number;
   eventCursor: number;
 };
 
@@ -174,6 +183,8 @@ export type AgentModelProfile = {
   nativeStructuredOutput: boolean;
   anthropicVersion?: string;
   allowLocalHttp: boolean;
+  inputUsdPerMillion?: number;
+  outputUsdPerMillion?: number;
 };
 
 export type AgentCommandError = Error & { code: string; retryable: boolean; runId?: string };

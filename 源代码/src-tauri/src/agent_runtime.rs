@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -6,15 +8,21 @@ use std::sync::{Arc, Mutex};
 use research_hotspots_core::agent::{
     canonical_value_sha256, validate_error_code, AgentAction, AgentArtifactReviewDecision,
     AgentAutomationMode, AgentBudget, AgentBudgetUsage, AgentModelProtocol as CoreModelProtocol,
-    AgentModelRole, AgentQuestionRequest, AgentQuestionType, AgentRiskLevel, AgentRunStatus,
-    AgentStepStatus,
+    AgentModelRole, AgentQuestionRequest, AgentQuestionType, AgentRiskLevel, AgentRunKind,
+    AgentRunStatus, AgentStepStatus,
+};
+use research_hotspots_core::agent_capabilities::{
+    estimate_cost_microusd, AgentCapabilityRepository, AgentModelCallRecord, AgentOperationRecord,
+    AgentOperationStatus, AgentResourceGrant, AgentResourceGrantKind, LibraryOperationLease,
 };
 use research_hotspots_core::agent_executor::{
     evaluate_completion_gate, govern_action_planner_turn, CompletionDisposition,
     CompletionGateInput,
 };
+#[cfg(test)]
+use research_hotspots_core::agent_protocol::build_flagship_research_plan;
 use research_hotspots_core::agent_protocol::{
-    action_planner_output_schema, build_flagship_research_plan, plan_builder_output_schema,
+    action_planner_output_schema, build_governed_task_plan, plan_builder_output_schema,
     ActionPlannerTurn, AgentPlanDraft,
 };
 use research_hotspots_core::agent_report::{
@@ -31,7 +39,9 @@ use research_hotspots_core::agent_tools::{
     execute_read_tool, load_hotspot_evidence, resolve_dynamic_input, AgentHotspotEvidenceResult,
     AgentReadToolContext, AgentReferenceSource, AgentToolDefinition, AgentToolRegistry,
 };
-use research_hotspots_core::{validate_active_snapshot, AnalysisState};
+#[cfg(not(test))]
+use research_hotspots_core::current_library_revision;
+use research_hotspots_core::{sha256_file, validate_active_snapshot, AnalysisState};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -295,6 +305,64 @@ fn runtime_id(prefix: &str) -> String {
         std::process::id(),
         timestamp_ms()
     )
+}
+
+fn record_model_turn<T>(
+    path: &Path,
+    run_id: &str,
+    step_id: Option<&str>,
+    role: AgentModelRole,
+    purpose: &str,
+    stored: &AgentModelProfileRecord,
+    profile: &AgentModelProfile,
+    turn: &super::agent_model_gateway::ModelTurnResult<T>,
+) -> Result<(), String> {
+    let input_tokens = turn.usage.input_tokens;
+    let output_tokens = turn.usage.output_tokens;
+    let cost = input_tokens.zip(output_tokens).and_then(|(input, output)| {
+        estimate_cost_microusd(
+            input,
+            output,
+            profile.input_usd_per_million,
+            profile.output_usd_per_million,
+        )
+    });
+    let pricing_hash = if profile.input_usd_per_million.is_some()
+        && profile.output_usd_per_million.is_some()
+    {
+        Some(canonical_value_sha256(
+            &json!({"inputUsdPerMillion":profile.input_usd_per_million,"outputUsdPerMillion":profile.output_usd_per_million}),
+        )?)
+    } else {
+        None
+    };
+    let finished = timestamp_ms();
+    let elapsed = turn.elapsed_ms.min(u64::MAX as u128) as u64;
+    let connection = open_agent_connection(path)?;
+    AgentCapabilityRepository::new(&connection)?.record_model_call(&AgentModelCallRecord {
+        id: runtime_id("model-call"),
+        run_id: run_id.into(),
+        step_id: step_id.map(str::to_string),
+        model_role: role,
+        purpose: purpose.into(),
+        protocol: core_protocol(turn.protocol),
+        model: profile.model.clone(),
+        profile_hash: stored.config_sha256.clone(),
+        request_id: turn.request_id.clone(),
+        input_tokens,
+        output_tokens,
+        total_tokens: turn.usage.total_tokens,
+        elapsed_ms: elapsed,
+        retry_count: turn.retry_count as u32,
+        structure_repair_count: turn.structure_repair_count as u32,
+        fallback_used: turn.fallback_used,
+        status: "succeeded".into(),
+        estimated_cost_microusd: cost,
+        pricing_hash,
+        error_code: None,
+        created_at_ms: finished.saturating_sub(elapsed.min(i64::MAX as u64) as i64),
+        finished_at_ms: Some(finished),
+    })
 }
 
 fn open_agent_connection(path: &Path) -> Result<Connection, String> {
@@ -676,7 +744,7 @@ fn planner_attempt_hook(path: &Path, fence: &AgentLeaseFence) -> ModelAttemptHoo
 
 fn plan_messages(
     run: &AgentRunRecord,
-    snapshot: &AnalysisState,
+    snapshot: Option<&AnalysisState>,
     registry: &AgentToolRegistry,
     interaction_snapshot: &AgentRunSnapshot,
 ) -> Vec<ModelMessage> {
@@ -695,6 +763,8 @@ fn plan_messages(
             content: json!({
                 "objective":run.objective,
                 "automationMode":run.automation_mode,
+                "runKind":run.run_kind,
+                "taskInput":planner_safe_value(&run.task_input,0),
                 "activeSnapshot":snapshot,
                 "registeredTools":tools,
                 "userAnswers":user_answer_context(interaction_snapshot),
@@ -1173,6 +1243,756 @@ fn writer_messages(
     ]
 }
 
+fn validated_resource_grant(
+    connection: &Connection,
+    run: &AgentRunRecord,
+    grant_id: &str,
+    expected: AgentResourceGrantKind,
+) -> Result<AgentResourceGrant, String> {
+    let repository = AgentRepository::new(connection)?;
+    let capability = AgentCapabilityRepository::new(connection)?;
+    let grant = capability.resource_grant(grant_id, timestamp_ms())?;
+    let library_instance_id = repository.library_instance_id(timestamp_ms())?;
+    if grant.run_id.as_deref() != Some(run.id.as_str())
+        || grant.library_instance_id != library_instance_id
+        || grant.project_id != run.project_id
+        || grant.grant_kind != expected
+    {
+        return Err("AGENT_RESOURCE_GRANT_CONTEXT_MISMATCH".into());
+    }
+    Ok(grant)
+}
+
+fn begin_long_operation(
+    connection: &Connection,
+    run: &AgentRunRecord,
+    step_id: &str,
+    operation_key: &str,
+    operation_kind: &str,
+    total_count: Option<i64>,
+    total_bytes: Option<i64>,
+    needs_library_lease: bool,
+) -> Result<(AgentOperationRecord, Option<LibraryOperationLease>), String> {
+    let now = timestamp_ms();
+    let capability = AgentCapabilityRepository::new(connection)?;
+    let operation = capability.begin_operation(&AgentOperationRecord {
+        id: runtime_id("operation"),
+        run_id: run.id.clone(),
+        step_id: step_id.into(),
+        operation_key: operation_key.into(),
+        operation_kind: operation_kind.into(),
+        status: AgentOperationStatus::Running,
+        phase: "validating".into(),
+        processed_count: 0,
+        total_count,
+        bytes_processed: 0,
+        total_bytes,
+        started_at_ms: Some(now),
+        heartbeat_at_ms: Some(now),
+        finished_at_ms: None,
+        recovery_count: 0,
+        result: None,
+        error_code: None,
+        created_at_ms: now,
+        updated_at_ms: now,
+    })?;
+    let lease = needs_library_lease
+        .then(|| {
+            capability.acquire_library_lease(
+                "library-mutation",
+                &format!("{}:{}", run.id, step_id),
+                &runtime_id("library-lease"),
+                operation_kind,
+                now,
+            )
+        })
+        .transpose()?;
+    Ok((operation, lease))
+}
+
+fn finish_long_operation(
+    connection: &Connection,
+    operation: &AgentOperationRecord,
+    lease: Option<&LibraryOperationLease>,
+    result: Result<&Value, &str>,
+) -> Result<(), String> {
+    let capability = AgentCapabilityRepository::new(connection)?;
+    match result {
+        Ok(value) => capability.finish_operation(
+            &operation.id,
+            AgentOperationStatus::Succeeded,
+            Some(value),
+            None,
+            timestamp_ms(),
+        )?,
+        Err(code) => capability.finish_operation(
+            &operation.id,
+            AgentOperationStatus::Failed,
+            None,
+            Some(code),
+            timestamp_ms(),
+        )?,
+    }
+    let _ = lease;
+    Ok(())
+}
+
+struct LibraryLeaseRelease {
+    path: PathBuf,
+    lease: Option<LibraryOperationLease>,
+}
+
+impl LibraryLeaseRelease {
+    fn new(path: &Path, lease: Option<LibraryOperationLease>) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            lease,
+        }
+    }
+}
+
+impl Drop for LibraryLeaseRelease {
+    fn drop(&mut self) {
+        let Some(lease) = self.lease.take() else {
+            return;
+        };
+        if let Ok(connection) = open_agent_connection(&self.path) {
+            if let Ok(repository) = AgentCapabilityRepository::new(&connection) {
+                let _ = repository.release_library_lease(&lease);
+            }
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn read_project_papers(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<Vec<super::PaperRecord>, String> {
+    let mut statement = connection.prepare("SELECT id,project_id,source,title,abstract,authors,categories,field,published_date,year,url,doi,created_at,updated_at FROM papers WHERE project_id=?1 ORDER BY id").map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![project_id], super::row_to_paper)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
+}
+
+fn safe_remove_operation_staging(staging_root: &Path, target: &Path) {
+    if target.starts_with(staging_root) && target != staging_root {
+        let _ = fs::remove_dir_all(target);
+    }
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            '&' => "&amp;".into(),
+            '<' => "&lt;".into(),
+            '>' => "&gt;".into(),
+            '"' => "&quot;".into(),
+            '\'' => "&#39;".into(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+fn write_export_file(
+    directory: &Path,
+    file_name: &str,
+    content: &[u8],
+) -> Result<(PathBuf, String), String> {
+    if file_name.contains(['/', '\\']) {
+        return Err("AGENT_EXPORT_FILE_NAME_INVALID".into());
+    }
+    let final_path = directory.join(file_name);
+    if final_path.exists() {
+        return Err("AGENT_EXPORT_FILE_EXISTS".into());
+    }
+    let partial_path = directory.join(format!(".{file_name}.partial"));
+    if partial_path.exists() {
+        fs::remove_file(&partial_path)
+            .map_err(|error| format!("AGENT_EXPORT_PARTIAL_CLEAN_FAILED:{error}"))?;
+    }
+    let write_result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial_path)
+            .map_err(|error| format!("AGENT_EXPORT_CREATE_FAILED:{error}"))?;
+        file.write_all(content)
+            .map_err(|error| format!("AGENT_EXPORT_WRITE_FAILED:{error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("AGENT_EXPORT_SYNC_FAILED:{error}"))?;
+        fs::rename(&partial_path, &final_path)
+            .map_err(|error| format!("AGENT_EXPORT_ATOMIC_RENAME_FAILED:{error}"))?;
+        Ok::<_, String>(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&partial_path);
+        return Err(error);
+    }
+    Ok((final_path.clone(), sha256_file(&final_path)?))
+}
+
+#[cfg(not(test))]
+fn execute_extended_tool_sync(
+    app: Option<tauri::AppHandle>,
+    path: &Path,
+    run: &AgentRunRecord,
+    step_id: &str,
+    operation_key: &str,
+    definition: &AgentToolDefinition,
+    input: &Value,
+    cancellation: ModelCancellation,
+) -> Result<ToolExecutionSuccess, ToolExecutionFailure> {
+    let mut connection = open_agent_connection(path).map_err(ToolExecutionFailure::policy)?;
+    match definition.name.as_str() {
+        "import_papers" => {
+            let grant_id = input
+                .get("resourceGrantId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_RESOURCE_GRANT_REQUIRED"))?;
+            let preview_hash = input
+                .get("previewHash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ToolExecutionFailure::policy("AGENT_IMPORT_PREVIEW_HASH_REQUIRED")
+                })?;
+            let expected_kind = match run.run_kind {
+                AgentRunKind::PaperFileImport => AgentResourceGrantKind::ImportFile,
+                AgentRunKind::PaperMysqlImport => AgentResourceGrantKind::MysqlProfile,
+                _ => return Err(ToolExecutionFailure::policy("AGENT_RUN_KIND_TOOL_MISMATCH")),
+            };
+            let grant = validated_resource_grant(&connection, run, grant_id, expected_kind)
+                .map_err(ToolExecutionFailure::policy)?;
+            if grant.grant_kind == AgentResourceGrantKind::ImportFile
+                && sha256_file(Path::new(&grant.locator)).map_err(ToolExecutionFailure::policy)?
+                    != grant.fingerprint_sha256
+            {
+                return Err(ToolExecutionFailure::policy(
+                    "AGENT_RESOURCE_FINGERPRINT_CHANGED",
+                ));
+            }
+            let registry = AgentToolRegistry::standard().map_err(ToolExecutionFailure::policy)?;
+            let preview = execute_read_tool(
+                &connection,
+                &registry,
+                &AgentReadToolContext {
+                    project_id: run.project_id.clone(),
+                },
+                "preview_paper_import",
+                &json!({"resourceGrantId":grant.id}),
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            if preview.get("previewHash").and_then(Value::as_str) != Some(preview_hash) {
+                return Err(ToolExecutionFailure::policy("AGENT_IMPORT_PREVIEW_DRIFT"));
+            }
+            let total = preview.get("validRows").and_then(Value::as_i64);
+            let total_bytes = grant.metadata.get("sizeBytes").and_then(Value::as_i64);
+            let (operation, lease) = begin_long_operation(
+                &connection,
+                run,
+                step_id,
+                operation_key,
+                "paper_import",
+                total,
+                total_bytes,
+                true,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            let _lease_release = LibraryLeaseRelease::new(path, lease.clone());
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| {
+                    repo.update_operation_progress(
+                        &operation.id,
+                        AgentOperationStatus::Running,
+                        "staging",
+                        0,
+                        total,
+                        0,
+                        total_bytes,
+                        timestamp_ms(),
+                    )
+                })
+                .map_err(ToolExecutionFailure::policy)?;
+            let staging_root = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(".agent-operation-staging");
+            let staging_dir = staging_root.join(&operation.id);
+            fs::create_dir_all(&staging_dir)
+                .map_err(|error| ToolExecutionFailure::policy(error.to_string()))?;
+            let staged_result = match grant.grant_kind {
+                AgentResourceGrantKind::ImportFile => super::import_paper_file_to_library_path(
+                    staging_dir.clone(),
+                    Some(run.project_id.clone()),
+                    PathBuf::from(&grant.locator),
+                )
+                .map(|_| ()),
+                AgentResourceGrantKind::MysqlProfile => {
+                    let app =
+                        app.ok_or_else(|| "AGENT_MYSQL_IMPORT_APP_CONTEXT_REQUIRED".to_string());
+                    app.and_then(|app| {
+                        let profile = grant
+                            .metadata
+                            .get("profile")
+                            .cloned()
+                            .unwrap_or_else(|| grant.metadata.clone());
+                        let mut mysql: super::MysqlPaperImportInput =
+                            serde_json::from_value(profile)
+                                .map_err(|_| "AGENT_MYSQL_PROFILE_INVALID".to_string())?;
+                        mysql.database_dir = Some(staging_dir.to_string_lossy().to_string());
+                        mysql.project_id = Some(run.project_id.clone());
+                        mysql.worker_temp_dir = Some(staging_dir.to_string_lossy().to_string());
+                        if mysql
+                            .password
+                            .as_deref()
+                            .unwrap_or_default()
+                            .trim()
+                            .is_empty()
+                        {
+                            mysql.password = read_app_credential(&run.project_id, "mysql");
+                        }
+                        super::run_mysql_paper_import_task(
+                            app,
+                            runtime_id("mysql-agent-import"),
+                            "Agent MySQL import".into(),
+                            mysql,
+                            super::PaperImportTaskControl::default(),
+                        )
+                    })
+                }
+                _ => Err("AGENT_RESOURCE_GRANT_KIND_MISMATCH".into()),
+            };
+            if let Err(error) = staged_result {
+                let code = stable_agent_error_code(&error);
+                let _ = finish_long_operation(&connection, &operation, lease.as_ref(), Err(&code));
+                safe_remove_operation_staging(&staging_root, &staging_dir);
+                return Err(ToolExecutionFailure::policy(code));
+            }
+            let staged_connection =
+                Connection::open(staging_dir.join("research-hotspots-v7.sqlite"))
+                    .map_err(|error| ToolExecutionFailure::policy(error.to_string()))?;
+            let papers = read_project_papers(&staged_connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            drop(staged_connection);
+            let capability = AgentCapabilityRepository::new(&connection)
+                .map_err(ToolExecutionFailure::policy)?;
+            capability
+                .clear_staging(&operation.id)
+                .map_err(ToolExecutionFailure::policy)?;
+            let staged_rows = papers
+                .iter()
+                .enumerate()
+                .map(|(index, paper)| {
+                    let value = serde_json::to_value(paper).map_err(|error| error.to_string())?;
+                    let row_hash = canonical_value_sha256(&value)?;
+                    Ok(research_hotspots_core::agent_capabilities::StagedPaperRow {
+                        row_index: index as i64,
+                        paper_id: paper.id.clone(),
+                        project_id: run.project_id.clone(),
+                        paper: value,
+                        dedupe_key: paper.id.to_lowercase(),
+                        row_sha256: row_hash,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(ToolExecutionFailure::policy)?;
+            capability
+                .stage_import_rows(&operation.id, &staged_rows)
+                .map_err(ToolExecutionFailure::policy)?;
+            if cancellation.is_cancelled() {
+                let current = capability
+                    .operation_by_key(operation_key)
+                    .map_err(ToolExecutionFailure::policy)?
+                    .ok_or_else(|| ToolExecutionFailure::policy("AGENT_OPERATION_NOT_FOUND"))?;
+                match current.status {
+                    AgentOperationStatus::PauseRequested => {
+                        capability
+                            .update_operation_progress(
+                                &operation.id,
+                                AgentOperationStatus::Paused,
+                                "paused_after_staging",
+                                papers.len() as i64,
+                                total,
+                                total_bytes.unwrap_or(0),
+                                total_bytes,
+                                timestamp_ms(),
+                            )
+                            .map_err(ToolExecutionFailure::policy)?;
+                    }
+                    AgentOperationStatus::CancelRequested | AgentOperationStatus::Cancelling => {
+                        capability
+                            .finish_operation(
+                                &operation.id,
+                                AgentOperationStatus::Cancelled,
+                                None,
+                                Some("AGENT_EXECUTION_CANCELLED"),
+                                timestamp_ms(),
+                            )
+                            .map_err(ToolExecutionFailure::policy)?;
+                        capability
+                            .clear_staging(&operation.id)
+                            .map_err(ToolExecutionFailure::policy)?;
+                    }
+                    _ => {}
+                }
+                safe_remove_operation_staging(&staging_root, &staging_dir);
+                return Err(ToolExecutionFailure::policy("AGENT_EXECUTION_CANCELLED"));
+            }
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| {
+                    repo.update_operation_progress(
+                        &operation.id,
+                        AgentOperationStatus::Committing,
+                        "committing",
+                        papers.len() as i64,
+                        total,
+                        total_bytes.unwrap_or(0),
+                        total_bytes,
+                        timestamp_ms(),
+                    )
+                })
+                .map_err(ToolExecutionFailure::policy)?;
+            let mutation = super::upsert_paper_rows(&mut connection, &run.project_id, papers)
+                .map_err(ToolExecutionFailure::policy)?;
+            let revision = current_library_revision(&connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| repo.consume_resource_grant(&grant.id, &run.id, timestamp_ms()))
+                .map_err(ToolExecutionFailure::policy)?;
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| repo.clear_staging(&operation.id).map(|_| ()))
+                .map_err(ToolExecutionFailure::policy)?;
+            let content = json!({"operationId":operation.id,"inserted":mutation.inserted,"updated":mutation.updated,"total":mutation.total,"libraryRevision":revision,"snapshotInvalidated":true,"stagingCleaned":true,"sourceFingerprint":grant.fingerprint_sha256});
+            finish_long_operation(&connection, &operation, lease.as_ref(), Ok(&content))
+                .map_err(ToolExecutionFailure::policy)?;
+            safe_remove_operation_staging(&staging_root, &staging_dir);
+            let artifact = artifact_record(
+                &run.id,
+                step_id,
+                "import_audit",
+                content,
+                None,
+                None,
+                Some("approved"),
+                None,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            Ok(ToolExecutionSuccess {
+                output: artifact_output(&artifact),
+                artifact: Some(artifact),
+                protocol_repairs: 0,
+                report_rewrite: false,
+            })
+        }
+        "clean_paper_library" => {
+            let expected_revision = input
+                .get("libraryRevision")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_LIBRARY_REVISION_REQUIRED"))?;
+            let expected_hash = input
+                .get("previewHash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_CLEAN_PREVIEW_HASH_REQUIRED"))?;
+            let registry = AgentToolRegistry::standard().map_err(ToolExecutionFailure::policy)?;
+            let preview = execute_read_tool(
+                &connection,
+                &registry,
+                &AgentReadToolContext {
+                    project_id: run.project_id.clone(),
+                },
+                "preview_library_clean",
+                &json!({}),
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            if preview.get("libraryRevision").and_then(Value::as_i64) != Some(expected_revision)
+                || preview.get("previewHash").and_then(Value::as_str) != Some(expected_hash)
+            {
+                return Err(ToolExecutionFailure::policy("AGENT_CLEAN_PREVIEW_DRIFT"));
+            }
+            let total = preview.get("beforeCount").and_then(Value::as_i64);
+            let (operation, lease) = begin_long_operation(
+                &connection,
+                run,
+                step_id,
+                operation_key,
+                "library_clean",
+                total,
+                None,
+                true,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            let _lease_release = LibraryLeaseRelease::new(path, lease.clone());
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| {
+                    repo.update_operation_progress(
+                        &operation.id,
+                        AgentOperationStatus::Committing,
+                        "committing",
+                        0,
+                        total,
+                        0,
+                        None,
+                        timestamp_ms(),
+                    )
+                })
+                .map_err(ToolExecutionFailure::policy)?;
+            let result = super::clean_library_connection(&mut connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            let revision = current_library_revision(&connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            let content = json!({"operationId":operation.id,"beforeCount":result.before_count,"afterCount":result.after_count,"removedCount":result.removed_count,"updatedCount":result.updated_count,"emptyRemovedCount":result.empty_removed_count,"duplicateRemovedCount":result.duplicate_removed_count,"libraryRevision":revision,"snapshotInvalidated":true,"previewHash":expected_hash});
+            finish_long_operation(&connection, &operation, lease.as_ref(), Ok(&content))
+                .map_err(ToolExecutionFailure::policy)?;
+            let artifact = artifact_record(
+                &run.id,
+                step_id,
+                "maintenance_audit",
+                content,
+                None,
+                None,
+                Some("approved"),
+                None,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            Ok(ToolExecutionSuccess {
+                output: artifact_output(&artifact),
+                artifact: Some(artifact),
+                protocol_repairs: 0,
+                report_rewrite: false,
+            })
+        }
+        "rebuild_v20_snapshot" => {
+            let expected_revision = input
+                .get("libraryRevision")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_LIBRARY_REVISION_REQUIRED"))?;
+            let expected_count = input
+                .get("paperCount")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_PAPER_COUNT_REQUIRED"))?;
+            let revision = current_library_revision(&connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            let count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM papers WHERE project_id=?1",
+                    params![run.project_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| ToolExecutionFailure::policy(error.to_string()))?;
+            if revision != expected_revision || count != expected_count {
+                return Err(ToolExecutionFailure::policy("AGENT_MODELING_INPUT_DRIFT"));
+            }
+            let (operation, lease) = begin_long_operation(
+                &connection,
+                run,
+                step_id,
+                operation_key,
+                "v20_modeling",
+                Some(count),
+                None,
+                true,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| {
+                    repo.update_operation_progress(
+                        &operation.id,
+                        AgentOperationStatus::Committing,
+                        "clustering_and_committing",
+                        0,
+                        Some(count),
+                        0,
+                        None,
+                        timestamp_ms(),
+                    )
+                })
+                .map_err(ToolExecutionFailure::policy)?;
+            let _lease_release = LibraryLeaseRelease::new(path, lease.clone());
+            let result = super::cluster_library_connection(&connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            let active = validate_active_snapshot(&connection, &run.project_id)
+                .map_err(ToolExecutionFailure::policy)?
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_V20_SNAPSHOT_NOT_ACTIVE"))?;
+            let content = json!({"operationId":operation.id,"snapshotId":result.snapshot_id,"paperCount":result.before_count,"hotspotCount":result.cluster_count,"membershipCount":result.membership_count,"libraryRevision":revision,"activeSnapshotId":active.active_snapshot_id});
+            finish_long_operation(&connection, &operation, lease.as_ref(), Ok(&content))
+                .map_err(ToolExecutionFailure::policy)?;
+            let artifact = artifact_record(
+                &run.id,
+                step_id,
+                "snapshot_reference",
+                content,
+                Some(result.snapshot_id),
+                None,
+                Some("approved"),
+                None,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            Ok(ToolExecutionSuccess {
+                output: artifact_output(&artifact),
+                artifact: Some(artifact),
+                protocol_repairs: 0,
+                report_rewrite: false,
+            })
+        }
+        "export_report_artifact" => {
+            let report_id = input
+                .get("reportArtifactId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_REPORT_ARTIFACT_REQUIRED"))?;
+            let grant_id = input
+                .get("resourceGrantId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_RESOURCE_GRANT_REQUIRED"))?;
+            let formats = input
+                .get("formats")
+                .and_then(Value::as_array)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_EXPORT_FORMATS_REQUIRED"))?;
+            let grant = validated_resource_grant(
+                &connection,
+                run,
+                grant_id,
+                AgentResourceGrantKind::ExportDirectory,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            let report = AgentRepository::new(&connection)
+                .map_err(ToolExecutionFailure::policy)?
+                .artifact_by_id(report_id)
+                .map_err(ToolExecutionFailure::policy)?;
+            if report.artifact_kind != "report_draft" {
+                return Err(ToolExecutionFailure::policy("AGENT_EXPORT_REPORT_REQUIRED"));
+            }
+            let approved_review:i64=connection.query_row("SELECT COUNT(*) FROM agent_artifact_reviews WHERE artifact_id=?1 AND artifact_sha256=?2 AND decision='approved'",params![report.id,report.content_sha256],|row|row.get(0)).map_err(|error|ToolExecutionFailure::policy(error.to_string()))?;
+            if report.review_status.as_deref() == Some("needs-review") && approved_review == 0 {
+                return Err(ToolExecutionFailure::policy("AGENT_REPORT_REVIEW_REQUIRED"));
+            }
+            let markdown = report
+                .content
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_REPORT_CONTENT_INVALID"))?;
+            let directory = PathBuf::from(&grant.locator);
+            let canonical = fs::canonicalize(&directory)
+                .map_err(|error| ToolExecutionFailure::policy(error.to_string()))?;
+            if canonical != directory {
+                return Err(ToolExecutionFailure::policy(
+                    "AGENT_EXPORT_DIRECTORY_CHANGED",
+                ));
+            }
+            let safe_report_id: String = report
+                .id
+                .chars()
+                .map(|value| {
+                    if value.is_ascii_alphanumeric() || value == '-' {
+                        value
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let (operation, _) = begin_long_operation(
+                &connection,
+                run,
+                step_id,
+                operation_key,
+                "report_export",
+                Some(formats.len() as i64),
+                None,
+                false,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| {
+                    repo.update_operation_progress(
+                        &operation.id,
+                        AgentOperationStatus::Committing,
+                        "committing",
+                        0,
+                        Some(formats.len() as i64),
+                        0,
+                        None,
+                        timestamp_ms(),
+                    )
+                })
+                .map_err(ToolExecutionFailure::policy)?;
+            let base = format!("research-report-{safe_report_id}");
+            let mut files = Vec::new();
+            for format in formats {
+                match format.as_str() {
+                    Some("md") => {
+                        let (file, hash) = write_export_file(
+                            &directory,
+                            &format!("{base}.md"),
+                            markdown.as_bytes(),
+                        )
+                        .map_err(ToolExecutionFailure::policy)?;
+                        files.push(
+                            json!({"format":"md","path":file.to_string_lossy(),"sha256":hash}),
+                        );
+                    }
+                    Some("html") => {
+                        let html=format!("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Research report</title></head><body><main><pre>{}</pre></main></body></html>",html_escape(markdown));
+                        let (file, hash) =
+                            write_export_file(&directory, &format!("{base}.html"), html.as_bytes())
+                                .map_err(ToolExecutionFailure::policy)?;
+                        files.push(
+                            json!({"format":"html","path":file.to_string_lossy(),"sha256":hash}),
+                        );
+                    }
+                    _ => {
+                        return Err(ToolExecutionFailure::policy(
+                            "AGENT_EXPORT_FORMAT_UNSUPPORTED",
+                        ))
+                    }
+                }
+            }
+            let content = json!({"operationId":operation.id,"reportArtifactId":report.id,"reportContentHash":report.content_sha256,"files":files,"partialFilesRemaining":false});
+            finish_long_operation(&connection, &operation, None, Ok(&content))
+                .map_err(ToolExecutionFailure::policy)?;
+            AgentCapabilityRepository::new(&connection)
+                .and_then(|repo| repo.consume_resource_grant(&grant.id, &run.id, timestamp_ms()))
+                .map_err(ToolExecutionFailure::policy)?;
+            let artifact = artifact_record(
+                &run.id,
+                step_id,
+                "export_manifest",
+                content,
+                report.snapshot_id,
+                None,
+                Some("approved"),
+                None,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
+            Ok(ToolExecutionSuccess {
+                output: artifact_output(&artifact),
+                artifact: Some(artifact),
+                protocol_repairs: 0,
+                report_rewrite: false,
+            })
+        }
+        _ => Err(ToolExecutionFailure::policy("AGENT_TOOL_EXECUTOR_MISSING")),
+    }
+}
+
+#[cfg(test)]
+fn execute_extended_tool_sync(
+    _app: Option<tauri::AppHandle>,
+    _path: &Path,
+    _run: &AgentRunRecord,
+    _step_id: &str,
+    _operation_key: &str,
+    _definition: &AgentToolDefinition,
+    _input: &Value,
+    _cancellation: ModelCancellation,
+) -> Result<ToolExecutionSuccess, ToolExecutionFailure> {
+    Err(ToolExecutionFailure::policy(
+        "AGENT_EXTENDED_TOOL_TEST_HARNESS_UNAVAILABLE",
+    ))
+}
+
 fn artifact_output(artifact: &AgentArtifactRecord) -> Value {
     json!({"artifacts":[{
         "id":artifact.id,
@@ -1376,14 +2196,42 @@ async fn writer_turn(
 }
 
 async fn execute_governed_tool(
+    app: Option<&tauri::AppHandle>,
     path: &Path,
     run: &AgentRunRecord,
     step_id: &str,
     definition: &AgentToolDefinition,
     input: &Value,
+    operation_key: &str,
     profiles: &StoredProfiles,
     cancellation: ModelCancellation,
 ) -> Result<ToolExecutionSuccess, ToolExecutionFailure> {
+    if matches!(
+        definition.name.as_str(),
+        "import_papers" | "clean_paper_library" | "rebuild_v20_snapshot" | "export_report_artifact"
+    ) {
+        let app = app.cloned();
+        let path = path.to_path_buf();
+        let run = run.clone();
+        let step_id = step_id.to_string();
+        let operation_key = operation_key.to_string();
+        let definition = definition.clone();
+        let input = input.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            execute_extended_tool_sync(
+                app,
+                &path,
+                &run,
+                &step_id,
+                &operation_key,
+                &definition,
+                &input,
+                cancellation,
+            )
+        })
+        .await
+        .map_err(|_| ToolExecutionFailure::policy("AGENT_LONG_OPERATION_JOIN_FAILED"))?;
+    }
     if definition.risk == AgentRiskLevel::Read && definition.artifact_kind.is_none() {
         let connection = open_agent_connection(path).map_err(ToolExecutionFailure::policy)?;
         let registry = AgentToolRegistry::standard().map_err(ToolExecutionFailure::policy)?;
@@ -1479,6 +2327,17 @@ async fn execute_governed_tool(
                 cancellation,
             )
             .await?;
+            record_model_turn(
+                path,
+                &run.id,
+                Some(step_id),
+                AgentModelRole::Writer,
+                "report_writer",
+                &profiles.writer,
+                &profiles.writer_selection.profile,
+                &turn,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
             let report = build_report_draft(
                 &input.evidence_artifact_id,
                 &evidence,
@@ -1536,6 +2395,17 @@ async fn execute_governed_tool(
                 cancellation,
             )
             .await?;
+            record_model_turn(
+                path,
+                &run.id,
+                Some(step_id),
+                AgentModelRole::Writer,
+                "revision_writer",
+                &profiles.writer,
+                &profiles.writer_selection.profile,
+                &turn,
+            )
+            .map_err(ToolExecutionFailure::policy)?;
             let report = build_report_draft(
                 &previous.evidence_artifact_id,
                 &evidence,
@@ -1605,7 +2475,7 @@ pub async fn agent_save_model_profile(
     app: tauri::AppHandle,
     input: AgentSaveModelProfileInput,
 ) -> Result<AgentModelProfileReference, String> {
-    let path = resolve_agent_database(app, input.database_dir).await?;
+    let path = resolve_agent_database(app.clone(), input.database_dir).await?;
     tauri::async_runtime::spawn_blocking(move || {
         save_model_profile_at_path(&path, input.role, input.profile, timestamp_ms())
     })
@@ -1660,7 +2530,11 @@ pub async fn agent_configure_model_credential(
 pub async fn agent_test_model_profile(
     input: AgentTestModelProfileInput,
 ) -> Result<AgentModelTestResult, String> {
-    let record = saved_model_profile_record(AgentModelRole::Planner, input.profile.clone(), timestamp_ms())?;
+    let record = saved_model_profile_record(
+        AgentModelRole::Planner,
+        input.profile.clone(),
+        timestamp_ms(),
+    )?;
     let selection = selection_from_record(&record)?;
     let credential = read_model_credential(&input.project_id, &selection)?;
     let request = StructuredModelRequest {
@@ -1673,8 +2547,14 @@ pub async fn agent_test_model_profile(
             "additionalProperties": false
         }),
         messages: vec![
-            ModelMessage { role: ModelMessageRole::System, content: "Return the requested JSON only.".into() },
-            ModelMessage { role: ModelMessageRole::User, content: "Return {\"ok\":true}.".into() },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                content: "Return the requested JSON only.".into(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                content: "Return {\"ok\":true}.".into(),
+            },
         ],
         max_output_tokens: 32,
         max_response_bytes: 32 * 1024,
@@ -1685,7 +2565,13 @@ pub async fn agent_test_model_profile(
     let result = AgentModelGateway::default()
         .execute_structured::<Value>(&input.profile, &credential, &request, cancellation)
         .await
-        .map_err(|error| format!("AGENT_MODEL_TEST_{}:{}", format!("{:?}", error.code).to_uppercase(), error.message))?;
+        .map_err(|error| {
+            format!(
+                "AGENT_MODEL_TEST_{}:{}",
+                format!("{:?}", error.code).to_uppercase(),
+                error.message
+            )
+        })?;
     Ok(AgentModelTestResult {
         connected: result.value.get("ok").and_then(Value::as_bool) == Some(true),
         protocol: result.protocol,
@@ -1702,7 +2588,7 @@ pub async fn agent_plan_run(
     state: State<'_, AgentRuntimeState>,
     input: AgentPlanRunInput,
 ) -> Result<AgentRunSnapshot, String> {
-    let path = resolve_agent_database(app, input.database_dir).await?;
+    let path = resolve_agent_database(app.clone(), input.database_dir).await?;
     let _permit = state.try_acquire(&path, &input.run_id)?;
     let profiles = {
         let path = path.clone();
@@ -1752,7 +2638,7 @@ pub async fn agent_plan_run(
             return repository.snapshot(&run_id);
         }
         let snapshot = validate_active_snapshot(&connection, &run.project_id)?;
-        let Some(snapshot) = snapshot else {
+        if run.run_kind == AgentRunKind::ResearchReport && snapshot.is_none() {
             repository.record_user_question(
                 &fence,
                 &runtime_id("question"),
@@ -1762,8 +2648,10 @@ pub async fn agent_plan_run(
                 timestamp_ms(),
             )?;
             return snapshot_for_run(&path, &run_id);
-        };
-        if run.snapshot_id.as_deref() != Some(snapshot.active_snapshot_id.as_str()) {
+        }
+        if let Some(snapshot) = snapshot.as_ref().filter(|snapshot| {
+            run.snapshot_id.as_deref() != Some(snapshot.active_snapshot_id.as_str())
+        }) {
             repository.rebind_snapshot_for_planning_fenced(
                 &fence,
                 &snapshot.active_snapshot_id,
@@ -1788,7 +2676,7 @@ pub async fn agent_plan_run(
         ModelPurpose::Planner,
         "agent_plan_draft",
         plan_builder_output_schema(),
-        plan_messages(&run, &snapshot, &registry, &interaction_snapshot),
+        plan_messages(&run, snapshot.as_ref(), &registry, &interaction_snapshot),
         8_192,
     );
     request.allow_structure_repair =
@@ -1825,8 +2713,24 @@ pub async fn agent_plan_run(
     }
     let result: Result<AgentRunSnapshot, String> = (|| match gateway_result {
         Ok(turn) => {
-            let plan =
-                build_flagship_research_plan(&turn.value, &run.objective, next_version, &registry)?;
+            record_model_turn(
+                &path,
+                &run.id,
+                None,
+                AgentModelRole::Planner,
+                "plan_builder",
+                &profiles.planner,
+                &profiles.planner_selection.profile,
+                &turn,
+            )?;
+            let plan = build_governed_task_plan(
+                run.run_kind,
+                &turn.value,
+                &run.objective,
+                &run.task_input,
+                next_version,
+                &registry,
+            )?;
             let bindings = plan
                 .steps
                 .iter()
@@ -1845,10 +2749,13 @@ pub async fn agent_plan_run(
             let connection = open_agent_connection(&path)?;
             let repository = AgentRepository::new(&connection)?;
             let active_now = validate_active_snapshot(&connection, &run.project_id)?;
-            if active_now
-                .as_ref()
-                .map(|value| value.active_snapshot_id.as_str())
-                != Some(snapshot.active_snapshot_id.as_str())
+            if run.run_kind == AgentRunKind::ResearchReport
+                && active_now
+                    .as_ref()
+                    .map(|value| value.active_snapshot_id.as_str())
+                    != snapshot
+                        .as_ref()
+                        .map(|value| value.active_snapshot_id.as_str())
             {
                 repository.record_user_question(
                     &fence,
@@ -2405,6 +3312,157 @@ fn transition_approved_action_to_running(
         .map(|_| ())
 }
 
+fn evaluate_maintenance_completion(
+    connection: &Connection,
+    repository: &AgentRepository<'_>,
+    snapshot: &AgentRunSnapshot,
+) -> Result<(AgentRunStatus, Option<String>), String> {
+    if !plan_is_approved(repository, &snapshot.run)? {
+        return Ok((
+            AgentRunStatus::AwaitingUser,
+            Some("AGENT_PLAN_APPROVAL_REQUIRED".into()),
+        ));
+    }
+    if snapshot.steps.iter().any(|step| {
+        !matches!(
+            step.status,
+            AgentStepStatus::Succeeded | AgentStepStatus::Skipped
+        )
+    }) {
+        return Ok((
+            AgentRunStatus::Failed,
+            Some("AGENT_REQUIRED_STEP_INCOMPLETE".into()),
+        ));
+    }
+    let receipt_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_tool_receipts WHERE run_id=?1",
+            params![snapshot.run.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let high_step_count = snapshot
+        .steps
+        .iter()
+        .filter(|step| {
+            step.risk == AgentRiskLevel::High && step.status == AgentStepStatus::Succeeded
+        })
+        .count() as i64;
+    if receipt_count < high_step_count {
+        return Ok((
+            AgentRunStatus::Failed,
+            Some("AGENT_TOOL_RECEIPT_REQUIRED".into()),
+        ));
+    }
+    let latest = |kind: &str| {
+        snapshot
+            .artifacts
+            .iter()
+            .rev()
+            .find(|artifact| artifact.artifact_kind == kind)
+    };
+    let gate_error = match snapshot.run.run_kind {
+        AgentRunKind::PaperFileImport | AgentRunKind::PaperMysqlImport => {
+            let Some(artifact) = latest("import_audit") else {
+                return Ok((
+                    AgentRunStatus::Failed,
+                    Some("AGENT_IMPORT_AUDIT_REQUIRED".into()),
+                ));
+            };
+            let operation_id = artifact
+                .content
+                .get("operationId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let staging_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_import_staging_papers WHERE operation_id=?1",
+                    params![operation_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            let active = validate_active_snapshot(connection, &snapshot.run.project_id)?;
+            (staging_count != 0 || active.is_some())
+                .then_some("AGENT_IMPORT_COMPLETION_GATE_FAILED")
+        }
+        AgentRunKind::LibraryClean => {
+            let Some(artifact) = latest("maintenance_audit") else {
+                return Ok((
+                    AgentRunStatus::Failed,
+                    Some("AGENT_CLEAN_AUDIT_REQUIRED".into()),
+                ));
+            };
+            let after = artifact
+                .content
+                .get("afterCount")
+                .and_then(Value::as_i64)
+                .unwrap_or(-1);
+            let actual: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM papers WHERE project_id=?1",
+                    params![snapshot.run.project_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            (after != actual
+                || validate_active_snapshot(connection, &snapshot.run.project_id)?.is_some())
+            .then_some("AGENT_CLEAN_COMPLETION_GATE_FAILED")
+        }
+        AgentRunKind::V20Modeling => {
+            let Some(artifact) = latest("snapshot_reference") else {
+                return Ok((
+                    AgentRunStatus::Failed,
+                    Some("AGENT_SNAPSHOT_ARTIFACT_REQUIRED".into()),
+                ));
+            };
+            let active = validate_active_snapshot(connection, &snapshot.run.project_id)?;
+            let valid = active.as_ref().is_some_and(|state| {
+                artifact.content.get("snapshotId").and_then(Value::as_str)
+                    == Some(state.active_snapshot_id.as_str())
+                    && artifact
+                        .content
+                        .get("libraryRevision")
+                        .and_then(Value::as_i64)
+                        == Some(state.library_revision)
+                    && state.membership_count == state.paper_count
+            });
+            (!valid).then_some("AGENT_MODELING_COMPLETION_GATE_FAILED")
+        }
+        AgentRunKind::ReportExport => {
+            let Some(artifact) = latest("export_manifest") else {
+                return Ok((
+                    AgentRunStatus::Failed,
+                    Some("AGENT_EXPORT_MANIFEST_REQUIRED".into()),
+                ));
+            };
+            let valid = artifact
+                .content
+                .get("files")
+                .and_then(Value::as_array)
+                .is_some_and(|files| {
+                    !files.is_empty()
+                        && files.iter().all(|file| {
+                            let Some(path) = file.get("path").and_then(Value::as_str) else {
+                                return false;
+                            };
+                            let Some(expected) = file.get("sha256").and_then(Value::as_str) else {
+                                return false;
+                            };
+                            sha256_file(Path::new(path)).ok().as_deref() == Some(expected)
+                                && !Path::new(&format!("{path}.partial")).exists()
+                        })
+                });
+            (!valid).then_some("AGENT_EXPORT_COMPLETION_GATE_FAILED")
+        }
+        AgentRunKind::ResearchReport => None,
+    };
+    Ok(if let Some(code) = gate_error {
+        (AgentRunStatus::Failed, Some(code.into()))
+    } else {
+        (AgentRunStatus::Completed, None)
+    })
+}
+
 fn evaluate_and_finish(path: &Path, fence: &AgentLeaseFence) -> Result<AgentRunSnapshot, String> {
     let connection = open_agent_connection(path)?;
     let repository = AgentRepository::new(&connection)?;
@@ -2413,6 +3471,13 @@ fn evaluate_and_finish(path: &Path, fence: &AgentLeaseFence) -> Result<AgentRunS
         timestamp_ms(),
         |locked_connection, locked_repository| {
             let snapshot = locked_repository.snapshot(&fence.run_id)?;
+            if snapshot.run.run_kind != AgentRunKind::ResearchReport {
+                return evaluate_maintenance_completion(
+                    locked_connection,
+                    locked_repository,
+                    &snapshot,
+                );
+            }
             let active = validate_active_snapshot(locked_connection, &snapshot.run.project_id)?;
             let gate = evaluate_completion_gate(CompletionGateInput {
                 run: &snapshot.run,
@@ -2449,6 +3514,7 @@ fn evaluate_and_finish(path: &Path, fence: &AgentLeaseFence) -> Result<AgentRunS
 }
 
 async fn execute_run_loop(
+    app: Option<&tauri::AppHandle>,
     path: &Path,
     fence: &AgentLeaseFence,
     permit: &AgentRuntimePermit,
@@ -2518,6 +3584,18 @@ async fn execute_run_loop(
                     permit.cancellation.clone(),
                 )
                 .await;
+            if let Ok(turn) = planner_turn.as_ref() {
+                record_model_turn(
+                    path,
+                    &run.id,
+                    Some(&step.step_id),
+                    AgentModelRole::Planner,
+                    "action_planner",
+                    &profiles.planner,
+                    &profiles.planner_selection.profile,
+                    turn,
+                )?;
+            }
             match process_planner_turn(
                 path,
                 fence,
@@ -2537,11 +3615,13 @@ async fn execute_run_loop(
 
         let execution_run = snapshot_for_run(path, &run.id)?.run;
         let execution = execute_governed_tool(
+            app,
             path,
             &execution_run,
             &step.step_id,
             &definition,
             &resolved_input,
+            &action_hash,
             profiles,
             permit.cancellation.clone(),
         )
@@ -2699,7 +3779,7 @@ pub async fn agent_execute_run(
     state: State<'_, AgentRuntimeState>,
     input: AgentExecuteRunInput,
 ) -> Result<AgentRunSnapshot, String> {
-    let path = resolve_agent_database(app, input.database_dir).await?;
+    let path = resolve_agent_database(app.clone(), input.database_dir).await?;
     let permit = state.try_acquire(&path, &input.run_id)?;
     let profiles = load_current_profiles(&path, &input.run_id)?;
     let fence = acquire_fence(&path, &input.run_id)?;
@@ -2733,7 +3813,7 @@ pub async fn agent_execute_run(
     }
     let heartbeat =
         LeaseHeartbeat::start(path.clone(), fence.clone(), permit.cancel_handle.clone());
-    let result = execute_run_loop(&path, &fence, &permit, &profiles).await;
+    let result = execute_run_loop(Some(&app), &path, &fence, &permit, &profiles).await;
     heartbeat.stop().await;
     if result.is_err() {
         if let Ok(connection) = open_agent_connection(&path) {
@@ -2884,9 +3964,27 @@ pub async fn agent_control_run(
     let run = repository
         .get_run(&input.run_id)?
         .ok_or("AGENT_RUN_NOT_FOUND")?;
+    let operation_repository = AgentCapabilityRepository::new(&connection)?;
+    let latest_operation = operation_repository.latest_operation(&input.run_id)?;
+    let active_operation = latest_operation
+        .as_ref()
+        .filter(|operation| !operation.status.terminal());
+    if matches!(input.action.as_str(), "pause" | "cancel")
+        && active_operation
+            .is_some_and(|operation| operation.status == AgentOperationStatus::Committing)
+    {
+        return Err("AGENT_OPERATION_COMMITTING".into());
+    }
     match input.action.as_str() {
         "pause" => match run.status {
             AgentRunStatus::Running | AgentRunStatus::Evaluating => {
+                if let Some(operation) = active_operation {
+                    operation_repository.request_operation_control(
+                        &operation.id,
+                        "pause",
+                        timestamp_ms(),
+                    )?;
+                }
                 repository.pause_run(&input.run_id, timestamp_ms())?;
                 let _ = state.cancel(&path, &input.run_id)?;
             }
@@ -2900,6 +3998,15 @@ pub async fn agent_control_run(
             if run.status != AgentRunStatus::Paused {
                 return Err("AGENT_RUN_NOT_PAUSED".into());
             }
+            if let Some(operation) = active_operation {
+                if operation.status == AgentOperationStatus::Paused {
+                    operation_repository.request_operation_control(
+                        &operation.id,
+                        "resume",
+                        timestamp_ms(),
+                    )?;
+                }
+            }
             repository.transition_run(
                 &input.run_id,
                 AgentRunStatus::Ready,
@@ -2909,6 +4016,13 @@ pub async fn agent_control_run(
         }
         "cancel" => match run.status {
             AgentRunStatus::Running | AgentRunStatus::Evaluating => {
+                if let Some(operation) = active_operation {
+                    operation_repository.request_operation_control(
+                        &operation.id,
+                        "cancel",
+                        timestamp_ms(),
+                    )?;
+                }
                 repository.transition_run(
                     &input.run_id,
                     AgentRunStatus::Cancelling,
@@ -3443,6 +4557,8 @@ mod tests {
                 native_structured_output: true,
                 anthropic_version: None,
                 allow_local_http: true,
+                input_usd_per_million: None,
+                output_usd_per_million: None,
             },
             credential_service: "ai-runtime-test".into(),
             development_env: Some("OPENAI_API_KEY".into()),
@@ -3457,6 +4573,8 @@ mod tests {
             native_structured_output: true,
             anthropic_version: None,
             allow_local_http: base_url.starts_with("http://"),
+            input_usd_per_million: None,
+            output_usd_per_million: None,
         }
     }
 
@@ -3777,6 +4895,8 @@ mod tests {
                 id: id.into(),
                 project_id: "project".into(),
                 snapshot_id: Some("s1".into()),
+                run_kind: AgentRunKind::ResearchReport,
+                task_input: json!({}),
                 automation_mode: mode,
                 objective: "quantum error correction".into(),
                 budget: AgentBudget::default(),
@@ -3831,7 +4951,7 @@ mod tests {
                 other => panic!("unexpected executable status: {other:?}"),
             }
         }
-        execute_run_loop(path, &fence, &permit, profiles)
+        execute_run_loop(None, path, &fence, &permit, profiles)
             .await
             .unwrap()
     }
@@ -4210,6 +5330,8 @@ mod tests {
                     id: "advisor-run".into(),
                     project_id: "project".into(),
                     snapshot_id: Some("s1".into()),
+                    run_kind: AgentRunKind::ResearchReport,
+                    task_input: json!({}),
                     automation_mode: AgentAutomationMode::Advisor,
                     objective: "quantum error correction".into(),
                     budget: AgentBudget::default(),

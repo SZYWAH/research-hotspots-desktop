@@ -28,7 +28,9 @@ fn set_app_credential(
     _service: String,
     secret: String,
 ) -> Result<CredentialStatus, String> {
-    Ok(CredentialStatus { configured: !secret.trim().is_empty() })
+    Ok(CredentialStatus {
+        configured: !secret.trim().is_empty(),
+    })
 }
 
 fn get_app_credential_status(_project_id: String, _service: String) -> CredentialStatus {

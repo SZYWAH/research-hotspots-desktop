@@ -1,11 +1,13 @@
 use crate::agent::{canonical_value_sha256, validate_storable_json, AgentRiskLevel};
-use crate::{validate_active_snapshot, AnalysisState};
+use crate::agent_capabilities::AgentCapabilityRepository;
+use crate::{current_library_revision, validate_active_snapshot, AnalysisState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const AGENT_TOOL_REGISTRY_VERSION: &str = "research-tools-v1";
+pub const AGENT_TOOL_REGISTRY_VERSION: &str = "research-tools-v2";
 pub const AGENT_SEARCH_PAPER_LIMIT: usize = 20;
 pub const AGENT_SEARCH_HOTSPOT_LIMIT: usize = 10;
 pub const AGENT_HOTSPOT_LIMIT: usize = 5;
@@ -19,6 +21,10 @@ pub enum AgentArtifactKind {
     Evidence,
     ReportDraft,
     ReportAudit,
+    ImportAudit,
+    MaintenanceAudit,
+    SnapshotReference,
+    ExportManifest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -471,12 +477,155 @@ fn standard_tool_definitions() -> Vec<AgentToolDefinition> {
                 }),
                 &["reportArtifactId"],
             ),
-            artifact_receipt,
+            artifact_receipt.clone(),
             30_000,
             16 * 1024,
             128 * 1024,
             &[],
             Some(AgentArtifactKind::ReportAudit),
+        ),
+        tool(
+            "preview_paper_import",
+            AgentRiskLevel::Read,
+            false,
+            false,
+            strict_object(
+                json!({"resourceGrantId":string_schema(1,128)}),
+                &["resourceGrantId"],
+            ),
+            strict_object(
+                json!({
+                    "resourceGrantId":string_schema(1,128),"sourceFingerprint":string_schema(64,64),
+                    "sourceKind":enum_string_schema(&["file","mysql"]),"totalRows":integer_schema(0,i64::MAX),
+                    "validRows":integer_schema(0,i64::MAX),"invalidRows":integer_schema(0,i64::MAX),
+                    "duplicateRows":integer_schema(0,i64::MAX),"previewHash":string_schema(64,64)
+                }),
+                &[
+                    "resourceGrantId",
+                    "sourceFingerprint",
+                    "sourceKind",
+                    "totalRows",
+                    "validRows",
+                    "invalidRows",
+                    "duplicateRows",
+                    "previewHash",
+                ],
+            ),
+            120_000,
+            16 * 1024,
+            128 * 1024,
+            &[],
+            None,
+        ),
+        tool(
+            "import_papers",
+            AgentRiskLevel::High,
+            true,
+            false,
+            strict_object(
+                json!({"resourceGrantId":string_schema(1,128),"previewHash":string_schema(64,64)}),
+                &["resourceGrantId", "previewHash"],
+            ),
+            artifact_receipt.clone(),
+            600_000,
+            16 * 1024,
+            128 * 1024,
+            &[],
+            Some(AgentArtifactKind::ImportAudit),
+        ),
+        tool(
+            "preview_library_clean",
+            AgentRiskLevel::Read,
+            false,
+            false,
+            strict_object(json!({}), &[]),
+            strict_object(
+                json!({
+                    "libraryRevision":integer_schema(0,i64::MAX),"beforeCount":integer_schema(0,i64::MAX),
+                    "normalizedCount":integer_schema(0,i64::MAX),"emptyCount":integer_schema(0,i64::MAX),
+                    "duplicateCount":integer_schema(0,i64::MAX),"previewHash":string_schema(64,64)
+                }),
+                &[
+                    "libraryRevision",
+                    "beforeCount",
+                    "normalizedCount",
+                    "emptyCount",
+                    "duplicateCount",
+                    "previewHash",
+                ],
+            ),
+            120_000,
+            8 * 1024,
+            128 * 1024,
+            &[],
+            None,
+        ),
+        tool(
+            "clean_paper_library",
+            AgentRiskLevel::High,
+            true,
+            false,
+            strict_object(
+                json!({"libraryRevision":integer_schema(0,i64::MAX),"previewHash":string_schema(64,64)}),
+                &["libraryRevision", "previewHash"],
+            ),
+            artifact_receipt.clone(),
+            600_000,
+            16 * 1024,
+            128 * 1024,
+            &[],
+            Some(AgentArtifactKind::MaintenanceAudit),
+        ),
+        tool(
+            "inspect_v20_modeling_input",
+            AgentRiskLevel::Read,
+            false,
+            false,
+            strict_object(json!({}), &[]),
+            strict_object(
+                json!({"libraryRevision":integer_schema(0,i64::MAX),"paperCount":integer_schema(0,i64::MAX),"hasActiveSnapshot":{"type":"boolean"}}),
+                &["libraryRevision", "paperCount", "hasActiveSnapshot"],
+            ),
+            30_000,
+            8 * 1024,
+            64 * 1024,
+            &[],
+            None,
+        ),
+        tool(
+            "rebuild_v20_snapshot",
+            AgentRiskLevel::High,
+            true,
+            false,
+            strict_object(
+                json!({"libraryRevision":integer_schema(0,i64::MAX),"paperCount":integer_schema(0,i64::MAX)}),
+                &["libraryRevision", "paperCount"],
+            ),
+            artifact_receipt.clone(),
+            900_000,
+            16 * 1024,
+            128 * 1024,
+            &[],
+            Some(AgentArtifactKind::SnapshotReference),
+        ),
+        tool(
+            "export_report_artifact",
+            AgentRiskLevel::High,
+            true,
+            false,
+            strict_object(
+                json!({
+                    "reportArtifactId":string_schema(1,128),"resourceGrantId":string_schema(1,128),
+                    "formats":array_schema(enum_string_schema(&["md","html"]),1,2)
+                }),
+                &["reportArtifactId", "resourceGrantId", "formats"],
+            ),
+            artifact_receipt,
+            120_000,
+            32 * 1024,
+            128 * 1024,
+            &[],
+            Some(AgentArtifactKind::ExportManifest),
         ),
     ]
 }
@@ -1171,10 +1320,127 @@ pub fn execute_read_tool(
         "inspect_report_audit" => {
             return Err("AGENT_REPORT_ARTIFACT_CONTEXT_REQUIRED".into());
         }
+        "preview_paper_import" => {
+            let grant_id = input
+                .get("resourceGrantId")
+                .and_then(Value::as_str)
+                .ok_or("AGENT_RESOURCE_GRANT_REQUIRED")?;
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "AGENT_SYSTEM_CLOCK_INVALID")?
+                .as_millis()
+                .min(i64::MAX as u128) as i64;
+            let grant = AgentCapabilityRepository::new(conn)?.resource_grant(grant_id, now_ms)?;
+            let source_kind = match grant.grant_kind {
+                crate::agent_capabilities::AgentResourceGrantKind::ImportFile => "file",
+                crate::agent_capabilities::AgentResourceGrantKind::MysqlProfile => "mysql",
+                _ => return Err("AGENT_RESOURCE_GRANT_KIND_MISMATCH".into()),
+            };
+            let total = grant
+                .metadata
+                .get("totalRows")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .max(0);
+            let valid = grant
+                .metadata
+                .get("validRows")
+                .and_then(Value::as_i64)
+                .unwrap_or(total)
+                .clamp(0, total);
+            let invalid = grant
+                .metadata
+                .get("invalidRows")
+                .and_then(Value::as_i64)
+                .unwrap_or(total - valid)
+                .max(0);
+            let duplicates = grant
+                .metadata
+                .get("duplicateRows")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .max(0);
+            let preview_hash = canonical_value_sha256(
+                &json!({"grant":grant.id,"fingerprint":grant.fingerprint_sha256,"metadata":grant.metadata}),
+            )?;
+            json!({"resourceGrantId":grant.id,"sourceFingerprint":grant.fingerprint_sha256,"sourceKind":source_kind,"totalRows":total,"validRows":valid,"invalidRows":invalid,"duplicateRows":duplicates,"previewHash":preview_hash})
+        }
+        "preview_library_clean" => preview_library_clean(conn, &context.project_id)?,
+        "inspect_v20_modeling_input" => {
+            let revision = current_library_revision(conn, &context.project_id)?;
+            let paper_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM papers WHERE project_id=?1",
+                    params![context.project_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            let has_active = validate_active_snapshot(conn, &context.project_id)
+                .ok()
+                .flatten()
+                .is_some();
+            json!({"libraryRevision":revision,"paperCount":paper_count,"hasActiveSnapshot":has_active})
+        }
         _ => return Err(format!("AGENT_TOOL_NOT_CORE_READ_QUERY:{name}")),
     };
     registry.validate_output(name, &output)?;
     Ok(output)
+}
+
+fn preview_library_clean(conn: &Connection, project_id: &str) -> Result<Value, String> {
+    let revision = current_library_revision(conn, project_id)?;
+    let mut stmt = conn
+        .prepare("SELECT id,title,abstract,doi,url FROM papers WHERE project_id=?1 ORDER BY id")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let before = rows.len() as i64;
+    let mut normalized = 0_i64;
+    let mut empty = 0_i64;
+    let mut duplicate = 0_i64;
+    let mut seen = HashSet::new();
+    for (id, title, abstract_text, doi, url) in rows {
+        let clean_title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let clean_abstract = abstract_text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if clean_title.is_empty() || clean_abstract.is_empty() {
+            empty += 1;
+            continue;
+        }
+        if clean_title != title || clean_abstract != abstract_text {
+            normalized += 1
+        }
+        let key = doi
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| format!("doi:{}", v.trim().to_lowercase()))
+            .or_else(|| {
+                url.filter(|v| !v.trim().is_empty())
+                    .map(|v| format!("url:{}", v.trim().to_lowercase()))
+            })
+            .unwrap_or_else(|| format!("title:{}", clean_title.to_lowercase()));
+        if !seen.insert(key) {
+            duplicate += 1
+        }
+        let _ = id;
+    }
+    let base = json!({"libraryRevision":revision,"beforeCount":before,"normalizedCount":normalized,"emptyCount":empty,"duplicateCount":duplicate});
+    let hash = canonical_value_sha256(&base)?;
+    let mut out = base;
+    out["previewHash"] = Value::String(hash);
+    Ok(out)
 }
 
 pub fn inspect_library_state(
@@ -1601,7 +1867,7 @@ mod tests {
         let first = AgentToolRegistry::standard().unwrap();
         let second = AgentToolRegistry::standard().unwrap();
         assert_eq!(first.hash(), second.hash());
-        assert_eq!(first.definitions().len(), 10);
+        assert_eq!(first.definitions().len(), 17);
         let mut reordered = first.definitions().to_vec();
         reordered.reverse();
         assert_eq!(

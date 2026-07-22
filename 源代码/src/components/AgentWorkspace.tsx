@@ -38,6 +38,7 @@ import type {
   AgentModelProfile,
   AgentModelProfileReference,
   AgentRunOverview,
+  AgentRunKind,
   AgentRunRecord,
   AgentRunSnapshot,
   AgentRunStatus,
@@ -59,7 +60,7 @@ import {
   summarizeEventPayload,
 } from "../lib/agentUiModel";
 import { createAgentVisualReviewClient } from "../lib/agentVisualReview";
-import { openExternalUrl } from "../lib/desktop";
+import { chooseExportDirectory, choosePaperImportFile, openExternalUrl } from "../lib/desktop";
 
 const ACTOR_ID = "desktop-user";
 const RUN_PAGE_SIZE = 50;
@@ -76,6 +77,7 @@ type AgentWorkspaceProps = {
 };
 
 type NewRunDraft = {
+  kind: AgentRunKind;
   objective: string;
   mode: AgentAutomationMode;
   budget: AgentBudget;
@@ -84,6 +86,15 @@ type NewRunDraft = {
   writerMatchesPlanner: boolean;
   plannerSecret: string;
   writerSecret: string;
+  sourcePath: string;
+  mysqlHost: string;
+  mysqlPort: number;
+  mysqlUser: string;
+  mysqlDatabase: string;
+  exportDirectory: string;
+  reportArtifactId: string;
+  exportMarkdown: boolean;
+  exportHtml: boolean;
 };
 
 function defaultProfile(settings: AiSettings): AgentModelProfile {
@@ -99,6 +110,7 @@ function defaultProfile(settings: AiSettings): AgentModelProfile {
 function createDraft(settings: AiSettings): NewRunDraft {
   const profile = defaultProfile(settings);
   return {
+    kind: "research_report",
     objective: "",
     mode: "supervised",
     budget: { ...DEFAULT_AGENT_BUDGET },
@@ -107,8 +119,19 @@ function createDraft(settings: AiSettings): NewRunDraft {
     writerMatchesPlanner: true,
     plannerSecret: "",
     writerSecret: "",
+    sourcePath: "", mysqlHost: "127.0.0.1", mysqlPort: 3306, mysqlUser: "root", mysqlDatabase: "research_hotspots",
+    exportDirectory: "", reportArtifactId: "", exportMarkdown: true, exportHtml: true,
   };
 }
+
+const RUN_KIND_LABELS: Record<AgentRunKind, { label: string; description: string; objective: string }> = {
+  research_report: { label: "研究报告", description: "检索本地证据并生成可审计报告", objective: "基于当前论文库生成可追溯研究报告" },
+  paper_file_import: { label: "文件导入", description: "预览后原子导入 CSV/JSON/BibTeX/RIS", objective: "安全导入授权论文文件" },
+  paper_mysql_import: { label: "MySQL 导入", description: "从已配置的 MySQL 数据源原子导入", objective: "安全导入授权 MySQL 论文数据" },
+  library_clean: { label: "论文库清洗", description: "先预览影响，再单事务清洗", objective: "确定性清洗当前论文库" },
+  v20_modeling: { label: "V20 热点建模", description: "按当前库修订生成统一快照", objective: "重建并原子激活 V20 热点快照" },
+  report_export: { label: "正式导出", description: "导出已审计报告为 Markdown/HTML", objective: "安全导出已完成的 Agent 报告" },
+};
 
 function fmtTime(value?: number) {
   if (!value) return "—";
@@ -338,9 +361,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   }, [busy, applySnapshot, client, context, loadRuns]);
 
   async function createRun() {
-    if (!snapshotReady || !draft.objective.trim() || busy) return;
+    if ((draft.kind === "research_report" && !snapshotReady) || busy) return;
     setBusy("create");
     setError("");
+    let pendingGrantId = "";
     try {
       const plannerCredential = await client.configureCredential({
         projectId: context.projectId,
@@ -358,8 +382,24 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         client.saveModelProfile(context, "planner", draft.planner),
         client.saveModelProfile(context, "writer", writerProfile),
       ]);
+      let taskInput: Record<string, unknown> = {};
+      if (draft.kind === "paper_file_import") {
+        if (!draft.sourcePath) throw new Error("AGENT_IMPORT_FILE_REQUIRED");
+        const grant = await client.createResourceGrant(context, { grantKind: "import_file", locator: draft.sourcePath });
+        pendingGrantId = grant.id; taskInput = { resourceGrantId: grant.id };
+      } else if (draft.kind === "paper_mysql_import") {
+        const metadata = { sourceKind: "mysql", profile: { host: draft.mysqlHost, port: draft.mysqlPort, user: draft.mysqlUser, database: draft.mysqlDatabase }, totalRows: 0, validRows: 0, invalidRows: 0, duplicateRows: 0 };
+        const grant = await client.createResourceGrant(context, { grantKind: "mysql_profile", locator: `${draft.mysqlHost}:${draft.mysqlPort}/${draft.mysqlDatabase}`, metadata });
+        pendingGrantId = grant.id; taskInput = { resourceGrantId: grant.id };
+      } else if (draft.kind === "report_export") {
+        if (!draft.exportDirectory || !draft.reportArtifactId || (!draft.exportMarkdown && !draft.exportHtml)) throw new Error("AGENT_EXPORT_INPUT_REQUIRED");
+        const grant = await client.createResourceGrant(context, { grantKind: "export_directory", locator: draft.exportDirectory });
+        pendingGrantId = grant.id; taskInput = { resourceGrantId: grant.id, reportArtifactId: draft.reportArtifactId, formats: [draft.exportMarkdown ? "md" : "", draft.exportHtml ? "html" : ""].filter(Boolean) };
+      }
       const id = `agent-${crypto.randomUUID()}`;
-      await client.createRun(context, { id, automationMode: draft.mode, objective: draft.objective.trim(), budget: draft.budget });
+      const objective = draft.objective.trim() || RUN_KIND_LABELS[draft.kind].objective;
+      await client.createRun(context, { id, automationMode: draft.mode, objective, budget: draft.budget, runKind: draft.kind, taskInput });
+      pendingGrantId = "";
       setSelectedRunId(id);
       currentRunRef.current = id;
       const snapshot = await client.planRun(context, id, planner, writer);
@@ -370,6 +410,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       props.onNotice(draft.mode === "advisor" ? "顾问计划已生成。" : "研究计划已生成，等待审批。"
       );
     } catch (value) {
+      if (pendingGrantId) void client.revokeResourceGrant(context, pendingGrantId).catch(() => undefined);
       const normalized = normalizeAgentError(value);
       if (normalized.code === "AGENT_ACTIVE_RUN_EXISTS" && normalized.runId) {
         setNewRunOpen(false);
@@ -413,7 +454,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         <div className="agent-header-actions">
           <button className="secondary-action agent-rail-toggle h-10 px-3" onClick={() => setRailOpen((value) => !value)}><ListChecks size={16} />运行</button>
           <SnapshotBadge ready={snapshotReady} snapshot={effectiveSnapshot} />
-          <button className="primary-action h-10 gap-2 px-4" onClick={() => { setDraft(createDraft(props.settings)); setNewRunOpen(true); }} disabled={!snapshotReady || runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))}>
+          <button className="primary-action h-10 gap-2 px-4" onClick={() => { setDraft(createDraft(props.settings)); setNewRunOpen(true); }} disabled={runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))}>
             <Plus size={16} /> 新建研究任务
           </button>
         </div>
@@ -447,7 +488,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         </aside>
 
         <main className="agent-main-panel">
-          {!overview ? <AgentEmptyState busy={busy === "loading"} onCreate={() => setNewRunOpen(true)} disabled={!snapshotReady || runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))} /> : (
+          {!overview ? <AgentEmptyState busy={busy === "loading"} onCreate={() => setNewRunOpen(true)} disabled={runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))} /> : (
             <>
               <RunHeader overview={overview} busy={busy} onPlan={() => void resumeDraftPlanning(overview, client, context, setBusy, applySnapshot, setError, loadRuns)} onContinue={() => void runCommand("execute", () => client.executeRun(context, overview.run.id))} onPause={() => void runCommand("pause", () => client.controlRun(context, overview.run.id, "pause"))} onResume={() => void runCommand("resume", () => client.controlRun(context, overview.run.id, "resume"), true)} onCancel={() => { setReason(""); setReasonDialog({ kind: "cancel", title: "取消当前运行" }); }} onToggleInspector={() => setInspectorOpen((value) => !value)} />
               <nav className="agent-tabs" aria-label="Agent 运行内容">
@@ -471,7 +512,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       </div>
 
       <AgentModal open={newRunOpen} title="新建研究任务" onClose={() => !busy && setNewRunOpen(false)} wide>
-        <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
+        <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} reportArtifacts={(overview?.artifacts ?? []).filter((artifact) => artifact.artifactKind === "report_draft")} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
       </AgentModal>
 
       <AgentModal open={Boolean(reasonDialog)} title={reasonDialog?.title || "确认操作"} onClose={() => !busy && setReasonDialog(null)}>
@@ -534,7 +575,7 @@ function RunHeader({ overview, busy, onPlan, onContinue, onPause, onResume, onCa
   const meta = AGENT_STATUS_META[overview.run.status];
   const Icon = statusIcon(overview.run.status);
   const working = Boolean(busy);
-  return <header className="agent-run-header"><div className="agent-run-heading"><div className={`agent-status-chip tone-${meta.tone}`}><Icon size={14} className={AGENT_ACTIVE_POLL_STATUSES.has(overview.run.status) ? "animate-spin" : ""} />{meta.label}</div><h2>{overview.run.objective}</h2><p>{meta.description}</p></div><div className="agent-run-controls"><button className="secondary-action agent-inspector-toggle h-9 px-3" onClick={onToggleInspector}><Gauge size={15} />治理</button>{overview.run.status === "draft" && <button className="primary-action h-9 px-3" onClick={onPlan} disabled={working}><Sparkles size={15} />开始规划</button>}{overview.run.status === "ready" && <button className="primary-action h-9 px-3" onClick={onContinue} disabled={working}><Play size={15} />继续执行</button>}{["running", "evaluating"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onPause} disabled={working}><Pause size={15} />暂停</button>}{overview.run.status === "paused" && <button className="primary-action h-9 px-3" onClick={onResume} disabled={working}><RotateCcw size={15} />恢复执行</button>}{!["completed", "cancelled", "failed", "cancelling"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onCancel} disabled={working}><Square size={14} />取消</button>}</div></header>;
+  return <header className="agent-run-header"><div className="agent-run-heading"><div className={`agent-status-chip tone-${meta.tone}`}><Icon size={14} className={AGENT_ACTIVE_POLL_STATUSES.has(overview.run.status) ? "animate-spin" : ""} />{meta.label}</div><small>{RUN_KIND_LABELS[overview.run.runKind]?.label ?? overview.run.runKind}</small><h2>{overview.run.objective}</h2><p>{meta.description}</p>{overview.currentOperation && <div className="agent-operation-inline"><span>{overview.currentOperation.phase}</span><strong>{overview.currentOperation.processedCount.toLocaleString()}/{overview.currentOperation.totalCount?.toLocaleString() ?? "?"}</strong><progress value={overview.currentOperation.processedCount} max={overview.currentOperation.totalCount || 1} /></div>}</div><div className="agent-run-controls"><button className="secondary-action agent-inspector-toggle h-9 px-3" onClick={onToggleInspector}><Gauge size={15} />治理</button>{overview.run.status === "draft" && <button className="primary-action h-9 px-3" onClick={onPlan} disabled={working}><Sparkles size={15} />开始规划</button>}{overview.run.status === "ready" && <button className="primary-action h-9 px-3" onClick={onContinue} disabled={working}><Play size={15} />继续执行</button>}{["running", "evaluating"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onPause} disabled={working}><Pause size={15} />暂停</button>}{overview.run.status === "paused" && <button className="primary-action h-9 px-3" onClick={onResume} disabled={working}><RotateCcw size={15} />恢复执行</button>}{!["completed", "cancelled", "failed", "cancelling"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onCancel} disabled={working}><Square size={14} />取消</button>}</div></header>;
 }
 
 function PlanView({ overview }: { overview: AgentRunOverview }) {
@@ -590,19 +631,32 @@ function Inspector({ overview, pending, answer, setAnswer, busy, onApprovePlan, 
   }
   if (pending === "artifact_review" && review) return <div className="agent-inspector-content"><InspectorTitle icon={<FileCheck2 size={17} />} title="高风险报告待复核" subtitle={`内容哈希 ${shortHash(review.contentSha256)}`} /><div className="agent-inspector-note warning">模型不能自行宣布高风险报告完成。批准只绑定当前最新报告内容；报告变化后需重新复核。</div><div className="agent-inspector-actions"><button className="primary-action h-10" onClick={onApproveArtifact} disabled={busy}><Check size={15} />人工批准</button><button className="secondary-action h-10" onClick={onRejectArtifact} disabled={busy}><X size={15} />拒绝报告</button></div></div>;
   if (pending === "blocker") return <div className="agent-inspector-content"><InspectorTitle icon={<AlertTriangle size={17} />} title="运行等待处理" subtitle={overview.run.lastErrorCode ?? "需要用户决定"} /><div className="agent-inspector-note warning">运行不会静默继续。检查快照、预算或报告审计后，选择恢复、取消或在当前快照上创建新任务。</div>{overview.run.lastErrorCode?.includes("SNAPSHOT") && <button className="secondary-action h-10 w-full" onClick={onOpenPipeline}>检查热点建模</button>}<BudgetPanel overview={overview} /></div>;
-  return <div className="agent-inspector-content"><InspectorTitle icon={<Gauge size={17} />} title="运行治理" subtitle="SQLite 权威状态" /><BudgetPanel overview={overview} /><dl className="agent-inspector-details"><div><dt>快照</dt><dd><code>{shortHash(overview.run.snapshotId)}</code></dd></div><div><dt>计划</dt><dd>v{overview.run.currentPlanVersion ?? "—"}</dd></div><div><dt>租约</dt><dd>{overview.currentLease ? `generation ${overview.currentLease.generation}` : "未持有"}</dd></div><div><dt>更新</dt><dd>{fmtTime(overview.run.updatedAtMs)}</dd></div></dl></div>;
+  return <div className="agent-inspector-content"><InspectorTitle icon={<Gauge size={17} />} title="运行治理" subtitle="SQLite 权威状态" /><BudgetPanel overview={overview} /><dl className="agent-inspector-details"><div><dt>库修订</dt><dd>{overview.libraryRevision ?? "—"}</dd></div><div><dt>快照</dt><dd><code>{shortHash(overview.run.snapshotId)}</code></dd></div><div><dt>Token</dt><dd>{overview.modelUsage?.totalTokens.toLocaleString() ?? "0"}</dd></div><div><dt>模型耗时</dt><dd>{overview.modelUsage ? `${(overview.modelUsage.elapsedMs / 1000).toFixed(1)}s` : "—"}</dd></div><div><dt>估算费用</dt><dd>{overview.modelUsage?.estimatedCostMicrousd == null ? "未配置单价" : `$${(overview.modelUsage.estimatedCostMicrousd / 1_000_000).toFixed(4)}`}</dd></div><div><dt>计划</dt><dd>v{overview.run.currentPlanVersion ?? "—"}</dd></div><div><dt>租约</dt><dd>{overview.currentLease ? `generation ${overview.currentLease.generation}` : "未持有"}</dd></div><div><dt>更新</dt><dd>{fmtTime(overview.run.updatedAtMs)}</dd></div></dl></div>;
 }
 
 function InspectorTitle({ icon, title, subtitle }: { icon: ReactNode; title: string; subtitle: string }) { return <header className="agent-inspector-title"><span>{icon}</span><div><h3>{title}</h3><p>{subtitle}</p></div></header>; }
 function InspectorEmpty() { return <div className="agent-inspector-empty"><Gauge size={24} /><strong>运行检查器</strong><span>选择运行后，这里会显示审批、问题、预算和成果复核。</span></div>; }
 function BudgetPanel({ overview }: { overview: AgentRunOverview }) { const pairs = [["步骤", overview.run.budgetUsage.executedSteps, overview.run.budget.maxSteps], ["工具", overview.run.budgetUsage.toolCalls, overview.run.budget.maxToolCalls], ["Planner", overview.run.budgetUsage.plannerRounds, overview.run.budget.maxPlannerRounds], ["修订", overview.run.budgetUsage.reportRewrites, overview.run.budget.maxReportRewrites]] as const; return <div className="agent-budget-panel">{pairs.map(([label, used, limit]) => <div key={label}><div><span>{label}</span><strong>{used}/{limit}</strong></div><div className="agent-budget-track"><span style={{ width: `${Math.min(100, limit ? used / limit * 100 : 0)}%` }} /></div></div>)}</div>; }
 
-function NewRunForm({ draft, setDraft, snapshotReady, snapshot, advancedOpen, setAdvancedOpen, modelTest, busy, onTest, onSubmit, onOpenPipeline }: { draft: NewRunDraft; setDraft: (value: NewRunDraft) => void; snapshotReady: boolean; snapshot: { snapshotId?: string; paperCount: number; hotspotCount: number; membershipCount: number } | null | undefined; advancedOpen: boolean; setAdvancedOpen: (value: boolean) => void; modelTest: string; busy: string; onTest: (role: "planner" | "writer") => void; onSubmit: () => void; onOpenPipeline: () => void }) {
+function NewRunForm({ draft, setDraft, snapshotReady, snapshot, reportArtifacts, advancedOpen, setAdvancedOpen, modelTest, busy, onTest, onSubmit, onOpenPipeline }: { draft: NewRunDraft; setDraft: (value: NewRunDraft) => void; snapshotReady: boolean; snapshot: { snapshotId?: string; paperCount: number; hotspotCount: number; membershipCount: number } | null | undefined; reportArtifacts: AgentArtifactMetadata[]; advancedOpen: boolean; setAdvancedOpen: (value: boolean) => void; modelTest: string; busy: string; onTest: (role: "planner" | "writer") => void; onSubmit: () => void; onOpenPipeline: () => void }) {
   const updateBudget = (key: keyof AgentBudget, value: number) => setDraft({ ...draft, budget: { ...draft.budget, [key]: value } });
-  return <div className="agent-new-run-form"><label className="field-label">研究目标<textarea autoFocus className="field-control min-h-[130px] p-3" maxLength={4096} value={draft.objective} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} placeholder="例如：分析量子纠错在真实噪声模型下的最新研究进展，并生成可追溯的审计报告。" /></label><div className="agent-mode-grid"><button className={draft.mode === "supervised" ? "active" : ""} onClick={() => setDraft({ ...draft, mode: "supervised" })}><ShieldCheck size={18} /><strong>监督模式</strong><span>批准计划后执行只读步骤，写动作仍逐次审批。</span></button><button className={draft.mode === "advisor" ? "active" : ""} onClick={() => setDraft({ ...draft, mode: "advisor" })}><Bot size={18} /><strong>顾问模式</strong><span>只生成计划和建议，工具调用始终为 0。</span></button></div><div className={`agent-new-snapshot ${snapshotReady ? "ready" : "blocked"}`}><Database size={17} /><div><strong>{snapshotReady ? "任务将绑定当前活动快照" : "当前无法创建任务"}</strong><span>{snapshotReady && snapshot ? `${snapshot.paperCount.toLocaleString()} 篇论文 · ${snapshot.hotspotCount} 热点 · ${snapshot.membershipCount.toLocaleString()} 条归属` : "请先显式运行热点建模。"}</span></div>{!snapshotReady && <button onClick={onOpenPipeline}>前往建模</button>}</div><button className="agent-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)} aria-expanded={advancedOpen}><span><ChevronDown size={15} className={advancedOpen ? "rotate-180" : ""} />高级模型与预算</span><small>{profileLabel(draft.planner)}</small></button>{advancedOpen && <div className="agent-advanced-panel"><ModelProfileEditor title="Planner" profile={draft.planner} secret={draft.plannerSecret} onChange={(planner) => setDraft({ ...draft, planner, writer: draft.writerMatchesPlanner ? { ...planner } : draft.writer })} onSecret={(plannerSecret) => setDraft({ ...draft, plannerSecret })} onTest={() => onTest("planner")} /><label className="agent-same-model"><input type="checkbox" checked={draft.writerMatchesPlanner} onChange={(event) => setDraft({ ...draft, writerMatchesPlanner: event.target.checked, writer: event.target.checked ? { ...draft.planner } : draft.writer })} />Writer 使用相同模型配置</label>{!draft.writerMatchesPlanner && <ModelProfileEditor title="Writer" profile={draft.writer} secret={draft.writerSecret} onChange={(writer) => setDraft({ ...draft, writer })} onSecret={(writerSecret) => setDraft({ ...draft, writerSecret })} onTest={() => onTest("writer")} />}{modelTest && <div className="agent-model-test-result">{modelTest}</div>}<div className="agent-budget-editor"><BudgetInput label="最大步骤" value={draft.budget.maxSteps} maximum={20} onChange={(value) => updateBudget("maxSteps", value)} /><BudgetInput label="工具调用" value={draft.budget.maxToolCalls} maximum={24} onChange={(value) => updateBudget("maxToolCalls", value)} /><BudgetInput label="规划回合" value={draft.budget.maxPlannerRounds} maximum={24} onChange={(value) => updateBudget("maxPlannerRounds", value)} /><BudgetInput label="报告修订" value={draft.budget.maxReportRewrites} maximum={1} onChange={(value) => updateBudget("maxReportRewrites", value)} /></div></div>}<div className="agent-new-run-footer"><div><ShieldCheck size={15} /><span>目标和预算写入 SQLite；API Key 只进入 Windows 凭据管理器。</span></div><button className="primary-action h-11 px-5" onClick={onSubmit} disabled={!snapshotReady || !draft.objective.trim() || Boolean(busy)}>{busy === "create" ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}{draft.mode === "advisor" ? "生成顾问计划" : "生成监督计划"}</button></div></div>;
+  const taskBlocked = draft.kind === "research_report" && !snapshotReady;
+  const inputReady = draft.kind === "paper_file_import" ? Boolean(draft.sourcePath) : draft.kind === "report_export" ? Boolean(draft.exportDirectory && draft.reportArtifactId && (draft.exportMarkdown || draft.exportHtml)) : true;
+  return <div className="agent-new-run-form">
+    <section><span className="field-label">任务类型</span><div className="agent-task-kind-grid">{(Object.keys(RUN_KIND_LABELS) as AgentRunKind[]).map((kind) => <button key={kind} className={draft.kind === kind ? "active" : ""} onClick={() => setDraft({ ...draft, kind })}><strong>{RUN_KIND_LABELS[kind].label}</strong><span>{RUN_KIND_LABELS[kind].description}</span></button>)}</div></section>
+    <label className="field-label">任务目标<textarea autoFocus className="field-control min-h-[96px] p-3" maxLength={4096} value={draft.objective} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} placeholder={RUN_KIND_LABELS[draft.kind].objective} /></label>
+    {draft.kind === "paper_file_import" && <div className="agent-resource-picker"><div><strong>授权论文文件</strong><span>{draft.sourcePath || "尚未选择文件"}</span></div><button className="secondary-action h-9 px-3" onClick={() => void choosePaperImportFile().then((sourcePath) => sourcePath && setDraft({ ...draft, sourcePath }))}>选择文件</button></div>}
+    {draft.kind === "paper_mysql_import" && <div className="agent-model-fields"><label className="field-label">主机<input className="field-control h-10 px-3" value={draft.mysqlHost} onChange={(event) => setDraft({ ...draft, mysqlHost: event.target.value })} /></label><label className="field-label">端口<input className="field-control h-10 px-3" type="number" value={draft.mysqlPort} onChange={(event) => setDraft({ ...draft, mysqlPort: Number(event.target.value) || 3306 })} /></label><label className="field-label">用户<input className="field-control h-10 px-3" value={draft.mysqlUser} onChange={(event) => setDraft({ ...draft, mysqlUser: event.target.value })} /></label><label className="field-label">数据库<input className="field-control h-10 px-3" value={draft.mysqlDatabase} onChange={(event) => setDraft({ ...draft, mysqlDatabase: event.target.value })} /></label><small>密码只从当前项目的 Windows 凭据管理器读取，不写入任务输入。</small></div>}
+    {draft.kind === "report_export" && <div className="agent-export-fields"><label className="field-label">报告成果<select className="field-control h-10 px-3" value={draft.reportArtifactId} onChange={(event) => setDraft({ ...draft, reportArtifactId: event.target.value })}><option value="">选择当前运行中的报告</option>{reportArtifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.id.slice(0, 24)} · {artifact.reviewStatus ?? "未标记"}</option>)}</select></label><div className="agent-resource-picker"><div><strong>导出目录</strong><span>{draft.exportDirectory || "尚未选择目录"}</span></div><button className="secondary-action h-9 px-3" onClick={() => void chooseExportDirectory("选择 Agent 报告导出目录").then((exportDirectory) => exportDirectory && setDraft({ ...draft, exportDirectory }))}>选择目录</button></div><div className="agent-model-options"><label><input type="checkbox" checked={draft.exportMarkdown} onChange={(event) => setDraft({ ...draft, exportMarkdown: event.target.checked })} />Markdown</label><label><input type="checkbox" checked={draft.exportHtml} onChange={(event) => setDraft({ ...draft, exportHtml: event.target.checked })} />HTML</label></div></div>}
+    <div className="agent-mode-grid"><button className={draft.mode === "supervised" ? "active" : ""} onClick={() => setDraft({ ...draft, mode: "supervised" })}><ShieldCheck size={18} /><strong>监督模式</strong><span>高风险动作逐次审批后执行。</span></button><button className={draft.mode === "advisor" ? "active" : ""} onClick={() => setDraft({ ...draft, mode: "advisor" })}><Bot size={18} /><strong>顾问模式</strong><span>只生成计划，不调用工具。</span></button></div>
+    {draft.kind === "research_report" && <div className={`agent-new-snapshot ${snapshotReady ? "ready" : "blocked"}`}><Database size={17} /><div><strong>{snapshotReady ? "报告将绑定当前活动快照" : "研究报告需要有效 V20 快照"}</strong><span>{snapshotReady && snapshot ? `${snapshot.paperCount.toLocaleString()} 篇论文 · ${snapshot.hotspotCount} 热点 · ${snapshot.membershipCount.toLocaleString()} 条归属` : "不会自动建模。"}</span></div>{!snapshotReady && <button onClick={onOpenPipeline}>前往建模</button>}</div>}
+    <button className="agent-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)} aria-expanded={advancedOpen}><span><ChevronDown size={15} className={advancedOpen ? "rotate-180" : ""} />高级模型、预算与成本</span><small>{profileLabel(draft.planner)}</small></button>
+    {advancedOpen && <div className="agent-advanced-panel"><ModelProfileEditor title="Planner" profile={draft.planner} secret={draft.plannerSecret} onChange={(planner) => setDraft({ ...draft, planner, writer: draft.writerMatchesPlanner ? { ...planner } : draft.writer })} onSecret={(plannerSecret) => setDraft({ ...draft, plannerSecret })} onTest={() => onTest("planner")} /><label className="agent-same-model"><input type="checkbox" checked={draft.writerMatchesPlanner} onChange={(event) => setDraft({ ...draft, writerMatchesPlanner: event.target.checked, writer: event.target.checked ? { ...draft.planner } : draft.writer })} />Writer 使用相同模型配置</label>{!draft.writerMatchesPlanner && <ModelProfileEditor title="Writer" profile={draft.writer} secret={draft.writerSecret} onChange={(writer) => setDraft({ ...draft, writer })} onSecret={(writerSecret) => setDraft({ ...draft, writerSecret })} onTest={() => onTest("writer")} />}{modelTest && <div className="agent-model-test-result">{modelTest}</div>}<div className="agent-budget-editor"><BudgetInput label="最大步骤" value={draft.budget.maxSteps} maximum={20} onChange={(value) => updateBudget("maxSteps", value)} /><BudgetInput label="工具调用" value={draft.budget.maxToolCalls} maximum={24} onChange={(value) => updateBudget("maxToolCalls", value)} /><BudgetInput label="规划回合" value={draft.budget.maxPlannerRounds} maximum={24} onChange={(value) => updateBudget("maxPlannerRounds", value)} /><BudgetInput label="报告修订" value={draft.budget.maxReportRewrites} maximum={1} onChange={(value) => updateBudget("maxReportRewrites", value)} /></div></div>}
+    <div className="agent-new-run-footer"><div><ShieldCheck size={15} /><span>业务修改和文件导出均为高风险动作，必须单独批准。</span></div><button className="primary-action h-11 px-5" onClick={onSubmit} disabled={taskBlocked || !inputReady || Boolean(busy)}>{busy === "create" ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}{draft.mode === "advisor" ? "生成顾问计划" : "生成监督计划"}</button></div>
+  </div>;
 }
 
-function ModelProfileEditor({ title, profile, secret, onChange, onSecret, onTest }: { title: string; profile: AgentModelProfile; secret: string; onChange: (profile: AgentModelProfile) => void; onSecret: (secret: string) => void; onTest: () => void }) { return <section className="agent-model-editor"><header><div><strong>{title}</strong><span>{profileLabel(profile)}</span></div><button className="secondary-action h-8 px-2 text-xs" onClick={onTest}>测试连接</button></header><div className="agent-model-fields"><label className="field-label">协议<select className="field-control h-10 px-3" value={profile.protocol} onChange={(event) => onChange({ ...profile, protocol: event.target.value as AgentModelProfile["protocol"], anthropicVersion: event.target.value === "anthropic_messages" ? "2023-06-01" : undefined })}><option value="openai_chat_completions">OpenAI Chat</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label><label className="field-label">模型<input className="field-control h-10 px-3" value={profile.model} onChange={(event) => onChange({ ...profile, model: event.target.value })} /></label><label className="field-label agent-model-url">端点<input className="field-control h-10 px-3" value={profile.baseUrl} onChange={(event) => onChange({ ...profile, baseUrl: event.target.value })} /></label><label className="field-label">API Key<input className="field-control h-10 px-3" type="password" value={secret} onChange={(event) => onSecret(event.target.value)} placeholder="留空则使用已保存凭据" /></label></div><div className="agent-model-options"><label><input type="checkbox" checked={profile.nativeStructuredOutput} onChange={(event) => onChange({ ...profile, nativeStructuredOutput: event.target.checked })} />原生结构化输出</label><label><input type="checkbox" checked={profile.allowLocalHttp} onChange={(event) => onChange({ ...profile, allowLocalHttp: event.target.checked })} />允许本机 HTTP</label></div></section>; }
+function ModelProfileEditor({ title, profile, secret, onChange, onSecret, onTest }: { title: string; profile: AgentModelProfile; secret: string; onChange: (profile: AgentModelProfile) => void; onSecret: (secret: string) => void; onTest: () => void }) { return <section className="agent-model-editor"><header><div><strong>{title}</strong><span>{profileLabel(profile)}</span></div><button className="secondary-action h-8 px-2 text-xs" onClick={onTest}>测试连接</button></header><div className="agent-model-fields"><label className="field-label">协议<select className="field-control h-10 px-3" value={profile.protocol} onChange={(event) => onChange({ ...profile, protocol: event.target.value as AgentModelProfile["protocol"], anthropicVersion: event.target.value === "anthropic_messages" ? "2023-06-01" : undefined })}><option value="openai_chat_completions">OpenAI Chat</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label><label className="field-label">模型<input className="field-control h-10 px-3" value={profile.model} onChange={(event) => onChange({ ...profile, model: event.target.value })} /></label><label className="field-label agent-model-url">端点<input className="field-control h-10 px-3" value={profile.baseUrl} onChange={(event) => onChange({ ...profile, baseUrl: event.target.value })} /></label><label className="field-label">API Key<input className="field-control h-10 px-3" type="password" value={secret} onChange={(event) => onSecret(event.target.value)} placeholder="留空则使用已保存凭据" /></label><label className="field-label">输入单价 / 百万 Token<input className="field-control h-10 px-3" type="number" min="0" step="0.01" value={profile.inputUsdPerMillion ?? ""} onChange={(event) => onChange({ ...profile, inputUsdPerMillion: event.target.value ? Number(event.target.value) : undefined })} placeholder="可选" /></label><label className="field-label">输出单价 / 百万 Token<input className="field-control h-10 px-3" type="number" min="0" step="0.01" value={profile.outputUsdPerMillion ?? ""} onChange={(event) => onChange({ ...profile, outputUsdPerMillion: event.target.value ? Number(event.target.value) : undefined })} placeholder="可选" /></label></div><div className="agent-model-options"><label><input type="checkbox" checked={profile.nativeStructuredOutput} onChange={(event) => onChange({ ...profile, nativeStructuredOutput: event.target.checked })} />原生结构化输出</label><label><input type="checkbox" checked={profile.allowLocalHttp} onChange={(event) => onChange({ ...profile, allowLocalHttp: event.target.checked })} />允许本机 HTTP</label></div></section>; }
 function BudgetInput({ label, value, maximum, onChange }: { label: string; value: number; maximum: number; onChange: (value: number) => void }) { return <label><span>{label}</span><input type="number" min={1} max={maximum} value={value} onChange={(event) => onChange(Math.max(1, Math.min(maximum, Number(event.target.value) || 1)))} /><small>上限 {maximum}</small></label>; }
 
 function AgentModal({ open, title, onClose, wide = false, children }: { open: boolean; title: string; onClose: () => void; wide?: boolean; children: ReactNode }) {
