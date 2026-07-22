@@ -57,6 +57,9 @@ assert.doesNotMatch(workspaceSource, /dangerouslySetInnerHTML/);
 assert.match(workspaceSource, /sessionStorage/);
 assert.match(workspaceSource, /pollIntervalForStatus/);
 assert.match(workspaceSource, /currentRunRef\.current !== runId/);
+assert.match(workspaceSource, /eventsRef\.current/);
+assert.match(workspaceSource, /afterSequence/);
+assert.match(workspaceSource, /加载更多审计事件/);
 assert.match(workspaceSource, /setRunLimit\(\(current\) => current \+ RUN_PAGE_SIZE\)/);
 assert.match(workspaceSource, /getDraftModelProfiles/);
 assert.match(workspaceSource, /agent-inspector-open/);
@@ -73,4 +76,5 @@ console.log(JSON.stringify({
   singleActiveRun: true,
   recoverableDraftPlanning: true,
   responsiveInspectors: true,
+  incrementalEventPaging: true,
 }, null, 2));

@@ -186,6 +186,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const [railOpen, setRailOpen] = useState(false);
   const requestSequence = useRef(0);
   const currentRunRef = useRef("");
+  const eventsRef = useRef<AgentEventRecord[]>([]);
 
   const effectiveSnapshot = props.visualReviewScenario === "no-snapshot" ? null : props.visualReviewScenario ? {
     snapshotId: "snapshot-v20-review", activeSnapshotId: "snapshot-v20-review", paperCount: 25_463, hotspotCount: 160, membershipCount: 25_463,
@@ -223,6 +224,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     const next = overviewFromSnapshot(snapshot);
     setOverview(next);
     setEvents(snapshot.events);
+    eventsRef.current = snapshot.events;
     setArtifactCache((current) => ({ ...current, ...Object.fromEntries(snapshot.artifacts.map((artifact) => [artifact.id, artifact])) }));
     currentRunRef.current = next.run.id;
     setSelectedRunId(next.run.id);
@@ -236,9 +238,13 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       const next = await client.getOverview(context, runId);
       if (sequence !== requestSequence.current || currentRunRef.current !== runId) return;
       setOverview(next);
-      const nextEvents = await client.getEvents(context, runId, 0, 200);
+      const currentEvents = currentRunRef.current === runId ? eventsRef.current : [];
+      const afterSequence = currentEvents.at(-1)?.sequence ?? 0;
+      const nextEvents = await client.getEvents(context, runId, afterSequence, 200);
       if (sequence !== requestSequence.current || currentRunRef.current !== runId) return;
-      setEvents(nextEvents);
+      const mergedEvents = afterSequence > 0 ? [...currentEvents, ...nextEvents] : nextEvents;
+      eventsRef.current = mergedEvents;
+      setEvents(mergedEvents);
       setError("");
     } catch (value) {
       if (sequence === requestSequence.current) setError(errorMessage(value));
@@ -252,6 +258,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     currentRunRef.current = "";
     setOverview(null);
     setEvents([]);
+    eventsRef.current = [];
     setArtifactCache({});
     setSelectedArtifactId("");
     void loadRuns(false);
@@ -267,6 +274,8 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     sessionStorage.setItem(`agent-run:${context.projectId}`, selectedRunId);
     setSelectedArtifactId("");
     setArtifactCache({});
+    eventsRef.current = [];
+    setEvents([]);
     void loadOverview(selectedRunId);
   }, [selectedRunId, context.projectId, loadOverview]);
 
@@ -448,7 +457,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               </nav>
               <div className="agent-tab-content">
                 {activeTab === "plan" && <PlanView overview={overview} />}
-                {activeTab === "timeline" && <TimelineView events={events} steps={overview.steps} />}
+                {activeTab === "timeline" && <TimelineView events={events} steps={overview.steps} hasMore={(events.at(-1)?.sequence ?? 0) < overview.eventCursor} onLoadMore={() => void loadOverview(overview.run.id, true)} />}
                 {activeTab === "artifacts" && <ArtifactWorkspace overview={overview} selectedId={selectedArtifactId} onSelect={setSelectedArtifactId} artifact={selectedArtifact} onOpenPaper={props.onOpenPaper} />}
               </div>
             </>
@@ -533,9 +542,9 @@ function PlanView({ overview }: { overview: AgentRunOverview }) {
   return <div className="agent-plan-view"><section className="agent-plan-summary"><div><span>计划版本</span><strong>v{overview.plan.version}</strong></div><div><span>假设</span><strong>{overview.plan.assumptions.length}</strong></div><div><span>成功标准</span><strong>{overview.plan.successCriteria.length}</strong></div><div><span>步骤</span><strong>{overview.plan.steps.length}</strong></div></section><section className="agent-plan-context"><div><h3>运行假设</h3>{overview.plan.assumptions.map((value) => <p key={value}><Check size={13} />{value}</p>)}</div><div><h3>确定性成功标准</h3>{overview.plan.successCriteria.map((criterion) => <p key={criterion.id}><ShieldCheck size={13} />{criterion.description}</p>)}</div></section><div className="agent-step-list">{overview.steps.map((step) => <div key={step.stepId} className={`agent-step-row status-${step.status}`}><div className="agent-step-ordinal">{String(step.ordinal + 1).padStart(2, "0")}</div><div className="agent-step-body"><div><strong>{step.title}</strong><span className={`agent-risk risk-${step.risk}`}>{step.risk === "read" ? "只读" : step.risk === "write" ? "写入" : "高风险"}</span></div><code>{step.toolName}@{step.toolVersion}</code>{step.lastErrorCode && <small>{step.lastErrorCode}{step.recoveryCount ? ` · 恢复 ${step.recoveryCount} 次` : ""}</small>}</div><div className="agent-step-state">{step.status === "succeeded" ? <CheckCircle2 size={16} /> : step.status === "running" ? <Loader2 className="animate-spin" size={16} /> : step.status === "failed" ? <XCircle size={16} /> : <Circle size={15} />}<span>{step.status}</span></div></div>)}</div></div>;
 }
 
-function TimelineView({ events, steps }: { events: AgentEventRecord[]; steps: AgentRunOverview["steps"] }) {
+function TimelineView({ events, steps, hasMore, onLoadMore }: { events: AgentEventRecord[]; steps: AgentRunOverview["steps"]; hasMore: boolean; onLoadMore: () => void }) {
   const titles = new Map(steps.map((step) => [step.stepId, step.title]));
-  return <div className="agent-timeline">{events.length === 0 && <div className="agent-content-empty"><Activity size={24} /><span>暂无审计事件</span></div>}{events.map((event) => <article key={event.sequence} className="agent-event"><div className="agent-event-marker" /><div><div className="agent-event-top"><strong>{event.eventType.replaceAll("_", " ")}</strong><span>#{event.sequence} · {fmtTime(event.createdAtMs)}</span></div>{event.stepId && <small>{titles.get(event.stepId) ?? event.stepId}</small>}<p>{summarizeEventPayload(event.payload)}</p></div></article>)}</div>;
+  return <div className="agent-timeline">{events.length === 0 && <div className="agent-content-empty"><Activity size={24} /><span>暂无审计事件</span></div>}{events.map((event) => <article key={event.sequence} className="agent-event"><div className="agent-event-marker" /><div><div className="agent-event-top"><strong>{event.eventType.replaceAll("_", " ")}</strong><span>#{event.sequence} · {fmtTime(event.createdAtMs)}</span></div>{event.stepId && <small>{titles.get(event.stepId) ?? event.stepId}</small>}<p>{summarizeEventPayload(event.payload)}</p></div></article>)}{hasMore && <button className="agent-load-more" onClick={onLoadMore}>加载更多审计事件</button>}</div>;
 }
 
 function ArtifactWorkspace({ overview, selectedId, onSelect, artifact, onOpenPaper }: { overview: AgentRunOverview; selectedId: string; onSelect: (id: string) => void; artifact?: AgentArtifactRecord; onOpenPaper: (paperId: string, title?: string) => void }) {
