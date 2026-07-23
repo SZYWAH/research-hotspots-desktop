@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 
-const runtime = readFileSync(new URL("../src-tauri/src/agent_runtime.rs", import.meta.url), "utf8");
-const core = readFileSync(new URL("../src-tauri/core/src/agent_store.rs", import.meta.url), "utf8");
+const runtime = readFileSync(new URL("../src-tauri/src/agent_runtime.rs", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
+const core = readFileSync(new URL("../src-tauri/core/src/agent_store.rs", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
 const start = runtime.indexOf("fn execute_extended_tool_sync(");
 const end = runtime.indexOf("#[cfg(test)]\nfn execute_extended_tool_sync", start);
 if (start < 0 || end < 0) throw new Error("Cannot locate governed extended-tool executor.");
@@ -16,7 +18,9 @@ const checks = [
   ["export finalization deferred", extended.includes("DeferredToolCommit::Export")],
   ["library lease fenced in commit", runtime.includes("assert_library_operation_lease(transaction, lease, now)")],
   ["deterministic export name", runtime.includes("operation_suffix")],
-  ["export replay verifies hash", runtime.includes("existing_sha256 == expected_sha256")],
+  ["export replay verifies hash",
+    runtime.includes("sha256_file(&final_path)? != expected_sha256")
+      && runtime.includes("written_sha256 != file.expected_sha256")],
   ["old import self-commit removed", !extended.includes("super::upsert_paper_rows(&mut connection")],
   ["old clean self-commit removed", !extended.includes("super::clean_library_connection(&mut connection")],
   ["old V20 self-commit removed", !extended.includes("super::cluster_library_connection(&connection")],

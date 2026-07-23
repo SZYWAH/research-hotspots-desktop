@@ -9,6 +9,40 @@ import type {
 export const AGENT_TERMINAL_STATUSES = new Set<AgentRunStatus>(["completed", "cancelled", "failed"]);
 export const AGENT_ACTIVE_POLL_STATUSES = new Set<AgentRunStatus>(["planning", "running", "evaluating", "cancelling"]);
 
+export type AgentRequestFence = Readonly<{
+  sequence: number;
+  runId: string;
+  contextKey: string;
+}>;
+
+export type AgentArtifactRequestFence = AgentRequestFence & Readonly<{
+  artifactId: string;
+}>;
+
+export function matchesAgentRequestFence(
+  fence: AgentRequestFence,
+  currentSequence: number,
+  currentRunId: string,
+  currentContextKey: string,
+) {
+  return fence.sequence === currentSequence
+    && fence.runId === currentRunId
+    && fence.contextKey === currentContextKey;
+}
+
+export function matchesAgentArtifactRequestFence(
+  fence: AgentArtifactRequestFence,
+  currentSequence: number,
+  currentRunId: string,
+  currentContextKey: string,
+  currentArtifactId: string,
+  artifactStillAvailable: boolean,
+) {
+  return artifactStillAvailable
+    && fence.artifactId === currentArtifactId
+    && matchesAgentRequestFence(fence, currentSequence, currentRunId, currentContextKey);
+}
+
 export const AGENT_STATUS_META: Record<AgentRunStatus, { label: string; tone: "neutral" | "cyan" | "amber" | "danger" | "success"; description: string }> = {
   draft: { label: "草稿", tone: "neutral", description: "目标已保存，尚未开始规划。" },
   planning: { label: "正在规划", tone: "cyan", description: "Planner 正在生成受治理计划。" },

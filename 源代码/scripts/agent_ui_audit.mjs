@@ -7,6 +7,8 @@ import {
   AGENT_ACTIVE_POLL_STATUSES,
   AGENT_STATUS_META,
   canAutoContinueAfterUserAction,
+  matchesAgentArtifactRequestFence,
+  matchesAgentRequestFence,
   normalizeAgentError,
   pendingKind,
   pollIntervalForStatus,
@@ -22,6 +24,16 @@ assert.equal(pollIntervalForStatus("running"), 800);
 assert.equal(pollIntervalForStatus("paused"), 4_000);
 assert.equal(canAutoContinueAfterUserAction("ready"), true);
 assert.equal(canAutoContinueAfterUserAction("paused"), false);
+
+const requestFence = { sequence: 7, runId: "run-a", contextKey: "db-a\u0000project-a" };
+assert.equal(matchesAgentRequestFence(requestFence, 7, "run-a", "db-a\u0000project-a"), true);
+assert.equal(matchesAgentRequestFence(requestFence, 8, "run-a", "db-a\u0000project-a"), false, "newer command sequence must fence stale success and failure");
+assert.equal(matchesAgentRequestFence(requestFence, 7, "run-b", "db-a\u0000project-a"), false, "switching runs must fence stale commands");
+assert.equal(matchesAgentRequestFence(requestFence, 7, "run-a", "db-b\u0000project-a"), false, "switching databases must fence stale commands");
+const artifactFence = { ...requestFence, artifactId: "artifact-a" };
+assert.equal(matchesAgentArtifactRequestFence(artifactFence, 7, "run-a", "db-a\u0000project-a", "artifact-a", true), true);
+assert.equal(matchesAgentArtifactRequestFence(artifactFence, 7, "run-a", "db-a\u0000project-a", "artifact-b", true), false, "switching artifacts must fence stale responses");
+assert.equal(matchesAgentArtifactRequestFence(artifactFence, 7, "run-a", "db-a\u0000project-a", "artifact-a", false), false, "removed artifact metadata must fence stale responses");
 
 const baseOverview = {
   run: { id: "r", libraryInstanceId: "l", projectId: "p", automationMode: "supervised", status: "awaiting_user", objective: "o", budget: DEFAULT_AGENT_BUDGET, budgetUsage: { executedSteps: 0, toolCalls: 0, plannerRounds: 0, protocolRepairs: 0, retriesForCurrentTool: 0, reportRewrites: 0 }, createdAtMs: 1, updatedAtMs: 1 },

@@ -27,6 +27,21 @@ function latestStageJob(jobs: PipelineJob[], stage: PipelineJob["stage"]) {
     .sort((left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt))[0];
 }
 
+function selectedStageJob(
+  jobs: PipelineJob[],
+  stage: PipelineJob["stage"],
+  backendStageRunning: boolean,
+  executionSessionId?: string,
+) {
+  const stageJobs = jobs.filter((job) => job.stage === stage);
+  const currentRunning = stageJobs
+    .filter((job) => job.status === "running" && (
+      backendStageRunning || job.executionSessionId === executionSessionId
+    ))
+    .sort((left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt))[0];
+  return currentRunning ?? latestStageJob(stageJobs.filter((job) => job.status !== "running"), stage);
+}
+
 function jobIsNewerThanSnapshot(job: PipelineJob | undefined, snapshot: V20HotspotSnapshot | null) {
   return Boolean(job && snapshot && timestamp(job.updatedAt) > timestamp(snapshot.generatedAt));
 }
@@ -36,17 +51,42 @@ export function deriveAnalysisProgress({
   hotspotCount,
   jobs,
   snapshot,
+  databaseKey,
+  executionSessionId,
+  activeMutationKind,
 }: {
   paperCount: number;
   hotspotCount: number;
   jobs: PipelineJob[];
   snapshot: V20HotspotSnapshot | null;
+  databaseKey?: string;
+  executionSessionId?: string;
+  activeMutationKind?: string;
 }): AnalysisProgress {
-  const cleanJob = latestStageJob(jobs, "clean");
-  const clusterJob = latestStageJob(jobs, "cluster");
-  const cleanRunning = cleanJob?.status === "running";
-  const clusterRunning = clusterJob?.status === "running";
-  const hasSnapshot = Boolean(snapshot?.activeSnapshotId && (snapshot.snapshotId ?? snapshot.activeSnapshotId));
+  const scopedJobs = databaseKey === undefined
+    ? jobs
+    : jobs.filter((job) => job.databaseKey === databaseKey);
+  const cleanBackendRunning = activeMutationKind === "clean";
+  const clusterBackendRunning = activeMutationKind === "cluster";
+  const cleanJob = selectedStageJob(scopedJobs, "clean", cleanBackendRunning, executionSessionId);
+  const clusterJob = selectedStageJob(scopedJobs, "cluster", clusterBackendRunning, executionSessionId);
+  const runningJobIsCurrent = (job: PipelineJob | undefined) => Boolean(
+    job?.status === "running"
+      && databaseKey !== undefined
+      && executionSessionId
+      && job.databaseKey === databaseKey
+      && job.executionSessionId === executionSessionId,
+  );
+  // A persisted "running" row is historical unless it belongs to this exact
+  // WebView execution session and database. This prevents a crashed window or
+  // a previously selected database from permanently masking SQLite revision
+  // truth after a cold start.
+  const cleanRunning = cleanBackendRunning || runningJobIsCurrent(cleanJob);
+  const clusterRunning = clusterBackendRunning || runningJobIsCurrent(clusterJob);
+  const hasSnapshot = Boolean(
+    snapshot?.activeSnapshotId
+      && (snapshot.snapshotId ?? snapshot.activeSnapshotId) === snapshot.activeSnapshotId,
+  );
   const snapshotCountsMatch = Boolean(
     snapshot
       && snapshot.paperCount === paperCount

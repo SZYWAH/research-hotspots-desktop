@@ -2,8 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use research_hotspots_core::agent::{
     canonical_value_sha256, validate_error_code, AgentAction, AgentArtifactReviewDecision,
@@ -56,6 +58,26 @@ use super::{
     get_app_credential_status, normalized_database_key, now_millis, open_library_database,
     read_app_credential, set_app_credential,
 };
+#[cfg(not(test))]
+use super::LibraryMutationRegistry;
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct LibraryMutationRegistry;
+
+#[cfg(test)]
+struct TestLibraryMutationPermit;
+
+#[cfg(test)]
+impl LibraryMutationRegistry {
+    fn try_acquire(
+        &self,
+        _database_path: &Path,
+        _operation_kind: &str,
+    ) -> Result<TestLibraryMutationPermit, String> {
+        Ok(TestLibraryMutationPermit)
+    }
+}
 
 static AGENT_RUNTIME_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1340,19 +1362,91 @@ fn finish_long_operation(
 struct LibraryLeaseRelease {
     path: PathBuf,
     lease: Option<LibraryOperationLease>,
+    heartbeat_stop: Option<mpsc::Sender<()>>,
+    heartbeat_handle: Option<thread::JoinHandle<()>>,
+    heartbeat_lost: Arc<AtomicBool>,
 }
 
 impl LibraryLeaseRelease {
     fn new(path: &Path, lease: Option<LibraryOperationLease>) -> Self {
+        Self::new_with_interval(path, lease, Duration::from_secs(10))
+    }
+
+    fn new_with_interval(
+        path: &Path,
+        lease: Option<LibraryOperationLease>,
+        interval: Duration,
+    ) -> Self {
+        let heartbeat_lost = Arc::new(AtomicBool::new(false));
+        let (heartbeat_stop, heartbeat_handle) = if let Some(initial_lease) = lease.clone() {
+            let (stop_sender, stop_receiver) = mpsc::channel();
+            let heartbeat_path = path.to_path_buf();
+            let lost = heartbeat_lost.clone();
+            let handle = thread::spawn(move || {
+                let mut current = initial_lease;
+                let mut wait = interval;
+                loop {
+                    match stop_receiver.recv_timeout(wait) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let now = timestamp_ms();
+                            let renewed = open_agent_connection(&heartbeat_path).and_then(
+                                |connection| {
+                                    AgentCapabilityRepository::new(&connection)?
+                                        .renew_library_lease(&current, now)
+                                },
+                            );
+                            match renewed {
+                                Ok(value) => {
+                                    current = value;
+                                    wait = interval;
+                                }
+                                Err(_) if now < current.expires_at_ms => {
+                                    wait = Duration::from_secs(1).min(interval);
+                                }
+                                Err(_) => {
+                                    lost.store(true, Ordering::Release);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            (Some(stop_sender), Some(handle))
+        } else {
+            (None, None)
+        };
         Self {
             path: path.to_path_buf(),
             lease,
+            heartbeat_stop,
+            heartbeat_handle,
+            heartbeat_lost,
         }
+    }
+
+    fn stop_heartbeat(&mut self) -> Result<(), String> {
+        if let Some(stop) = self.heartbeat_stop.take() {
+            let _ = stop.send(());
+        }
+        if self
+            .heartbeat_handle
+            .take()
+            .is_some_and(|handle| handle.join().is_err())
+        {
+            self.heartbeat_lost.store(true, Ordering::Release);
+        }
+        if self.heartbeat_lost.load(Ordering::Acquire) {
+            return Err("LIBRARY_OPERATION_LEASE_LOST".into());
+        }
+        Ok(())
     }
 }
 
 impl Drop for LibraryLeaseRelease {
     fn drop(&mut self) {
+        let _ = self.stop_heartbeat();
         let Some(lease) = self.lease.take() else {
             return;
         };
@@ -1384,6 +1478,73 @@ fn safe_remove_operation_staging(staging_root: &Path, target: &Path) {
     }
 }
 
+fn validated_import_row_count(preview: &Value) -> Result<i64, String> {
+    let valid_rows = preview
+        .get("validRows")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "AGENT_IMPORT_PREVIEW_INVALID".to_string())?;
+    if valid_rows <= 0 {
+        return Err("AGENT_IMPORT_EMPTY".into());
+    }
+    Ok(valid_rows)
+}
+
+fn stage_verified_import_source(
+    source_path: &Path,
+    staging_dir: &Path,
+    expected_sha256: &str,
+) -> Result<PathBuf, String> {
+    if sha256_file(source_path)? != expected_sha256 {
+        return Err("AGENT_RESOURCE_FINGERPRINT_CHANGED".into());
+    }
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        });
+    let staged_name = extension
+        .map(|value| format!("authorized-source.{value}"))
+        .unwrap_or_else(|| "authorized-source".into());
+    let staged_path = staging_dir.join(&staged_name);
+    let partial_path = staging_dir.join(format!(".{staged_name}.partial"));
+    let _ = fs::remove_file(&partial_path);
+    let _ = fs::remove_file(&staged_path);
+    let copy_result = (|| {
+        let mut source = fs::File::open(source_path)
+            .map_err(|error| format!("AGENT_IMPORT_SOURCE_OPEN_FAILED:{error}"))?;
+        let mut partial = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial_path)
+            .map_err(|error| format!("AGENT_IMPORT_SOURCE_STAGE_CREATE_FAILED:{error}"))?;
+        std::io::copy(&mut source, &mut partial)
+            .map_err(|error| format!("AGENT_IMPORT_SOURCE_STAGE_COPY_FAILED:{error}"))?;
+        partial
+            .sync_all()
+            .map_err(|error| format!("AGENT_IMPORT_SOURCE_STAGE_SYNC_FAILED:{error}"))?;
+        drop(partial);
+        if sha256_file(&partial_path)? != expected_sha256 {
+            return Err("AGENT_RESOURCE_FINGERPRINT_CHANGED".into());
+        }
+        fs::rename(&partial_path, &staged_path)
+            .map_err(|error| format!("AGENT_IMPORT_SOURCE_STAGE_RENAME_FAILED:{error}"))?;
+        if sha256_file(&staged_path)? != expected_sha256 {
+            return Err("AGENT_RESOURCE_FINGERPRINT_CHANGED".into());
+        }
+        Ok(())
+    })();
+    if let Err(error) = copy_result {
+        let _ = fs::remove_file(&partial_path);
+        let _ = fs::remove_file(&staged_path);
+        return Err(error);
+    }
+    Ok(staged_path)
+}
+
 fn html_escape(value: &str) -> String {
     value
         .chars()
@@ -1398,51 +1559,174 @@ fn html_escape(value: &str) -> String {
         .collect()
 }
 
-fn write_export_file(
+#[derive(Debug)]
+struct ExportFileSpec {
+    format: String,
+    file_name: String,
+    content: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PreparedExportFile {
+    format: String,
+    final_path: PathBuf,
+    partial_path: PathBuf,
+    content: Vec<u8>,
+    expected_sha256: String,
+    already_present: bool,
+}
+
+#[derive(Debug)]
+struct ExportFileResult {
+    format: String,
+    path: PathBuf,
+    sha256: String,
+}
+
+fn export_partial_path(final_path: &Path) -> Result<PathBuf, String> {
+    let file_name = final_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "AGENT_EXPORT_FILE_NAME_INVALID".to_string())?;
+    let directory = final_path
+        .parent()
+        .ok_or_else(|| "AGENT_EXPORT_DIRECTORY_INVALID".to_string())?;
+    Ok(directory.join(format!(".{file_name}.partial")))
+}
+
+fn write_export_files(
     directory: &Path,
-    file_name: &str,
-    content: &[u8],
-) -> Result<(PathBuf, String), String> {
-    if file_name.contains(['/', '\\']) {
-        return Err("AGENT_EXPORT_FILE_NAME_INVALID".into());
-    }
-    let final_path = directory.join(file_name);
-    let expected_sha256 = format!("{:x}", Sha256::digest(content));
-    if final_path.exists() {
-        let existing_sha256 = sha256_file(&final_path)?;
-        if existing_sha256 == expected_sha256 {
-            return Ok((final_path, existing_sha256));
+    specs: Vec<ExportFileSpec>,
+) -> Result<Vec<ExportFileResult>, String> {
+    write_export_files_with_rename(directory, specs, |source, target| {
+        fs::rename(source, target)
+    })
+}
+
+fn write_export_files_with_rename<F>(
+    directory: &Path,
+    specs: Vec<ExportFileSpec>,
+    mut rename_file: F,
+) -> Result<Vec<ExportFileResult>, String>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    let mut names = HashSet::new();
+    let mut prepared = Vec::with_capacity(specs.len());
+    for spec in specs {
+        if spec.file_name.contains(['/', '\\']) {
+            return Err("AGENT_EXPORT_FILE_NAME_INVALID".into());
         }
-        return Err("AGENT_EXPORT_FILE_EXISTS".into());
+        if !names.insert(spec.file_name.clone()) {
+            return Err("AGENT_EXPORT_FORMAT_DUPLICATE".into());
+        }
+        let final_path = directory.join(&spec.file_name);
+        let partial_path = export_partial_path(&final_path)?;
+        let expected_sha256 = format!("{:x}", Sha256::digest(&spec.content));
+        let already_present = if final_path.exists() {
+            if sha256_file(&final_path)? != expected_sha256 {
+                return Err("AGENT_EXPORT_FILE_EXISTS".into());
+            }
+            true
+        } else {
+            false
+        };
+        prepared.push(PreparedExportFile {
+            format: spec.format,
+            final_path,
+            partial_path,
+            content: spec.content,
+            expected_sha256,
+            already_present,
+        });
     }
-    let partial_path = directory.join(format!(".{file_name}.partial"));
-    if partial_path.exists() {
-        fs::remove_file(&partial_path)
-            .map_err(|error| format!("AGENT_EXPORT_PARTIAL_CLEAN_FAILED:{error}"))?;
+
+    for file in &prepared {
+        if file.partial_path.exists() {
+            fs::remove_file(&file.partial_path)
+                .map_err(|error| format!("AGENT_EXPORT_PARTIAL_CLEAN_FAILED:{error}"))?;
+        }
     }
-    let write_result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&partial_path)
-            .map_err(|error| format!("AGENT_EXPORT_CREATE_FAILED:{error}"))?;
-        file.write_all(content)
-            .map_err(|error| format!("AGENT_EXPORT_WRITE_FAILED:{error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("AGENT_EXPORT_SYNC_FAILED:{error}"))?;
-        fs::rename(&partial_path, &final_path)
-            .map_err(|error| format!("AGENT_EXPORT_ATOMIC_RENAME_FAILED:{error}"))?;
-        Ok::<_, String>(())
-    })();
-    if let Err(error) = write_result {
-        let _ = fs::remove_file(&partial_path);
-        return Err(error);
+
+    let cleanup_partials = |files: &[PreparedExportFile]| {
+        for file in files {
+            let _ = fs::remove_file(&file.partial_path);
+        }
+    };
+    for file in &prepared {
+        if file.already_present {
+            continue;
+        }
+        let write_result = (|| {
+            let mut partial = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file.partial_path)
+                .map_err(|error| format!("AGENT_EXPORT_CREATE_FAILED:{error}"))?;
+            partial
+                .write_all(&file.content)
+                .map_err(|error| format!("AGENT_EXPORT_WRITE_FAILED:{error}"))?;
+            partial
+                .sync_all()
+                .map_err(|error| format!("AGENT_EXPORT_SYNC_FAILED:{error}"))?;
+            drop(partial);
+            if sha256_file(&file.partial_path)? != file.expected_sha256 {
+                return Err("AGENT_EXPORT_HASH_MISMATCH".into());
+            }
+            Ok::<_, String>(())
+        })();
+        if let Err(error) = write_result {
+            cleanup_partials(&prepared);
+            return Err(error);
+        }
     }
-    let written_sha256 = sha256_file(&final_path)?;
-    if written_sha256 != expected_sha256 {
-        return Err("AGENT_EXPORT_HASH_MISMATCH".into());
+
+    let mut newly_renamed = Vec::new();
+    let cleanup_new_finals = |paths: &[PathBuf]| {
+        for path in paths {
+            let _ = fs::remove_file(path);
+        }
+    };
+    for file in &prepared {
+        if !file.already_present {
+            if let Err(error) = rename_file(&file.partial_path, &file.final_path) {
+                let converged = file.final_path.exists()
+                    && sha256_file(&file.final_path).ok().as_deref()
+                        == Some(file.expected_sha256.as_str());
+                if converged {
+                    let _ = fs::remove_file(&file.partial_path);
+                } else {
+                    cleanup_partials(&prepared);
+                    cleanup_new_finals(&newly_renamed);
+                    return Err(format!("AGENT_EXPORT_ATOMIC_RENAME_FAILED:{error}"));
+                }
+            } else {
+                newly_renamed.push(file.final_path.clone());
+            }
+        }
+        let written_sha256 = match sha256_file(&file.final_path) {
+            Ok(value) => value,
+            Err(error) => {
+                cleanup_partials(&prepared);
+                cleanup_new_finals(&newly_renamed);
+                return Err(error);
+            }
+        };
+        if written_sha256 != file.expected_sha256 {
+            cleanup_partials(&prepared);
+            cleanup_new_finals(&newly_renamed);
+            return Err("AGENT_EXPORT_HASH_MISMATCH".into());
+        }
     }
-    Ok((final_path, written_sha256))
+
+    Ok(prepared
+        .into_iter()
+        .map(|file| ExportFileResult {
+            format: file.format,
+            path: file.final_path,
+            sha256: file.expected_sha256,
+        })
+        .collect())
 }
 
 #[cfg(not(test))]
@@ -1498,7 +1782,9 @@ fn execute_extended_tool_sync(
             if preview.get("previewHash").and_then(Value::as_str) != Some(preview_hash) {
                 return Err(ToolExecutionFailure::policy("AGENT_IMPORT_PREVIEW_DRIFT"));
             }
-            let total = preview.get("validRows").and_then(Value::as_i64);
+            let valid_rows =
+                validated_import_row_count(&preview).map_err(ToolExecutionFailure::policy)?;
+            let total = Some(valid_rows);
             let total_bytes = grant.metadata.get("sizeBytes").and_then(Value::as_i64);
             let (operation, lease) = begin_long_operation(
                 &connection,
@@ -1534,12 +1820,21 @@ fn execute_extended_tool_sync(
             fs::create_dir_all(&staging_dir)
                 .map_err(|error| ToolExecutionFailure::policy(error.to_string()))?;
             let staged_result = match grant.grant_kind {
-                AgentResourceGrantKind::ImportFile => super::import_paper_file_to_library_path(
-                    staging_dir.clone(),
-                    Some(run.project_id.clone()),
-                    PathBuf::from(&grant.locator),
-                )
-                .map(|_| ()),
+                AgentResourceGrantKind::ImportFile => {
+                    stage_verified_import_source(
+                        Path::new(&grant.locator),
+                        &staging_dir,
+                        &grant.fingerprint_sha256,
+                    )
+                    .and_then(|staged_source| {
+                        super::import_paper_file_to_library_path(
+                            staging_dir.clone(),
+                            Some(run.project_id.clone()),
+                            staged_source,
+                        )
+                        .map(|_| ())
+                    })
+                }
                 AgentResourceGrantKind::MysqlProfile => {
                     let app =
                         app.ok_or_else(|| "AGENT_MYSQL_IMPORT_APP_CONTEXT_REQUIRED".to_string());
@@ -1891,28 +2186,23 @@ fn execute_extended_tool_sync(
                 .map_err(ToolExecutionFailure::policy)?;
             let operation_suffix = &operation_key[..operation_key.len().min(12)];
             let base = format!("research-report-{safe_report_id}-{operation_suffix}");
-            let mut files = Vec::new();
+            let mut export_specs = Vec::new();
             for format in formats {
                 match format.as_str() {
                     Some("md") => {
-                        let (file, hash) = write_export_file(
-                            &directory,
-                            &format!("{base}.md"),
-                            markdown.as_bytes(),
-                        )
-                        .map_err(ToolExecutionFailure::policy)?;
-                        files.push(
-                            json!({"format":"md","path":file.to_string_lossy(),"sha256":hash}),
-                        );
+                        export_specs.push(ExportFileSpec {
+                            format: "md".into(),
+                            file_name: format!("{base}.md"),
+                            content: markdown.as_bytes().to_vec(),
+                        });
                     }
                     Some("html") => {
                         let html=format!("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Research report</title></head><body><main><pre>{}</pre></main></body></html>",html_escape(markdown));
-                        let (file, hash) =
-                            write_export_file(&directory, &format!("{base}.html"), html.as_bytes())
-                                .map_err(ToolExecutionFailure::policy)?;
-                        files.push(
-                            json!({"format":"html","path":file.to_string_lossy(),"sha256":hash}),
-                        );
+                        export_specs.push(ExportFileSpec {
+                            format: "html".into(),
+                            file_name: format!("{base}.html"),
+                            content: html.into_bytes(),
+                        });
                     }
                     _ => {
                         return Err(ToolExecutionFailure::policy(
@@ -1921,6 +2211,13 @@ fn execute_extended_tool_sync(
                     }
                 }
             }
+            let files = write_export_files(&directory, export_specs)
+                .map_err(ToolExecutionFailure::policy)?
+                .into_iter()
+                .map(|file| {
+                    json!({"format":file.format,"path":file.path.to_string_lossy(),"sha256":file.sha256})
+                })
+                .collect::<Vec<_>>();
             let content = json!({"operationId":operation.id,"reportArtifactId":report.id,"reportContentHash":report.content_sha256,"files":files,"partialFilesRemaining":false});
             Ok(ToolExecutionSuccess {
                 output: Value::Null,
@@ -2074,6 +2371,9 @@ fn apply_deferred_tool_commit(
             grant_id,
             source_fingerprint,
         } => {
+            if papers.is_empty() {
+                return Err("AGENT_IMPORT_EMPTY".into());
+            }
             let mutation = super::upsert_paper_rows_in_transaction(
                 transaction,
                 &project_id,
@@ -3614,7 +3914,9 @@ fn evaluate_maintenance_completion(
                                 return false;
                             };
                             sha256_file(Path::new(path)).ok().as_deref() == Some(expected)
-                                && !Path::new(&format!("{path}.partial")).exists()
+                                && export_partial_path(Path::new(path))
+                                    .ok()
+                                    .is_some_and(|partial| !partial.exists())
                         })
                 });
             (!valid).then_some("AGENT_EXPORT_COMPLETION_GATE_FAILED")
@@ -3824,12 +4126,15 @@ async fn execute_run_loop(
                     output,
                     artifact,
                     deferred_commit,
-                    library_lease_release,
+                    mut library_lease_release,
                     cleanup_after_commit,
                     ..
                 } = success;
                 let now = timestamp_ms();
                 if let Some(deferred) = deferred_commit {
+                    if let Some(release) = library_lease_release.as_mut() {
+                        release.stop_heartbeat()?;
+                    }
                     let lease = library_lease_release
                         .as_ref()
                         .and_then(|release| release.lease.as_ref());
@@ -3959,9 +4264,27 @@ async fn execute_run_loop(
 pub async fn agent_execute_run(
     app: tauri::AppHandle,
     state: State<'_, AgentRuntimeState>,
+    mutation_state: State<'_, LibraryMutationRegistry>,
     input: AgentExecuteRunInput,
 ) -> Result<AgentRunSnapshot, String> {
     let path = resolve_agent_database(app.clone(), input.database_dir).await?;
+    let _library_mutation_permit = {
+        let connection = open_agent_connection(&path)?;
+        let run = AgentRepository::new(&connection)?
+            .get_run(&input.run_id)?
+            .ok_or("AGENT_RUN_NOT_FOUND")?;
+        if matches!(
+            run.run_kind,
+            AgentRunKind::PaperFileImport
+                | AgentRunKind::PaperMysqlImport
+                | AgentRunKind::LibraryClean
+                | AgentRunKind::V20Modeling
+        ) {
+            Some(mutation_state.try_acquire(&path, "agent_library_mutation")?)
+        } else {
+            None
+        }
+    };
     let permit = state.try_acquire(&path, &input.run_id)?;
     let profiles = load_current_profiles(&path, &input.run_id)?;
     let fence = acquire_fence(&path, &input.run_id)?;
@@ -4255,7 +4578,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -4281,6 +4604,207 @@ mod tests {
     impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn library_lease_heartbeat_renews_until_the_guard_is_stopped() {
+        let directory = TestDirectory::new();
+        let database = directory.path.join("library-lease.sqlite");
+        let connection = open_agent_connection(&database).unwrap();
+        let repository = AgentCapabilityRepository::new(&connection).unwrap();
+        let acquired_at = timestamp_ms();
+        let lease = repository
+            .acquire_library_lease(
+                "library-mutation",
+                "run:step",
+                "lease-token",
+                "paper_import",
+                acquired_at,
+            )
+            .unwrap();
+        let initial_expiry = lease.expires_at_ms;
+        drop(repository);
+        drop(connection);
+
+        let mut guard =
+            LibraryLeaseRelease::new_with_interval(&database, Some(lease), Duration::from_millis(20));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let renewed = loop {
+            let connection = open_agent_connection(&database).unwrap();
+            let heartbeat: (i64, i64) = connection
+                .query_row(
+                    "SELECT heartbeat_at_ms,expires_at_ms FROM library_operation_leases WHERE lease_key='library-mutation'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            if heartbeat.0 > acquired_at && heartbeat.1 > initial_expiry {
+                break heartbeat;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "library lease heartbeat did not renew within the test deadline"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        guard.stop_heartbeat().unwrap();
+
+        thread::sleep(Duration::from_millis(50));
+        let connection = open_agent_connection(&database).unwrap();
+        let stopped: (i64, i64) = connection
+            .query_row(
+                "SELECT heartbeat_at_ms,expires_at_ms FROM library_operation_leases WHERE lease_key='library-mutation'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stopped, renewed);
+        drop(connection);
+
+        drop(guard);
+        let connection = open_agent_connection(&database).unwrap();
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM library_operation_leases WHERE lease_key='library-mutation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn empty_import_preview_is_rejected_before_operation_creation() {
+        assert_eq!(
+            validated_import_row_count(&json!({"validRows":0})).unwrap_err(),
+            "AGENT_IMPORT_EMPTY"
+        );
+        assert_eq!(
+            validated_import_row_count(&json!({})).unwrap_err(),
+            "AGENT_IMPORT_PREVIEW_INVALID"
+        );
+        assert_eq!(
+            validated_import_row_count(&json!({"validRows":3})).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn import_source_is_parsed_only_from_a_verified_staging_copy() {
+        let directory = TestDirectory::new();
+        let source = directory.path.join("papers.json");
+        let staging = directory.path.join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(&source, br#"[{"id":"approved"}]"#).unwrap();
+        let expected = sha256_file(&source).unwrap();
+
+        let staged = stage_verified_import_source(&source, &staging, &expected).unwrap();
+        assert_eq!(staged.file_name().unwrap(), "authorized-source.json");
+        assert_eq!(sha256_file(&staged).unwrap(), expected);
+        assert!(!export_partial_path(&staged).unwrap().exists());
+
+        fs::write(&source, br#"[{"id":"changed"}]"#).unwrap();
+        assert_eq!(
+            stage_verified_import_source(&source, &staging, &expected).unwrap_err(),
+            "AGENT_RESOURCE_FINGERPRINT_CHANGED"
+        );
+    }
+
+    #[test]
+    fn export_preflights_all_conflicts_before_writing_any_file() {
+        let directory = TestDirectory::new();
+        let conflicting = directory.path.join("report.html");
+        fs::write(&conflicting, b"existing").unwrap();
+
+        let error = write_export_files(
+            &directory.path,
+            vec![
+                ExportFileSpec {
+                    format: "md".into(),
+                    file_name: "report.md".into(),
+                    content: b"markdown".to_vec(),
+                },
+                ExportFileSpec {
+                    format: "html".into(),
+                    file_name: "report.html".into(),
+                    content: b"new html".to_vec(),
+                },
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(error, "AGENT_EXPORT_FILE_EXISTS");
+        assert!(!directory.path.join("report.md").exists());
+        assert!(!directory.path.join(".report.md.partial").exists());
+        assert_eq!(fs::read(conflicting).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn export_rolls_back_new_finals_when_a_later_rename_fails() {
+        let directory = TestDirectory::new();
+        let mut rename_count = 0;
+        let error = write_export_files_with_rename(
+            &directory.path,
+            vec![
+                ExportFileSpec {
+                    format: "md".into(),
+                    file_name: "report.md".into(),
+                    content: b"markdown".to_vec(),
+                },
+                ExportFileSpec {
+                    format: "html".into(),
+                    file_name: "report.html".into(),
+                    content: b"html".to_vec(),
+                },
+            ],
+            |source, target| {
+                rename_count += 1;
+                if rename_count == 2 {
+                    Err(std::io::Error::new(
+                        ErrorKind::PermissionDenied,
+                        "injected second rename failure",
+                    ))
+                } else {
+                    fs::rename(source, target)
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("AGENT_EXPORT_ATOMIC_RENAME_FAILED:"));
+        assert!(!directory.path.join("report.md").exists());
+        assert!(!directory.path.join("report.html").exists());
+        assert!(!directory.path.join(".report.md.partial").exists());
+        assert!(!directory.path.join(".report.html.partial").exists());
+    }
+
+    #[test]
+    fn export_prepares_hashes_before_rename_and_replays_by_hash() {
+        let directory = TestDirectory::new();
+        let specs = || {
+            vec![
+                ExportFileSpec {
+                    format: "md".into(),
+                    file_name: "report.md".into(),
+                    content: b"markdown".to_vec(),
+                },
+                ExportFileSpec {
+                    format: "html".into(),
+                    file_name: "report.html".into(),
+                    content: b"html".to_vec(),
+                },
+            ]
+        };
+
+        let first = write_export_files(&directory.path, specs()).unwrap();
+        let second = write_export_files(&directory.path, specs()).unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first.iter().map(|file| &file.sha256).collect::<Vec<_>>(),
+            second.iter().map(|file| &file.sha256).collect::<Vec<_>>()
+        );
+        for file in first {
+            assert_eq!(sha256_file(&file.path).unwrap(), file.sha256);
+            assert!(!export_partial_path(&file.path).unwrap().exists());
         }
     }
 

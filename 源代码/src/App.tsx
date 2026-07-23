@@ -144,6 +144,7 @@ import {
   getApp17GalaxyPayload,
   getV20GalaxyPayload,
   getV20HotspotSnapshot,
+  getLibraryMutationStatus,
   getLibrarySetupState,
   getPaperLibraryFacets,
   getPaperLibraryStatus,
@@ -175,6 +176,7 @@ import {
   type LibraryPressureTestResult,
   type LibrarySetupMode,
   type LibrarySetupState,
+  type LibraryMutationStatus,
   type InitializeLibraryResult,
   type PaperFileImportProgress,
 } from "./lib/desktop";
@@ -292,6 +294,9 @@ type PipelineStepId = "prepare" | "clean" | "cluster" | "result";
 
 type PipelineStepState = "pending" | "running" | "done" | "failed";
 
+const PIPELINE_EXECUTION_SESSION_ID = globalThis.crypto?.randomUUID?.()
+  ?? `pipeline-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 type GalaxyLoadPhase = "idle" | "cache" | "mysql" | "ready" | "error";
 
 type GalaxySessionState = {
@@ -357,6 +362,7 @@ export default function App() {
   const [libraryFacets, setLibraryFacets] = useState<PaperLibraryFacets | null>(null);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [v20Snapshot, setV20Snapshot] = useState<V20HotspotSnapshot | null>(null);
+  const [libraryMutationStatus, setLibraryMutationStatus] = useState<LibraryMutationStatus | null>(null);
   const [reports, setReports] = useState<ResearchReport[]>([]);
   const [jobs, setJobs] = useState<PipelineJob[]>([]);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
@@ -455,9 +461,14 @@ export default function App() {
       getAiSettings(),
     ]);
     let nextV20Snapshot: V20HotspotSnapshot | null = null;
+    let nextLibraryMutationStatus: LibraryMutationStatus | null = null;
     if (isDesktopRuntime() && !galaxyVisualReview) {
-      const snapshot = await getV20HotspotSnapshot({ databaseDir: nextSettings.databaseDir, projectId: nextProject.id });
+      const [snapshot, mutationStatus] = await Promise.all([
+        getV20HotspotSnapshot({ databaseDir: nextSettings.databaseDir, projectId: nextProject.id }),
+        getLibraryMutationStatus(nextSettings.databaseDir),
+      ]);
       nextV20Snapshot = snapshot ?? null;
+      nextLibraryMutationStatus = mutationStatus;
       if (requestSequence !== refreshRequestSequenceRef.current) return;
       if (snapshot) {
         await replaceV20HotspotCache(snapshot);
@@ -492,6 +503,7 @@ export default function App() {
     setLibraryFacets(nextFacets);
     setHotspots(nextHotspots);
     setV20Snapshot(nextV20Snapshot);
+    setLibraryMutationStatus(nextLibraryMutationStatus);
     setReports(nextReports);
     setJobs(nextJobs);
     setTaskLogs(nextTaskLogs);
@@ -662,7 +674,7 @@ export default function App() {
 
       <section ref={workspaceRef} className="workspace">
         {activeView === "dashboard" && (
-          <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
+          <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} settings={settings} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
         )}
         {activeView === "agent" && settings && activeProject && (
           <AgentWorkspace
@@ -711,7 +723,7 @@ export default function App() {
         )}
         {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "about" && <AboutView settings={settings} libraryStatus={libraryStatus} hotspots={hotspots} reports={reports} />}
@@ -1211,6 +1223,8 @@ function DashboardView({
   reports,
   jobs,
   taskLogs,
+  settings,
+  libraryMutationStatus,
   libraryStatus,
   v20Snapshot,
   loading,
@@ -1222,6 +1236,8 @@ function DashboardView({
   reports: ResearchReport[];
   jobs: PipelineJob[];
   taskLogs: TaskLog[];
+  settings: AiSettings | null;
+  libraryMutationStatus: LibraryMutationStatus | null;
   libraryStatus: PaperLibraryStatus | null;
   v20Snapshot: V20HotspotSnapshot | null;
   loading: boolean;
@@ -1233,7 +1249,10 @@ function DashboardView({
     hotspotCount: hotspots.length,
     jobs,
     snapshot: v20Snapshot,
-  }), [hotspots.length, jobs, paperCount, v20Snapshot]);
+    databaseKey: settings?.databaseDir,
+    executionSessionId: PIPELINE_EXECUTION_SESSION_ID,
+    activeMutationKind: libraryMutationStatus?.operationKind,
+  }), [hotspots.length, jobs, libraryMutationStatus?.operationKind, paperCount, settings?.databaseDir, v20Snapshot]);
   const { cleanJob, clusterJob } = analysisProgress;
   const cleanRunning = analysisProgress.cleanState === "running";
   const clusterRunning = analysisProgress.clusterState === "running";
@@ -5532,6 +5551,7 @@ function PipelineView({
   hotspots,
   settings,
   activeProject,
+  libraryMutationStatus,
   libraryStatus,
   v20Snapshot,
   onNavigate,
@@ -5544,6 +5564,7 @@ function PipelineView({
   hotspots: Hotspot[];
   settings: AiSettings;
   activeProject: Project;
+  libraryMutationStatus: LibraryMutationStatus | null;
   libraryStatus: PaperLibraryStatus | null;
   v20Snapshot: V20HotspotSnapshot | null;
   onNavigate: (view: ActiveView) => void;
@@ -5563,7 +5584,10 @@ function PipelineView({
     hotspotCount: hotspots.length,
     jobs,
     snapshot: v20Snapshot,
-  }), [hotspots.length, jobs, paperCount, v20Snapshot]);
+    databaseKey: settings.databaseDir,
+    executionSessionId: PIPELINE_EXECUTION_SESSION_ID,
+    activeMutationKind: libraryMutationStatus?.operationKind,
+  }), [hotspots.length, jobs, libraryMutationStatus?.operationKind, paperCount, settings.databaseDir, v20Snapshot]);
   const { cleanJob, clusterJob } = analysisProgress;
   const cleanState: PipelineStepState = analysisProgress.cleanState;
   const clusterState: PipelineStepState = analysisProgress.clusterState;
@@ -7029,7 +7053,10 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
   setBusyStage(stage);
   try {
     await updatePipelineJob(stage, {
+      projectId: activeProject?.id,
       status: "running",
+      databaseKey: settings.databaseDir,
+      executionSessionId: PIPELINE_EXECUTION_SESSION_ID,
       progress: stage === "clean" ? 35 : 45,
       detail: stage === "clean" ? "正在 SQLite 论文库中规范化标题、摘要并删除空记录和重复记录。" : "正在运行 V20 热点分析：聚合关键词、筛选代表论文、判断趋势并生成星图坐标。",
     });
@@ -7039,7 +7066,14 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
       if (!activeProject) {
         await replacePaperLibrary(result.cleanedPapers);
       }
-      await updatePipelineJob("clean", { status: "done", progress: 100, detail: result.summary });
+      await updatePipelineJob("clean", {
+        projectId: activeProject?.id,
+        databaseKey: settings.databaseDir,
+        executionSessionId: PIPELINE_EXECUTION_SESSION_ID,
+        status: "done",
+        progress: 100,
+        detail: result.summary,
+      });
       await saveTaskLog({
         stage,
         title: activeProject ? "SQLite 大库清洗去重" : "清洗去重 worker",
@@ -7069,7 +7103,14 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
       } else {
         await replaceHotspots(result.hotspots.map((hotspot) => ({ ...hotspot, snapshotId: result.snapshotId })));
       }
-      await updatePipelineJob("cluster", { status: "done", progress: 100, detail: result.summary });
+      await updatePipelineJob("cluster", {
+        projectId: activeProject?.id,
+        databaseKey: settings.databaseDir,
+        executionSessionId: PIPELINE_EXECUTION_SESSION_ID,
+        status: "done",
+        progress: 100,
+        detail: result.summary,
+      });
       await saveTaskLog({ stage, title: activeProject ? "SQLite 大库 V20 热点分析" : "热点聚类 worker", status: "done", inputSummary, outputSummary: result.summary, rawInput: rawInputForLog, rawOutput: JSON.stringify({ beforeCount: result.beforeCount, clusterCount: result.clusterCount, hotspots: result.hotspots.slice(0, 20) }, null, 2), durationMs: Math.round(performance.now() - started) });
       onNotice(result.summary);
     }
@@ -7081,7 +7122,14 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
       onNotice("该项目正在后台聚类，请等待当前任务完成。");
       return;
     }
-    await updatePipelineJob(stage, { status: "failed", progress: 100, detail: message });
+    await updatePipelineJob(stage, {
+      projectId: activeProject?.id,
+      databaseKey: settings.databaseDir,
+      executionSessionId: PIPELINE_EXECUTION_SESSION_ID,
+      status: "failed",
+      progress: 100,
+      detail: message,
+    });
     await saveTaskLog({ stage, title: stage === "clean" ? (activeProject ? "SQLite 大库清洗去重" : "清洗去重 worker") : (activeProject ? "SQLite 大库热点聚类" : "热点聚类 worker"), status: "failed", inputSummary, outputSummary: "", rawInput: rawInputForLog, error: message, durationMs: Math.round(performance.now() - started) });
     await onRefresh();
     onNotice(message);

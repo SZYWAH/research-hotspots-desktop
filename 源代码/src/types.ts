@@ -155,6 +155,8 @@ export type PipelineStage =
 export type PipelineJob = {
   id: string;
   projectId?: string;
+  databaseKey?: string;
+  executionSessionId?: string;
   stage: PipelineStage;
   title: string;
   status: "planned" | "queued" | "running" | "done" | "failed";

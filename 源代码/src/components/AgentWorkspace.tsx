@@ -53,6 +53,8 @@ import {
   findPendingQuestion,
   findPendingReviewArtifact,
   findPendingStep,
+  matchesAgentArtifactRequestFence,
+  matchesAgentRequestFence,
   normalizeAgentError,
   pendingKind,
   pollIntervalForStatus,
@@ -186,6 +188,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     [props.visualReviewScenario],
   );
   const context = useMemo<AgentDatabaseContext>(() => ({ databaseDir: props.settings.databaseDir, projectId: props.activeProject.id }), [props.settings.databaseDir, props.activeProject.id]);
+  const contextKey = useMemo(() => `${props.settings.databaseDir ?? ""}\u0000${props.activeProject.id}`, [props.settings.databaseDir, props.activeProject.id]);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
   const [hasMoreRuns, setHasMoreRuns] = useState(false);
   const [runLimit, setRunLimit] = useState(RUN_PAGE_SIZE);
@@ -197,7 +200,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [activeTab, setActiveTab] = useState<"plan" | "timeline" | "artifacts">("plan");
   const [busy, setBusy] = useState("");
+  const [controlBusy, setControlBusy] = useState("");
   const [error, setError] = useState("");
+  const [artifactError, setArtifactError] = useState("");
   const [newRunOpen, setNewRunOpen] = useState(false);
   const [draft, setDraft] = useState<NewRunDraft>(() => createDraft(props.settings));
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -208,11 +213,18 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const requestSequence = useRef(0);
-  const commandInFlightRef = useRef(false);
+  const commandInFlightRef = useRef("");
+  const controlInFlightRef = useRef("");
   const createRunInFlightRef = useRef(false);
+  const commandRequestSequence = useRef(0);
+  const controlRequestSequence = useRef(0);
   const artifactRequestSequence = useRef(0);
   const currentRunRef = useRef("");
+  const currentContextKeyRef = useRef(contextKey);
+  const selectedArtifactRef = useRef("");
+  const artifactMetadataIdsRef = useRef<Set<string>>(new Set());
   const eventsRef = useRef<AgentEventRecord[]>([]);
+  currentContextKeyRef.current = contextKey;
 
   const effectiveSnapshot = props.visualReviewScenario === "no-snapshot" ? null : props.visualReviewScenario ? {
     snapshotId: "snapshot-v20-review", activeSnapshotId: "snapshot-v20-review", paperCount: 25_463, hotspotCount: 160, membershipCount: 25_463,
@@ -225,6 +237,47 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     && effectiveSnapshot.membershipCount === effectiveSnapshot.paperCount
     && (props.visualReviewScenario || !props.libraryStatus || props.libraryStatus.paperCount === effectiveSnapshot.paperCount),
   );
+
+  const synchronizeArtifactScope = useCallback((
+    artifacts: AgentArtifactMetadata[],
+    resetCache = false,
+    initialCache: Record<string, AgentArtifactRecord> = {},
+  ) => {
+    const nextIds = new Set(artifacts.map((artifact) => artifact.id));
+    artifactMetadataIdsRef.current = nextIds;
+    const selectedArtifactMissing = Boolean(selectedArtifactRef.current && !nextIds.has(selectedArtifactRef.current));
+    if (resetCache || selectedArtifactMissing) {
+      artifactRequestSequence.current += 1;
+      selectedArtifactRef.current = "";
+      setSelectedArtifactId("");
+      setArtifactError("");
+    }
+    if (resetCache) setArtifactCache(initialCache);
+  }, []);
+
+  const selectArtifact = useCallback((artifactId: string) => {
+    if (selectedArtifactRef.current === artifactId) return;
+    artifactRequestSequence.current += 1;
+    selectedArtifactRef.current = artifactId;
+    setSelectedArtifactId(artifactId);
+    setArtifactError("");
+  }, []);
+
+  const selectRun = useCallback((runId: string) => {
+    if (currentRunRef.current !== runId) {
+      requestSequence.current += 1;
+      commandRequestSequence.current += 1;
+      controlRequestSequence.current += 1;
+      currentRunRef.current = runId;
+      setBusy("");
+      setControlBusy("");
+      setOverview(null);
+      setEvents([]);
+      eventsRef.current = [];
+      synchronizeArtifactScope([], true);
+    }
+    setSelectedRunId(runId);
+  }, [synchronizeArtifactScope]);
 
   const loadRuns = useCallback(async (preserveSelection = true) => {
     const sequence = ++requestSequence.current;
@@ -249,20 +302,17 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const applySnapshot = useCallback((snapshot: AgentRunSnapshot) => {
     const next = overviewFromSnapshot(snapshot);
     const changingRun = currentRunRef.current !== next.run.id;
+    const snapshotArtifacts = Object.fromEntries(snapshot.artifacts.map((artifact) => [artifact.id, artifact]));
+    synchronizeArtifactScope(next.artifacts, changingRun, snapshotArtifacts);
     setOverview(next);
     setEvents(snapshot.events);
     eventsRef.current = snapshot.events;
-    const snapshotArtifacts = Object.fromEntries(snapshot.artifacts.map((artifact) => [artifact.id, artifact]));
-    if (changingRun) {
-      artifactRequestSequence.current += 1;
-      setSelectedArtifactId("");
-      setArtifactCache(snapshotArtifacts);
-    } else {
+    if (!changingRun) {
       setArtifactCache((current) => ({ ...current, ...snapshotArtifacts }));
     }
     currentRunRef.current = next.run.id;
     setSelectedRunId(next.run.id);
-  }, []);
+  }, [synchronizeArtifactScope]);
 
   const loadOverview = useCallback(async (runId: string, quiet = false) => {
     if (!runId) return;
@@ -271,6 +321,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     try {
       const next = await client.getOverview(context, runId);
       if (sequence !== requestSequence.current || currentRunRef.current !== runId) return;
+      synchronizeArtifactScope(next.artifacts);
       setOverview(next);
       const currentEvents = currentRunRef.current === runId ? eventsRef.current : [];
       const afterSequence = currentEvents.at(-1)?.sequence ?? 0;
@@ -285,44 +336,56 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     } finally {
       if (!quiet && sequence === requestSequence.current) setBusy("");
     }
-  }, [client, context]);
+  }, [client, context, synchronizeArtifactScope]);
 
   useEffect(() => {
     requestSequence.current += 1;
+    commandRequestSequence.current += 1;
+    controlRequestSequence.current += 1;
     currentRunRef.current = "";
+    setSelectedRunId("");
+    setBusy("");
+    setControlBusy("");
     setOverview(null);
     setEvents([]);
     eventsRef.current = [];
-    artifactRequestSequence.current += 1;
-    setArtifactCache({});
-    setSelectedArtifactId("");
+    synchronizeArtifactScope([], true);
     void loadRuns(false);
-  }, [loadRuns]);
+  }, [loadRuns, synchronizeArtifactScope]);
 
   useEffect(() => {
     if (!selectedRunId) {
+      requestSequence.current += 1;
+      commandRequestSequence.current += 1;
+      controlRequestSequence.current += 1;
       currentRunRef.current = "";
       setOverview(null);
+      synchronizeArtifactScope([], true);
       return;
+    }
+    if (currentRunRef.current !== selectedRunId) {
+      requestSequence.current += 1;
+      commandRequestSequence.current += 1;
+      controlRequestSequence.current += 1;
+      setBusy("");
+      setControlBusy("");
     }
     currentRunRef.current = selectedRunId;
     sessionStorage.setItem(`agent-run:${context.projectId}`, selectedRunId);
-    artifactRequestSequence.current += 1;
-    setSelectedArtifactId("");
-    setArtifactCache({});
+    synchronizeArtifactScope([], true);
     eventsRef.current = [];
     setEvents([]);
     void loadOverview(selectedRunId);
-  }, [selectedRunId, context.projectId, loadOverview]);
+  }, [selectedRunId, context.projectId, loadOverview, synchronizeArtifactScope]);
 
   useEffect(() => {
-    if (!overview?.run.id || busy) return;
+    if (!overview?.run.id) return;
     const runId = overview.run.id;
     const timer = window.setTimeout(() => {
       if (currentRunRef.current === runId) void loadOverview(runId, true);
     }, pollIntervalForStatus(overview.run.status));
     return () => window.clearTimeout(timer);
-  }, [overview?.run.id, overview?.run.status, overview?.run.updatedAtMs, busy, loadOverview]);
+  }, [overview?.run.id, overview?.run.status, overview?.run.updatedAtMs, loadOverview]);
 
   useEffect(() => {
     const onFocus = () => currentRunRef.current && void loadOverview(currentRunRef.current, true);
@@ -332,13 +395,13 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   useEffect(() => {
     if (!overview?.artifacts.length) {
-      if (selectedArtifactId) setSelectedArtifactId("");
+      if (selectedArtifactRef.current) selectArtifact("");
       return;
     }
     if (!selectedArtifactId || !overview.artifacts.some((artifact) => artifact.id === selectedArtifactId)) {
-      setSelectedArtifactId(overview.artifacts[overview.artifacts.length - 1].id);
+      selectArtifact(overview.artifacts[overview.artifacts.length - 1].id);
     }
-  }, [overview?.artifacts, selectedArtifactId]);
+  }, [overview?.artifacts, selectedArtifactId, selectArtifact]);
 
   useEffect(() => {
     if (!selectedArtifactId || !overview || artifactCache[selectedArtifactId]) return;
@@ -346,46 +409,105 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     const runId = overview.run.id;
     const artifactId = selectedArtifactId;
     const sequence = ++artifactRequestSequence.current;
+    const fence = { sequence, runId, contextKey, artifactId };
     let active = true;
     void client.getArtifact(context, runId, artifactId).then((artifact) => {
-      if (active && sequence === artifactRequestSequence.current && currentRunRef.current === runId) {
+      if (active && matchesAgentArtifactRequestFence(
+        fence,
+        artifactRequestSequence.current,
+        currentRunRef.current,
+        currentContextKeyRef.current,
+        selectedArtifactRef.current,
+        artifactMetadataIdsRef.current.has(artifactId),
+      )) {
+        setArtifactError("");
         setArtifactCache((current) => ({ ...current, [artifact.id]: artifact }));
       }
     }).catch((value) => {
-      if (active && sequence === artifactRequestSequence.current && currentRunRef.current === runId) {
-        setError(errorMessage(value));
+      if (active && matchesAgentArtifactRequestFence(
+        fence,
+        artifactRequestSequence.current,
+        currentRunRef.current,
+        currentContextKeyRef.current,
+        selectedArtifactRef.current,
+        artifactMetadataIdsRef.current.has(artifactId),
+      )) {
+        setArtifactError(errorMessage(value));
       }
     });
     return () => { active = false; };
-  }, [selectedArtifactId, overview, artifactCache, client, context]);
+  }, [selectedArtifactId, overview, artifactCache, client, context, contextKey]);
 
-  const runCommand = useCallback(async (label: string, operation: () => Promise<AgentRunSnapshot>, autoContinue = false) => {
-    if (busy || commandInFlightRef.current) return;
-    commandInFlightRef.current = true;
+  const runCommand = useCallback(async (label: string, runId: string, operation: () => Promise<AgentRunSnapshot>, autoContinue = false) => {
+    const commandKey = `${contextKey}\u0000${runId}`;
+    if (busy || controlBusy || commandInFlightRef.current === commandKey) return;
+    const sequence = ++commandRequestSequence.current;
+    const fence = { sequence, runId, contextKey };
+    const isCurrent = () => matchesAgentRequestFence(
+      fence,
+      commandRequestSequence.current,
+      currentRunRef.current,
+      currentContextKeyRef.current,
+    );
+    commandInFlightRef.current = commandKey;
     setBusy(label);
     setError("");
     try {
       let snapshot = await operation();
+      if (!isCurrent() || snapshot.run.id !== runId) return;
       applySnapshot(snapshot);
       if (autoContinue && ["ready", "evaluating", "awaiting_action_approval"].includes(snapshot.run.status)) {
+        if (!isCurrent()) return;
         snapshot = await client.executeRun(context, snapshot.run.id);
+        if (!isCurrent() || snapshot.run.id !== runId) return;
         applySnapshot(snapshot);
       } else if (autoContinue && snapshot.run.status === "planning") {
         const planner = profileReference(snapshot, "planner");
         const writer = profileReference(snapshot, "writer");
-        if (planner) {
+        if (planner && isCurrent()) {
           snapshot = await client.planRun(context, snapshot.run.id, planner, writer);
+          if (!isCurrent() || snapshot.run.id !== runId) return;
           applySnapshot(snapshot);
         }
       }
-      await loadRuns();
+      if (isCurrent()) await loadRuns();
     } catch (value) {
-      setError(errorMessage(value));
+      if (isCurrent()) setError(errorMessage(value));
     } finally {
-      commandInFlightRef.current = false;
-      setBusy("");
+      if (commandInFlightRef.current === commandKey) {
+        commandInFlightRef.current = "";
+        setBusy("");
+      }
     }
-  }, [busy, applySnapshot, client, context, loadRuns]);
+  }, [busy, controlBusy, contextKey, applySnapshot, client, context, loadRuns]);
+
+  const runControlCommand = useCallback(async (label: string, runId: string, operation: () => Promise<AgentRunSnapshot>) => {
+    const commandKey = `${contextKey}\u0000${runId}`;
+    if (controlInFlightRef.current === commandKey) return;
+    const sequence = ++controlRequestSequence.current;
+    const fence = { sequence, runId, contextKey };
+    const isCurrent = () => matchesAgentRequestFence(
+      fence,
+      controlRequestSequence.current,
+      currentRunRef.current,
+      currentContextKeyRef.current,
+    );
+    commandRequestSequence.current += 1;
+    controlInFlightRef.current = commandKey;
+    setControlBusy(label);
+    setError("");
+    try {
+      const snapshot = await operation();
+      if (!isCurrent() || snapshot.run.id !== runId) return;
+      applySnapshot(snapshot);
+      if (isCurrent()) await loadRuns();
+    } catch (value) {
+      if (isCurrent()) setError(errorMessage(value));
+    } finally {
+      if (controlInFlightRef.current === commandKey) controlInFlightRef.current = "";
+      if (isCurrent()) setControlBusy("");
+    }
+  }, [contextKey, applySnapshot, loadRuns]);
 
   async function createRun() {
     if ((draft.kind === "research_report" && !snapshotReady) || busy || createRunInFlightRef.current) return;
@@ -442,7 +564,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       const normalized = normalizeAgentError(value);
       if (normalized.code === "AGENT_ACTIVE_RUN_EXISTS" && normalized.runId) {
         setNewRunOpen(false);
-        setSelectedRunId(normalized.runId);
+        selectRun(normalized.runId);
         props.onNotice("当前项目已有活动运行，已为你打开。"
         );
       } else {
@@ -471,6 +593,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const filteredRuns = runs.filter((run) => statusFilter === "all" || (statusFilter === "terminal" ? ["completed", "cancelled", "failed"].includes(run.status) : !["completed", "cancelled", "failed"].includes(run.status)));
   const selectedArtifact = selectedArtifactId ? artifactCache[selectedArtifactId] : undefined;
   const pending = overview ? pendingKind(overview) : "none";
+  const confirmationBusy = Boolean(controlBusy) || (Boolean(busy) && reasonDialog?.kind !== "cancel");
 
   return (
     <div className="agent-page">
@@ -498,6 +621,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       )}
 
       {error && <div className="agent-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span><button onClick={() => setError("")} aria-label="关闭错误"><X size={14} /></button></div>}
+      {artifactError && <div className="agent-error-banner" role="alert" data-agent-error-kind="artifact"><AlertTriangle size={16} /><span>{artifactError}</span><button onClick={() => setArtifactError("")} aria-label="关闭成果读取错误"><X size={14} /></button></div>}
 
       <div className="agent-workbench">
         <aside className={`agent-run-rail ${railOpen ? "agent-run-rail-open" : ""}`}>
@@ -510,7 +634,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             {(["all", "active", "terminal"] as const).map((filter) => <button key={filter} className={statusFilter === filter ? "active" : ""} onClick={() => setStatusFilter(filter)}>{filter === "all" ? "全部" : filter === "active" ? "进行中" : "已结束"}</button>)}
           </div>
           <div className="agent-run-list">
-            {filteredRuns.map((run) => <RunListItem key={run.id} run={run} active={run.id === selectedRunId} onSelect={() => { setSelectedRunId(run.id); setRailOpen(false); }} />)}
+            {filteredRuns.map((run) => <RunListItem key={run.id} run={run} active={run.id === selectedRunId} onSelect={() => { selectRun(run.id); setRailOpen(false); }} />)}
             {filteredRuns.length === 0 && <div className="agent-empty-rail"><Bot size={22} /><span>暂无研究运行</span><small>创建目标后，计划和审计记录会出现在这里。</small></div>}
           </div>
           {hasMoreRuns && <button className="agent-load-more" onClick={() => setRunLimit((current) => current + RUN_PAGE_SIZE)}>继续加载</button>}
@@ -519,7 +643,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         <main className="agent-main-panel">
           {!overview ? <AgentEmptyState busy={busy === "loading"} onCreate={() => setNewRunOpen(true)} disabled={runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))} /> : (
             <>
-              <RunHeader overview={overview} busy={busy} onPlan={() => void resumeDraftPlanning(overview, client, context, setBusy, applySnapshot, setError, loadRuns)} onContinue={() => void runCommand("execute", () => client.executeRun(context, overview.run.id))} onPause={() => void runCommand("pause", () => client.controlRun(context, overview.run.id, "pause"))} onResume={() => void runCommand("resume", () => client.controlRun(context, overview.run.id, "resume"), true)} onCancel={() => { setReason(""); setReasonDialog({ kind: "cancel", title: "取消当前运行" }); }} onToggleInspector={() => setInspectorOpen((value) => !value)} />
+              <RunHeader overview={overview} busy={busy} controlBusy={controlBusy} onPlan={() => void runCommand("plan", overview.run.id, () => resumeDraftPlanning(overview, client, context))} onContinue={() => void runCommand("execute", overview.run.id, () => client.executeRun(context, overview.run.id))} onPause={() => void runControlCommand("pause", overview.run.id, () => client.controlRun(context, overview.run.id, "pause"))} onResume={() => void runCommand("resume", overview.run.id, () => client.controlRun(context, overview.run.id, "resume"), true)} onCancel={() => { setReason(""); setReasonDialog({ kind: "cancel", title: "取消当前运行" }); }} onToggleInspector={() => setInspectorOpen((value) => !value)} />
               <nav className="agent-tabs" aria-label="Agent 运行内容">
                 <button className={activeTab === "plan" ? "active" : ""} onClick={() => setActiveTab("plan")}><ListChecks size={15} />计划</button>
                 <button className={activeTab === "timeline" ? "active" : ""} onClick={() => setActiveTab("timeline")}><Activity size={15} />过程 <span>{events.length}</span></button>
@@ -528,7 +652,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               <div className="agent-tab-content">
                 {activeTab === "plan" && <PlanView overview={overview} />}
                 {activeTab === "timeline" && <TimelineView events={events} steps={overview.steps} hasMore={(events.at(-1)?.sequence ?? 0) < overview.eventCursor} onLoadMore={() => void loadOverview(overview.run.id, true)} />}
-                {activeTab === "artifacts" && <ArtifactWorkspace overview={overview} selectedId={selectedArtifactId} onSelect={setSelectedArtifactId} artifact={selectedArtifact} onOpenPaper={props.onOpenPaper} />}
+                {activeTab === "artifacts" && <ArtifactWorkspace overview={overview} selectedId={selectedArtifactId} onSelect={selectArtifact} artifact={selectedArtifact} onOpenPaper={props.onOpenPaper} />}
               </div>
             </>
           )}
@@ -536,7 +660,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
         <aside className={`agent-inspector ${pending !== "none" ? "agent-inspector-attention" : ""} ${inspectorOpen ? "agent-inspector-open" : ""}`}>
           <button className="agent-inspector-close" onClick={() => setInspectorOpen(false)} aria-label="关闭运行检查器"><X size={15} /></button>
-          {overview ? <Inspector overview={overview} pending={pending} answer={answer} setAnswer={setAnswer} busy={Boolean(busy)} onApprovePlan={() => void runCommand("approve-plan", () => client.decidePlan(context, { runId: overview.run.id, decision: "approved", actorId: ACTOR_ID }), true)} onRejectPlan={() => { setReason(""); setReasonDialog({ kind: "plan", decision: "rejected", title: "拒绝当前计划" }); }} onApproveAction={() => { const step = findPendingStep(overview); if (step) void runCommand("approve-action", () => client.decideAction(context, { runId: overview.run.id, stepId: step.stepId, decision: "approved", actorId: ACTOR_ID }), true); }} onRejectAction={() => { setReason(""); setReasonDialog({ kind: "action", decision: "rejected", title: "拒绝当前写动作" }); }} onSubmitAnswer={() => { const question = findPendingQuestion(overview); if (question) void runCommand("answer", () => client.submitAnswer(context, { runId: overview.run.id, questionId: question.id, answer, actorId: ACTOR_ID }), true); }} onApproveArtifact={() => { const artifact = findPendingReviewArtifact(overview); if (artifact) { setReason(""); setReasonDialog({ kind: "artifact", decision: "approved", title: "批准高风险报告" }); } }} onRejectArtifact={() => { setReason(""); setReasonDialog({ kind: "artifact", decision: "rejected", title: "拒绝高风险报告" }); }} onOpenPipeline={() => props.onNavigate("pipeline")} /> : <InspectorEmpty />}
+          {overview ? <Inspector overview={overview} pending={pending} answer={answer} setAnswer={setAnswer} busy={Boolean(busy) || Boolean(controlBusy)} onApprovePlan={() => void runCommand("approve-plan", overview.run.id, () => client.decidePlan(context, { runId: overview.run.id, decision: "approved", actorId: ACTOR_ID }), true)} onRejectPlan={() => { setReason(""); setReasonDialog({ kind: "plan", decision: "rejected", title: "拒绝当前计划" }); }} onApproveAction={() => { const step = findPendingStep(overview); if (step) void runCommand("approve-action", overview.run.id, () => client.decideAction(context, { runId: overview.run.id, stepId: step.stepId, decision: "approved", actorId: ACTOR_ID }), true); }} onRejectAction={() => { setReason(""); setReasonDialog({ kind: "action", decision: "rejected", title: "拒绝当前写动作" }); }} onSubmitAnswer={() => { const question = findPendingQuestion(overview); if (question) void runCommand("answer", overview.run.id, () => client.submitAnswer(context, { runId: overview.run.id, questionId: question.id, answer, actorId: ACTOR_ID }), true); }} onApproveArtifact={() => { const artifact = findPendingReviewArtifact(overview); if (artifact) { setReason(""); setReasonDialog({ kind: "artifact", decision: "approved", title: "批准高风险报告" }); } }} onRejectArtifact={() => { setReason(""); setReasonDialog({ kind: "artifact", decision: "rejected", title: "拒绝高风险报告" }); }} onOpenPipeline={() => props.onNavigate("pipeline")} /> : <InspectorEmpty />}
         </aside>
       </div>
 
@@ -544,22 +668,22 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} reportArtifacts={(overview?.artifacts ?? []).filter((artifact) => artifact.artifactKind === "report_draft")} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
       </AgentModal>
 
-      <AgentModal open={Boolean(reasonDialog)} title={reasonDialog?.title || "确认操作"} onClose={() => !busy && setReasonDialog(null)}>
+      <AgentModal open={Boolean(reasonDialog)} title={reasonDialog?.title || "确认操作"} onClose={() => !confirmationBusy && setReasonDialog(null)}>
         <div className="agent-confirm-copy">
           <AlertTriangle size={18} />
           <p>{reasonDialog?.kind === "cancel" ? "取消会停止当前模型或工具调用，并在后端确认回滚后结束运行。" : reasonDialog?.decision === "approved" ? "批准将绑定最新成果哈希，随后重新执行确定性完成门禁。" : "拒绝原因会进入不可变审计事件；需要重新规划时，旧批准将自动失效。"}</p>
         </div>
         <label className="field-label">{reasonDialog?.decision === "approved" ? "复核说明（可选）" : "原因"}<textarea className="field-control min-h-[110px] p-3" value={reason} onChange={(event) => setReason(event.target.value.slice(0, 500))} placeholder={reasonDialog?.decision === "approved" ? "记录复核依据" : "请说明拒绝或取消原因"} /></label>
         <div className="agent-modal-actions">
-          <button className="secondary-action h-10 px-4" onClick={() => setReasonDialog(null)} disabled={Boolean(busy)}>继续检查</button>
-          <button className={reasonDialog?.decision === "approved" ? "primary-action h-10 px-4" : "danger-action h-10 px-4"} disabled={Boolean(busy) || (reasonDialog?.decision !== "approved" && !reason.trim())} onClick={() => {
+          <button className="secondary-action h-10 px-4" onClick={() => setReasonDialog(null)} disabled={confirmationBusy}>继续检查</button>
+          <button className={reasonDialog?.decision === "approved" ? "primary-action h-10 px-4" : "danger-action h-10 px-4"} disabled={confirmationBusy || (reasonDialog?.decision !== "approved" && !reason.trim())} onClick={() => {
             if (!overview || !reasonDialog) return;
             const dialog = reasonDialog;
             setReasonDialog(null);
-            if (dialog.kind === "cancel") void runCommand("cancel", () => client.controlRun(context, overview.run.id, "cancel"));
-            if (dialog.kind === "plan") void runCommand("reject-plan", () => client.decidePlan(context, { runId: overview.run.id, decision: "rejected", actorId: ACTOR_ID, reason }));
-            if (dialog.kind === "action") { const step = findPendingStep(overview); if (step) void runCommand("reject-action", () => client.decideAction(context, { runId: overview.run.id, stepId: step.stepId, decision: "rejected", actorId: ACTOR_ID, reason }), true); }
-            if (dialog.kind === "artifact") { const artifact = findPendingReviewArtifact(overview); if (artifact) void runCommand("review-artifact", () => client.reviewArtifact(context, { runId: overview.run.id, artifactId: artifact.id, decision: dialog.decision === "approved" ? "approved" : "rejected", actorId: ACTOR_ID, reason }), dialog.decision === "approved"); }
+            if (dialog.kind === "cancel") void runControlCommand("cancel", overview.run.id, () => client.controlRun(context, overview.run.id, "cancel"));
+            if (dialog.kind === "plan") void runCommand("reject-plan", overview.run.id, () => client.decidePlan(context, { runId: overview.run.id, decision: "rejected", actorId: ACTOR_ID, reason }));
+            if (dialog.kind === "action") { const step = findPendingStep(overview); if (step) void runCommand("reject-action", overview.run.id, () => client.decideAction(context, { runId: overview.run.id, stepId: step.stepId, decision: "rejected", actorId: ACTOR_ID, reason }), true); }
+            if (dialog.kind === "artifact") { const artifact = findPendingReviewArtifact(overview); if (artifact) void runCommand("review-artifact", overview.run.id, () => client.reviewArtifact(context, { runId: overview.run.id, artifactId: artifact.id, decision: dialog.decision === "approved" ? "approved" : "rejected", actorId: ACTOR_ID, reason }), dialog.decision === "approved"); }
           }}>{reasonDialog?.decision === "approved" ? "确认批准" : reasonDialog?.kind === "cancel" ? "确认取消" : "确认拒绝"}</button>
         </div>
       </AgentModal>
@@ -572,18 +696,14 @@ function profileReference(snapshot: AgentRunSnapshot, role: "planner" | "writer"
   return profile ? { profileId: profile.id, configSha256: profile.configSha256 } : undefined;
 }
 
-async function resumeDraftPlanning(overview: AgentRunOverview, client: AgentDesktopClient, context: AgentDatabaseContext, setBusy: (value: string) => void, applySnapshot: (snapshot: AgentRunSnapshot) => void, setError: (value: string) => void, loadRuns: () => Promise<void>) {
-  if (overview.run.status !== "draft") return;
+async function resumeDraftPlanning(overview: AgentRunOverview, client: AgentDesktopClient, context: AgentDatabaseContext) {
+  if (overview.run.status !== "draft") throw new Error("AGENT_RUN_NOT_DRAFT");
   const planner = overview.modelProfiles.find((profile) => profile.role === "planner");
   const writer = overview.modelProfiles.find((profile) => profile.role === "writer");
-  setBusy("plan");
-  try {
-    const recovered = planner
-      ? { planner: { profileId: planner.id, configSha256: planner.configSha256 }, writer: writer ? { profileId: writer.id, configSha256: writer.configSha256 } : undefined }
-      : await client.getDraftModelProfiles(context, overview.run.id);
-    applySnapshot(await client.planRun(context, overview.run.id, recovered.planner, recovered.writer));
-    await loadRuns();
-  } catch (value) { setError(errorMessage(value)); } finally { setBusy(""); }
+  const recovered = planner
+    ? { planner: { profileId: planner.id, configSha256: planner.configSha256 }, writer: writer ? { profileId: writer.id, configSha256: writer.configSha256 } : undefined }
+    : await client.getDraftModelProfiles(context, overview.run.id);
+  return client.planRun(context, overview.run.id, recovered.planner, recovered.writer);
 }
 
 function SnapshotBadge({ ready, snapshot }: { ready: boolean; snapshot: { snapshotId?: string; paperCount: number; hotspotCount: number; membershipCount: number } | null | undefined }) {
@@ -600,12 +720,13 @@ function AgentEmptyState({ busy, onCreate, disabled }: { busy: boolean; onCreate
   return <div className="agent-empty-main"><div className="agent-empty-symbol"><Bot size={30} /></div><h2>{busy ? "正在恢复运行状态" : "建立第一个可审计研究运行"}</h2><p>Agent 只使用当前 SQLite 论文库和活动 V20 快照。所有写动作都需要单独批准。</p><button className="primary-action h-10 px-4" onClick={onCreate} disabled={busy || disabled}><Plus size={16} />新建研究任务</button></div>;
 }
 
-function RunHeader({ overview, busy, onPlan, onContinue, onPause, onResume, onCancel, onToggleInspector }: { overview: AgentRunOverview; busy: string; onPlan: () => void; onContinue: () => void; onPause: () => void; onResume: () => void; onCancel: () => void; onToggleInspector: () => void }) {
+function RunHeader({ overview, busy, controlBusy, onPlan, onContinue, onPause, onResume, onCancel, onToggleInspector }: { overview: AgentRunOverview; busy: string; controlBusy: string; onPlan: () => void; onContinue: () => void; onPause: () => void; onResume: () => void; onCancel: () => void; onToggleInspector: () => void }) {
   const meta = AGENT_STATUS_META[overview.run.status];
   const Icon = statusIcon(overview.run.status);
-  const working = Boolean(busy);
+  const working = Boolean(busy) || Boolean(controlBusy);
+  const controlWorking = Boolean(controlBusy);
   const committing = overview.currentOperation?.status === "committing";
-  return <header className="agent-run-header"><div className="agent-run-heading"><div className={`agent-status-chip tone-${meta.tone}`}><Icon size={14} className={AGENT_ACTIVE_POLL_STATUSES.has(overview.run.status) ? "animate-spin" : ""} />{meta.label}</div><small>{RUN_KIND_LABELS[overview.run.runKind]?.label ?? overview.run.runKind}</small><h2>{overview.run.objective}</h2><p>{committing ? "正在安全提交：事务完成前暂停与取消暂不可用。" : meta.description}</p>{overview.currentOperation && <div className="agent-operation-inline"><span>{committing ? "正在安全提交" : overview.currentOperation.phase}</span><strong>{overview.currentOperation.processedCount.toLocaleString()}/{overview.currentOperation.totalCount?.toLocaleString() ?? "?"}</strong><progress value={overview.currentOperation.processedCount} max={overview.currentOperation.totalCount || 1} /></div>}</div><div className="agent-run-controls"><button className="secondary-action agent-inspector-toggle h-9 px-3" onClick={onToggleInspector}><Gauge size={15} />治理</button>{overview.run.status === "draft" && <button className="primary-action h-9 px-3" onClick={onPlan} disabled={working}><Sparkles size={15} />开始规划</button>}{overview.run.status === "ready" && <button className="primary-action h-9 px-3" onClick={onContinue} disabled={working}><Play size={15} />继续执行</button>}{["running", "evaluating"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onPause} disabled={working || committing}><Pause size={15} />暂停</button>}{overview.run.status === "paused" && <button className="primary-action h-9 px-3" onClick={onResume} disabled={working}><RotateCcw size={15} />恢复执行</button>}{!["completed", "cancelled", "failed", "cancelling"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onCancel} disabled={working || committing}><Square size={14} />取消</button>}</div></header>;
+  return <header className="agent-run-header"><div className="agent-run-heading"><div className={`agent-status-chip tone-${meta.tone}`}><Icon size={14} className={AGENT_ACTIVE_POLL_STATUSES.has(overview.run.status) ? "animate-spin" : ""} />{meta.label}</div><small>{RUN_KIND_LABELS[overview.run.runKind]?.label ?? overview.run.runKind}</small><h2>{overview.run.objective}</h2><p>{committing ? "正在安全提交：事务完成前暂停与取消暂不可用。" : meta.description}</p>{overview.currentOperation && <div className="agent-operation-inline"><span>{committing ? "正在安全提交" : overview.currentOperation.phase}</span><strong>{overview.currentOperation.processedCount.toLocaleString()}/{overview.currentOperation.totalCount?.toLocaleString() ?? "?"}</strong><progress value={overview.currentOperation.processedCount} max={overview.currentOperation.totalCount || 1} /></div>}</div><div className="agent-run-controls"><button className="secondary-action agent-inspector-toggle h-9 px-3" onClick={onToggleInspector}><Gauge size={15} />治理</button>{overview.run.status === "draft" && <button className="primary-action h-9 px-3" onClick={onPlan} disabled={working}><Sparkles size={15} />开始规划</button>}{overview.run.status === "ready" && <button className="primary-action h-9 px-3" onClick={onContinue} disabled={working}><Play size={15} />继续执行</button>}{["running", "evaluating"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onPause} disabled={controlWorking || committing}><Pause size={15} />暂停</button>}{overview.run.status === "paused" && <button className="primary-action h-9 px-3" onClick={onResume} disabled={working}><RotateCcw size={15} />恢复执行</button>}{!["completed", "cancelled", "failed", "cancelling"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onCancel} disabled={controlWorking || committing}><Square size={14} />取消</button>}</div></header>;
 }
 
 function PlanView({ overview }: { overview: AgentRunOverview }) {

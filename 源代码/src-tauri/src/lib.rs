@@ -404,8 +404,8 @@ struct ClusterTaskPermit {
 const LIBRARY_BUSY: &str = "LIBRARY_BUSY";
 
 #[derive(Clone, Default)]
-struct LibraryMutationRegistry {
-    running: Arc<Mutex<HashSet<String>>>,
+pub(crate) struct LibraryMutationRegistry {
+    running: Arc<Mutex<HashMap<String, String>>>,
 }
 
 struct LibraryMutationPermit {
@@ -414,18 +414,35 @@ struct LibraryMutationPermit {
 }
 
 impl LibraryMutationRegistry {
-    fn try_acquire(&self, database_path: &Path) -> Result<LibraryMutationPermit, String> {
+    fn try_acquire(
+        &self,
+        database_path: &Path,
+        operation_kind: &str,
+    ) -> Result<LibraryMutationPermit, String> {
         let key = normalized_database_key(database_path);
         let mut running = self
             .running
             .lock()
             .map_err(|_| "Cannot lock library mutation registry.".to_string())?;
-        if !running.insert(key.clone()) {
+        if running.contains_key(&key) {
             return Err(LIBRARY_BUSY.to_string());
         }
+        running.insert(key.clone(), operation_kind.to_string());
         Ok(LibraryMutationPermit {
             registry: self.clone(),
             key,
+        })
+    }
+
+    fn status(&self, database_path: &Path) -> Result<LibraryMutationStatus, String> {
+        let key = normalized_database_key(database_path);
+        let running = self
+            .running
+            .lock()
+            .map_err(|_| "Cannot lock library mutation registry.".to_string())?;
+        Ok(LibraryMutationStatus {
+            database_key: key.clone(),
+            operation_kind: running.get(&key).cloned(),
         })
     }
 }
@@ -438,6 +455,23 @@ impl Drop for LibraryMutationPermit {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(&self.key);
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryMutationStatus {
+    database_key: String,
+    operation_kind: Option<String>,
+}
+
+#[tauri::command]
+fn get_library_mutation_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LibraryMutationRegistry>,
+    database_dir: Option<String>,
+) -> Result<LibraryMutationStatus, String> {
+    let database_dir = resolve_database_dir(&app, database_dir)?;
+    state.status(&database_dir.join("research-hotspots-v7.sqlite"))
 }
 
 impl ClusterTaskRegistry {
@@ -1482,7 +1516,10 @@ async fn restore_paper_library(
         ));
     }
     let database_dir = resolve_database_dir(&app, database_dir)?;
-    let permit = state.try_acquire(&database_dir.join("research-hotspots-v7.sqlite"))?;
+    let permit = state.try_acquire(
+        &database_dir.join("research-hotspots-v7.sqlite"),
+        "restore",
+    )?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
@@ -1893,11 +1930,13 @@ fn upsert_paper_rows_in_transaction(
             }
         }
     }
-    research_hotspots_core::invalidate_v20_after_library_mutation(
-        &tx,
-        project_id,
-        now_millis().min(i64::MAX as u128) as i64,
-    )?;
+    if inserted + updated > 0 {
+        research_hotspots_core::invalidate_v20_after_library_mutation(
+            &tx,
+            project_id,
+            now_millis().min(i64::MAX as u128) as i64,
+        )?;
+    }
     Ok(PaperLibraryMutationResult {
         inserted,
         updated,
@@ -1982,8 +2021,10 @@ fn start_paper_file_import(
         return Err(format!("Import path is not a file: {:?}", file_path));
     }
     let target_dir = resolve_database_dir(&app, input.database_dir.clone())?;
-    let mutation_permit =
-        mutation_state.try_acquire(&target_dir.join("research-hotspots-v7.sqlite"))?;
+    let mutation_permit = mutation_state.try_acquire(
+        &target_dir.join("research-hotspots-v7.sqlite"),
+        "file_import",
+    )?;
 
     let task_id = format!("paper-import-{}-{}", std::process::id(), now_millis());
     let file_name = file_path
@@ -2071,8 +2112,10 @@ fn start_mysql_paper_import(
         .unwrap_or("research_hotspots");
     let file_name = format!("MySQL {database}.papers");
     let target_dir = resolve_database_dir(&app, input.database_dir.clone())?;
-    let mutation_permit =
-        mutation_state.try_acquire(&target_dir.join("research-hotspots-v7.sqlite"))?;
+    let mutation_permit = mutation_state.try_acquire(
+        &target_dir.join("research-hotspots-v7.sqlite"),
+        "mysql_import",
+    )?;
     let control = PaperImportTaskControl::default();
     state
         .controls
@@ -2171,7 +2214,7 @@ fn clean_paper_library(
 ) -> Result<PaperLibraryCleanResult, String> {
     let target_dir = resolve_database_dir(&app, database_dir)?;
     let database_path = target_dir.join("research-hotspots-v7.sqlite");
-    let _permit = state.try_acquire(&database_path)?;
+    let _permit = state.try_acquire(&database_path, "clean")?;
     let mut conn = Connection::open(&database_path).map_err(|error| error.to_string())?;
     initialize_library_database(&conn)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
@@ -2333,7 +2376,7 @@ async fn cluster_paper_library(
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
     let project_id = project_id.unwrap_or_else(default_project_id);
     let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
-    let mutation_permit = mutation_state.try_acquire(&database_path)?;
+    let mutation_permit = mutation_state.try_acquire(&database_path, "cluster")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         let _mutation_permit = mutation_permit;
@@ -7485,6 +7528,48 @@ mod tests {
     }
 
     #[test]
+    fn empty_upsert_preserves_library_revision_and_active_snapshot() {
+        let mut conn = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_library_database(&conn).expect("schema should initialize");
+        let project_id = "unit-empty-upsert";
+        upsert_paper_rows(
+            &mut conn,
+            project_id,
+            vec![test_paper(
+                "paper-1",
+                "Stable V20 evidence",
+                "An empty import must not invalidate this snapshot.",
+                "Artificial Intelligence",
+                2026,
+                Some("10.0000/empty-upsert"),
+            )],
+        )
+        .expect("insert paper");
+        let clustered =
+            cluster_library_connection(&conn, project_id).expect("create active snapshot");
+        let revision_before =
+            current_library_revision(&conn, project_id).expect("revision before empty upsert");
+        let state_before = read_analysis_state(&conn, project_id)
+            .expect("state before empty upsert")
+            .expect("active state before empty upsert");
+
+        let mutation =
+            upsert_paper_rows(&mut conn, project_id, Vec::new()).expect("empty upsert succeeds");
+        assert_eq!(mutation.inserted, 0);
+        assert_eq!(mutation.updated, 0);
+        assert_eq!(mutation.total, 0);
+        assert_eq!(
+            current_library_revision(&conn, project_id).expect("revision after empty upsert"),
+            revision_before
+        );
+        let state_after = read_analysis_state(&conn, project_id)
+            .expect("state after empty upsert")
+            .expect("active state after empty upsert");
+        assert_eq!(state_after.active_snapshot_id, clustered.snapshot_id);
+        assert_eq!(state_after, state_before);
+    }
+
+    #[test]
     fn import_normalization_accepts_chinese_json_aliases() {
         let value = serde_json::json!({
             "文献编号": "cn-sample-001",
@@ -8453,6 +8538,7 @@ pub fn run() {
             get_library_setup_state,
             validate_library_location,
             initialize_library,
+            get_library_mutation_status,
             paper_library_status,
             backup_paper_library,
             inspect_paper_library_backup,

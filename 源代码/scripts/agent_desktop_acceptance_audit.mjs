@@ -13,8 +13,15 @@ const checks = {
   lazyArtifacts: client.includes("agent_get_artifact"),
   noFrontendStateMachineMutation: !client.includes("set_agent_status"),
   synchronousDuplicateSubmissionGuard: workspace.includes("createRunInFlightRef.current") && workspace.includes("commandInFlightRef.current"),
-  artifactRunSwitchGuard: workspace.includes("artifactRequestSequence.current") && workspace.includes("changingRun"),
-  artifactMetadataGuard: workspace.includes("overview.artifacts.some((artifact) => artifact.id === selectedArtifactId)"),
+  commandResultFence: workspace.includes("matchesAgentRequestFence") && workspace.includes("commandRequestSequence.current") && workspace.includes("currentContextKeyRef.current"),
+  commandAutoContinueFence: workspace.includes("if (!isCurrent()) return") && workspace.includes("snapshot.run.id !== runId"),
+  independentControlChannel: workspace.includes("runControlCommand") && workspace.includes("controlInFlightRef.current") && workspace.includes("commandRequestSequence.current += 1"),
+  pollingContinuesDuringExecution: workspace.includes("if (!overview?.run.id) return") && !workspace.includes("if (!overview?.run.id || busy) return"),
+  controlAllowedOutsideCommit: workspace.includes("disabled={controlWorking || committing}"),
+  artifactRunSwitchGuard: workspace.includes("artifactRequestSequence.current") && workspace.includes("synchronizeArtifactScope"),
+  artifactMetadataGuard: workspace.includes("matchesAgentArtifactRequestFence") && workspace.includes("artifactMetadataIdsRef.current.has(artifactId)"),
+  isolatedArtifactError: workspace.includes("const [artifactError, setArtifactError]") && workspace.includes("data-agent-error-kind=\"artifact\""),
+  guardedDraftPlanning: workspace.includes('runCommand("plan", overview.run.id') && !workspace.includes("resumeDraftPlanning(overview, client, context, setBusy"),
 };
 const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
 if (failed.length) throw new Error(`Agent desktop acceptance audit failed: ${failed.join(", ")}`);
