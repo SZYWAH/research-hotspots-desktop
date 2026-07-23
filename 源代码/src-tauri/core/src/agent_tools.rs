@@ -1,7 +1,7 @@
 use crate::agent::{canonical_value_sha256, validate_storable_json, AgentRiskLevel};
 use crate::agent_capabilities::AgentCapabilityRepository;
 use crate::{current_library_revision, validate_active_snapshot, AnalysisState};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -303,10 +303,11 @@ fn standard_tool_definitions() -> Vec<AgentToolDefinition> {
             strict_object(
                 json!({
                     "papers": array_schema(paper_summary_schema(), 0, AGENT_SEARCH_PAPER_LIMIT),
+                    "paperIds": array_schema(string_schema(1, 256), 0, AGENT_SEARCH_PAPER_LIMIT),
                     "truncated": {"type": "boolean"},
                     "untrustedData": {"type": "boolean", "const": true},
                 }),
-                &["papers", "truncated", "untrustedData"],
+                &["papers", "paperIds", "truncated", "untrustedData"],
             ),
             20_000,
             16 * 1024,
@@ -330,9 +331,10 @@ fn standard_tool_definitions() -> Vec<AgentToolDefinition> {
                 json!({
                     "snapshot": snapshot_schema(),
                     "hotspots": array_schema(hotspot_summary_schema(), 0, AGENT_SEARCH_HOTSPOT_LIMIT),
+                    "hotspotIds": array_schema(string_schema(1, 256), 0, AGENT_SEARCH_HOTSPOT_LIMIT),
                     "untrustedData": {"type": "boolean", "const": true},
                 }),
-                &["snapshot", "hotspots", "untrustedData"],
+                &["snapshot", "hotspots", "hotspotIds", "untrustedData"],
             ),
             20_000,
             16 * 1024,
@@ -1281,7 +1283,11 @@ pub fn execute_read_tool(
                 &input.query,
                 input.limit.unwrap_or(AGENT_SEARCH_PAPER_LIMIT),
             )?;
-            json!({"papers": papers, "truncated": truncated, "untrustedData": true})
+            let paper_ids = papers
+                .iter()
+                .map(|paper| paper.id.clone())
+                .collect::<Vec<_>>();
+            json!({"papers": papers, "paperIds": paper_ids, "truncated": truncated, "untrustedData": true})
         }
         "search_v20_hotspots" => {
             let input: SearchInput = serde_json::from_value(input.clone())
@@ -1292,7 +1298,11 @@ pub fn execute_read_tool(
                 &input.query,
                 input.limit.unwrap_or(AGENT_SEARCH_HOTSPOT_LIMIT),
             )?;
-            json!({"snapshot": snapshot, "hotspots": hotspots, "untrustedData": true})
+            let hotspot_ids = hotspots
+                .iter()
+                .map(|hotspot| hotspot.id.clone())
+                .collect::<Vec<_>>();
+            json!({"snapshot": snapshot, "hotspots": hotspots, "hotspotIds": hotspot_ids, "untrustedData": true})
         }
         "get_papers_by_ids" => {
             let input: PaperIdsInput = serde_json::from_value(input.clone())
@@ -1509,46 +1519,59 @@ fn search_local_papers_page(
     query: &str,
     limit: usize,
 ) -> Result<(Vec<AgentPaperSummary>, bool), String> {
-    let query = query.trim();
-    if query.is_empty() || query.chars().count() > 500 {
-        return Err("AGENT_SEARCH_QUERY_INVALID".into());
-    }
+    let terms = meaningful_search_terms(query)?;
     if limit == 0 || limit > AGENT_SEARCH_PAPER_LIMIT {
         return Err("AGENT_SEARCH_PAPER_LIMIT_INVALID".into());
     }
-    let pattern = format!(
-        "%{}%",
-        query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
+    let score_expression = terms
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            format!(
+                "CASE WHEN lower(search_blob) LIKE ?{} ESCAPE '\\' THEN 1 ELSE 0 END",
+                index + 2
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let minimum_score = if terms.len() == 1 { 1 } else { 2 };
+    let minimum_score_parameter = terms.len() + 2;
+    let limit_parameter = terms.len() + 3;
+    let sql = format!(
+        "SELECT id, title, abstract, year, source, field, ({score_expression}) AS relevance_score
+         FROM papers
+         WHERE project_id = ?1
+           AND ({score_expression}) >= ?{minimum_score_parameter}
+         ORDER BY relevance_score DESC, COALESCE(year, 0) DESC, updated_at DESC, id ASC
+         LIMIT ?{limit_parameter}"
     );
+    let mut values = vec![SqlValue::Text(project_id.to_string())];
+    values.extend(terms.iter().map(|term| {
+        SqlValue::Text(format!(
+            "%{}%",
+            term.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        ))
+    }));
+    values.push(SqlValue::Integer(minimum_score));
+    values.push(SqlValue::Integer(limit.saturating_add(1) as i64));
     let mut stmt = conn
-        .prepare(
-            "SELECT id, title, abstract, year, source, field
-             FROM papers
-             WHERE project_id = ?1
-               AND (search_blob LIKE ?2 ESCAPE '\\' OR title LIKE ?2 ESCAPE '\\' OR abstract LIKE ?2 ESCAPE '\\')
-             ORDER BY COALESCE(year, 0) DESC, updated_at DESC, id ASC
-             LIMIT ?3",
-        )
+        .prepare(&sql)
         .map_err(|error| error.to_string())?;
     let mut rows = stmt
-        .query_map(
-            params![project_id, pattern, limit.saturating_add(1) as i64],
-            |row| {
-                let abstract_text: String = row.get(2)?;
-                Ok(AgentPaperSummary {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    abstract_excerpt: truncate_chars(&abstract_text, 480),
-                    year: row.get(3)?,
-                    source: row.get(4)?,
-                    field: row.get(5)?,
-                    untrusted_data: true,
-                })
-            },
-        )
+        .query_map(params_from_iter(values), |row| {
+            let abstract_text: String = row.get(2)?;
+            Ok(AgentPaperSummary {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                abstract_excerpt: truncate_chars(&abstract_text, 480),
+                year: row.get(3)?,
+                source: row.get(4)?,
+                field: row.get(5)?,
+                untrusted_data: true,
+            })
+        })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -1563,10 +1586,7 @@ pub fn search_v20_hotspots(
     query: &str,
     limit: usize,
 ) -> Result<(AgentSnapshotState, Vec<AgentHotspotSummary>), String> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() || query.chars().count() > 500 {
-        return Err("AGENT_SEARCH_QUERY_INVALID".into());
-    }
+    let terms = meaningful_search_terms(query)?;
     if limit == 0 || limit > AGENT_SEARCH_HOTSPOT_LIMIT {
         return Err("AGENT_SEARCH_HOTSPOT_LIMIT_INVALID".into());
     }
@@ -1589,7 +1609,7 @@ pub fn search_v20_hotspots(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let terms = query.split_whitespace().collect::<Vec<_>>();
+    let minimum_score = if terms.len() == 1 { 1 } else { 2 };
     let mut matches = rows
         .into_iter()
         .filter_map(|(id, payload_json, paper_count)| {
@@ -1602,9 +1622,9 @@ pub fn search_v20_hotspots(
                 format!("{title} {field} {summary} {}", keywords.join(" ")).to_lowercase();
             let score = terms
                 .iter()
-                .filter(|term| searchable.contains(**term))
+                .filter(|term| searchable.contains(term.as_str()))
                 .count();
-            (score > 0).then_some((
+            (score >= minimum_score).then_some((
                 score,
                 AgentHotspotSummary {
                     id,
@@ -1633,6 +1653,81 @@ pub fn search_v20_hotspots(
             .map(|(_, row)| row)
             .collect(),
     ))
+}
+
+fn meaningful_search_terms(query: &str) -> Result<Vec<String>, String> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > 500 {
+        return Err("AGENT_SEARCH_QUERY_INVALID".into());
+    }
+    const STOP_WORDS: &[&str] = &[
+        "a",
+        "an",
+        "and",
+        "analysis",
+        "analyze",
+        "analyse",
+        "based",
+        "current",
+        "for",
+        "from",
+        "generate",
+        "in",
+        "library",
+        "local",
+        "of",
+        "on",
+        "report",
+        "research",
+        "snapshot",
+        "the",
+        "trend",
+        "trends",
+        "v20",
+        "with",
+    ];
+    let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in query.split(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                ',' | '.'
+                    | ';'
+                    | ':'
+                    | '/'
+                    | '\\'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '，'
+                    | '。'
+                    | '；'
+                    | '：'
+            )
+    }) {
+        let term = raw
+            .trim_matches(|character: char| !character.is_alphanumeric() && character != '-')
+            .to_lowercase();
+        if term.chars().count() < 2
+            || STOP_WORDS.contains(&term.as_str())
+            || !seen.insert(term.clone())
+        {
+            continue;
+        }
+        terms.push(term);
+        if terms.len() == 8 {
+            break;
+        }
+    }
+    if terms.is_empty() {
+        Err("AGENT_SEARCH_QUERY_TOO_BROAD".into())
+    } else {
+        Ok(terms)
+    }
 }
 
 pub fn get_papers_by_ids(
@@ -2145,13 +2240,14 @@ mod tests {
     #[test]
     fn local_queries_are_bounded_ordered_and_use_persisted_v20_evidence() {
         let conn = fixture_connection();
-        let papers = search_local_papers(&conn, "project", "quantum", 20).unwrap();
+        let papers = search_local_papers(&conn, "project", "quantum error", 20).unwrap();
         assert_eq!(
             papers.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
             vec!["p1", "p3"]
         );
         assert!(papers.iter().all(|row| row.untrusted_data));
-        let (snapshot, hotspots) = search_v20_hotspots(&conn, "project", "error", 10).unwrap();
+        let (snapshot, hotspots) =
+            search_v20_hotspots(&conn, "project", "quantum error", 10).unwrap();
         assert_eq!(snapshot.snapshot_id, "s1");
         assert_eq!(hotspots[0].id, "h1");
         let evidence = load_hotspot_evidence(&conn, "project", &["h1".into()], 18).unwrap();
@@ -2164,6 +2260,28 @@ mod tests {
             vec!["p1", "p3"]
         );
         assert!(evidence.missing_paper_ids.is_empty());
+    }
+
+    #[test]
+    fn workflow_boilerplate_cannot_select_unrelated_default_results() {
+        let conn = fixture_connection();
+        assert_eq!(
+            search_local_papers(&conn, "project", "V20 local library report", 20).unwrap_err(),
+            "AGENT_SEARCH_QUERY_TOO_BROAD"
+        );
+        assert_eq!(
+            search_v20_hotspots(&conn, "project", "V20 snapshot report", 10).unwrap_err(),
+            "AGENT_SEARCH_QUERY_TOO_BROAD"
+        );
+        assert!(search_v20_hotspots(
+            &conn,
+            "project",
+            "retrieval augmented scientific agent",
+            10
+        )
+        .unwrap()
+        .1
+        .is_empty());
     }
 
     #[test]
@@ -2184,6 +2302,24 @@ mod tests {
         assert_eq!(output["snapshot"]["snapshotId"], "s1");
         assert_eq!(output["paperIds"], json!(["p1", "p3"]));
         assert_eq!(output["untrustedData"], true);
+        let paper_search = execute_read_tool(
+            &conn,
+            &registry,
+            &context,
+            "search_local_papers",
+            &json!({"query":"quantum error","limit":20}),
+        )
+        .unwrap();
+        assert_eq!(paper_search["paperIds"], json!(["p1", "p3"]));
+        let hotspot_search = execute_read_tool(
+            &conn,
+            &registry,
+            &context,
+            "search_v20_hotspots",
+            &json!({"query":"quantum error","limit":5}),
+        )
+        .unwrap();
+        assert_eq!(hotspot_search["hotspotIds"], json!(["h1"]));
         assert_eq!(
             execute_read_tool(
                 &conn,

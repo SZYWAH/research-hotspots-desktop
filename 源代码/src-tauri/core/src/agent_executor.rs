@@ -134,12 +134,11 @@ pub struct CompletionGateInput<'a> {
     pub latest_report_review_approved: bool,
 }
 
-const REQUIRED_FLAGSHIP_STEPS: [(&str, &str); 8] = [
+const REQUIRED_FLAGSHIP_STEPS: [(&str, &str); 7] = [
     ("inspect-library", "inspect_library_state"),
     ("inspect-snapshot", "inspect_v20_snapshot"),
     ("search-papers", "search_local_papers"),
     ("search-hotspots", "search_v20_hotspots"),
-    ("load-evidence", "load_hotspot_evidence"),
     ("save-evidence", "save_research_evidence"),
     ("create-report", "create_report_draft"),
     ("audit-report", "inspect_report_audit"),
@@ -371,7 +370,9 @@ pub fn evaluate_completion_gate(input: CompletionGateInput<'_>) -> CompletionGat
     }
     if let Some(audit) = audit {
         let content = &audit.content;
-        if content
+        let report_review_required =
+            content.get("riskLevel").and_then(Value::as_str) == Some("high");
+        let deterministic_audit_failed = content
             .get("invalidCitationCount")
             .and_then(Value::as_u64)
             .unwrap_or(1)
@@ -383,13 +384,15 @@ pub fn evaluate_completion_gate(input: CompletionGateInput<'_>) -> CompletionGat
             || content
                 .get("missingRequiredSections")
                 .and_then(Value::as_array)
-                .is_none_or(|sections| !sections.is_empty())
-        {
-            rejected.push("AGENT_REPORT_AUDIT_GATE_FAILED".into());
+                .is_none_or(|sections| !sections.is_empty());
+        if deterministic_audit_failed {
+            if report_review_required && !input.latest_report_review_approved {
+                waiting.push("AGENT_REPORT_AUDIT_GATE_FAILED".into());
+            } else if !report_review_required {
+                rejected.push("AGENT_REPORT_AUDIT_GATE_FAILED".into());
+            }
         }
-        if content.get("riskLevel").and_then(Value::as_str) == Some("high")
-            && !input.latest_report_review_approved
-        {
+        if report_review_required && !input.latest_report_review_approved {
             waiting.push("AGENT_HIGH_RISK_REPORT_REVIEW_REQUIRED".into());
         }
     }
@@ -778,6 +781,33 @@ mod tests {
         let artifacts = valid_artifacts("high");
         let waiting = completion(&run, &active, true, &artifacts, false);
         assert_eq!(waiting.disposition, CompletionDisposition::AwaitingUser);
+        assert!(waiting
+            .reasons
+            .iter()
+            .any(|reason| reason == "AGENT_HIGH_RISK_REPORT_REVIEW_REQUIRED"));
+
+        let approved = completion(&run, &active, true, &artifacts, true);
+        assert_eq!(approved.disposition, CompletionDisposition::Completed);
+    }
+
+    #[test]
+    fn completion_gate_routes_a_persistently_invalid_high_risk_report_to_review() {
+        let run = completed_run();
+        let active = active_snapshot("snapshot");
+        let mut artifacts = valid_artifacts("high");
+        let audit = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.id == "audit")
+            .unwrap();
+        audit.content["invalidCitationCount"] = json!(1);
+        audit.content_sha256 = canonical_value_sha256(&audit.content).unwrap();
+
+        let waiting = completion(&run, &active, true, &artifacts, false);
+        assert_eq!(waiting.disposition, CompletionDisposition::AwaitingUser);
+        assert!(waiting
+            .reasons
+            .iter()
+            .any(|reason| reason == "AGENT_REPORT_AUDIT_GATE_FAILED"));
         assert!(waiting
             .reasons
             .iter()

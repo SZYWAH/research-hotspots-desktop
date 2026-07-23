@@ -49,6 +49,7 @@ import { createAgentDesktopClient, overviewFromSnapshot, type AgentDatabaseConte
 import {
   AGENT_ACTIVE_POLL_STATUSES,
   AGENT_STATUS_META,
+  effectiveArtifactReviewStatus,
   findLatestArtifact,
   findPendingQuestion,
   findPendingReviewArtifact,
@@ -355,9 +356,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   useEffect(() => {
     if (!selectedRunId) {
-      requestSequence.current += 1;
-      commandRequestSequence.current += 1;
-      controlRequestSequence.current += 1;
       currentRunRef.current = "";
       setOverview(null);
       synchronizeArtifactScope([], true);
@@ -665,7 +663,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       </div>
 
       <AgentModal open={newRunOpen} title="新建研究任务" onClose={() => !busy && setNewRunOpen(false)} wide>
-        <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} reportArtifacts={(overview?.artifacts ?? []).filter((artifact) => artifact.artifactKind === "report_draft")} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
+        <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} reportArtifacts={(overview?.artifacts ?? []).filter((artifact) => artifact.artifactKind === "report_draft").map((artifact) => ({ ...artifact, reviewStatus: overview ? effectiveArtifactReviewStatus(overview, artifact) : artifact.reviewStatus }))} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
       </AgentModal>
 
       <AgentModal open={Boolean(reasonDialog)} title={reasonDialog?.title || "确认操作"} onClose={() => !confirmationBusy && setReasonDialog(null)}>
@@ -740,32 +738,33 @@ function TimelineView({ events, steps, hasMore, onLoadMore }: { events: AgentEve
 }
 
 function ArtifactWorkspace({ overview, selectedId, onSelect, artifact, onOpenPaper }: { overview: AgentRunOverview; selectedId: string; onSelect: (id: string) => void; artifact?: AgentArtifactRecord; onOpenPaper: (paperId: string, title?: string) => void }) {
-  return <div className="agent-artifact-workspace"><nav className="agent-artifact-list">{overview.artifacts.map((item) => <button key={item.id} className={selectedId === item.id ? "active" : ""} onClick={() => onSelect(item.id)}><ArtifactIcon kind={item.artifactKind} /><div><strong>{artifactLabel(item.artifactKind)}</strong><span>{fmtTime(item.createdAtMs)}</span></div><small>{item.reviewStatus === "needs-review" ? "待复核" : shortHash(item.contentSha256)}</small></button>)}{overview.artifacts.length === 0 && <div className="agent-content-empty"><FileText size={22} /><span>执行后将在此显示不可变成果</span></div>}</nav><section className="agent-artifact-view">{selectedId && !artifact ? <div className="agent-content-empty"><Loader2 className="animate-spin" size={22} /><span>正在校验并读取成果…</span></div> : artifact ? <ArtifactContent artifact={artifact} onOpenPaper={onOpenPaper} /> : <div className="agent-content-empty"><FileText size={24} /><span>选择一个成果查看内容</span></div>}</section></div>;
+  return <div className="agent-artifact-workspace"><nav className="agent-artifact-list">{overview.artifacts.map((item) => <button key={item.id} className={selectedId === item.id ? "active" : ""} onClick={() => onSelect(item.id)}><ArtifactIcon kind={item.artifactKind} /><div><strong>{artifactLabel(item.artifactKind)}</strong><span>{fmtTime(item.createdAtMs)}</span></div><small>{artifactReviewLabel(effectiveArtifactReviewStatus(overview, item), item.contentSha256)}</small></button>)}{overview.artifacts.length === 0 && <div className="agent-content-empty"><FileText size={22} /><span>执行后将在此显示不可变成果</span></div>}</nav><section className="agent-artifact-view">{selectedId && !artifact ? <div className="agent-content-empty"><Loader2 className="animate-spin" size={22} /><span>正在校验并读取成果…</span></div> : artifact ? <ArtifactContent artifact={artifact} effectiveReviewStatus={effectiveArtifactReviewStatus(overview, artifact)} onOpenPaper={onOpenPaper} /> : <div className="agent-content-empty"><FileText size={24} /><span>选择一个成果查看内容</span></div>}</section></div>;
 }
 
 function ArtifactIcon({ kind }: { kind: string }) { return kind === "research_evidence" ? <Search size={16} /> : kind === "report_audit" ? <FileCheck2 size={16} /> : <FileText size={16} />; }
 function artifactLabel(kind: string) { return kind === "research_evidence" ? "研究证据" : kind === "report_draft" ? "报告草稿" : kind === "report_audit" ? "确定性审计" : kind; }
 
-function ArtifactContent({ artifact, onOpenPaper }: { artifact: AgentArtifactRecord; onOpenPaper: (paperId: string, title?: string) => void }) {
+function ArtifactContent({ artifact, effectiveReviewStatus, onOpenPaper }: { artifact: AgentArtifactRecord; effectiveReviewStatus?: string; onOpenPaper: (paperId: string, title?: string) => void }) {
   const content = asRecord(artifact.content);
   if (artifact.artifactKind === "research_evidence") {
     const papers = Array.isArray(content.papers) ? content.papers.map(asRecord) : [];
-    return <div className="agent-evidence"><ArtifactHeading artifact={artifact} /><div className="agent-evidence-stats"><span>{papers.length} 篇论文</span><span>{Array.isArray(content.hotspotIds) ? content.hotspotIds.length : 0} 个热点</span><span>{content.truncated ? "已截断" : "完整证据包"}</span></div><div className="agent-paper-list">{papers.map((paper, index) => <button key={String(paper.id ?? index)} onClick={() => onOpenPaper(String(paper.id ?? ""), String(paper.title ?? ""))}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{String(paper.title ?? "未命名论文")}</strong><small>{[paper.source, paper.year, paper.field].filter(Boolean).join(" · ")}</small></div></button>)}</div></div>;
+    return <div className="agent-evidence"><ArtifactHeading artifact={artifact} reviewStatus={effectiveReviewStatus} /><div className="agent-evidence-stats"><span>{papers.length} 篇论文</span><span>{Array.isArray(content.hotspotIds) ? content.hotspotIds.length : 0} 个热点</span><span>{content.truncated ? "已截断" : "完整证据包"}</span></div><div className="agent-paper-list">{papers.map((paper, index) => <button key={String(paper.id ?? index)} onClick={() => onOpenPaper(String(paper.id ?? ""), String(paper.title ?? ""))}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{String(paper.title ?? "未命名论文")}</strong><small>{[paper.source, paper.year, paper.field].filter(Boolean).join(" · ")}</small></div></button>)}</div></div>;
   }
   if (artifact.artifactKind === "report_draft") {
-    return <div className="agent-report"><ArtifactHeading artifact={artifact} /><SafeMarkdown content={String(content.content ?? "")} /></div>;
+    return <div className="agent-report"><ArtifactHeading artifact={artifact} reviewStatus={effectiveReviewStatus} /><SafeMarkdown content={String(content.content ?? "")} /></div>;
   }
   if (artifact.artifactKind === "report_audit") {
     const risk = String(content.riskLevel ?? "unknown");
     const missing = Array.isArray(content.missingRequiredSections) ? content.missingRequiredSections : [];
     const unreferenced = Array.isArray(content.unreferencedParagraphs) ? content.unreferencedParagraphs : [];
     const metrics = asRecord(content.metrics);
-    return <div className="agent-audit"><ArtifactHeading artifact={artifact} /><div className={`agent-audit-risk risk-${risk}`}><ShieldAlert size={20} /><div><strong>{risk === "high" ? "高风险，等待人工复核" : risk === "medium" ? "中风险，带警告完成" : "低风险，自动批准"}</strong><span>{String(content.coverageExplanation ?? "")}</span></div></div><div className="agent-audit-grid"><Metric label="有效引用" value={String(content.validCitationCount ?? 0)} /><Metric label="无效引用" value={String(content.invalidCitationCount ?? 0)} /><Metric label="未覆盖论文" value={String(content.uncitedPaperCount ?? 0)} /><Metric label="引用覆盖" value={`${Math.round(Number(metrics.citationCoverage ?? 0) * 100)}%`} /></div>{missing.length > 0 && <AuditList title="缺失章节" values={missing} />}{unreferenced.length > 0 && <AuditList title="无依据段落" values={unreferenced} />}</div>;
+    return <div className="agent-audit"><ArtifactHeading artifact={artifact} reviewStatus={effectiveReviewStatus} /><div className={`agent-audit-risk risk-${risk}`}><ShieldAlert size={20} /><div><strong>{risk === "high" ? "高风险，等待人工复核" : risk === "medium" ? "中风险，带警告完成" : "低风险，自动批准"}</strong><span>{String(content.coverageExplanation ?? "")}</span></div></div><div className="agent-audit-grid"><Metric label="有效引用" value={String(content.validCitationCount ?? 0)} /><Metric label="无效引用" value={String(content.invalidCitationCount ?? 0)} /><Metric label="未覆盖论文" value={String(content.uncitedPaperCount ?? 0)} /><Metric label="引用覆盖" value={`${Math.round(Number(metrics.citationCoverage ?? 0) * 100)}%`} /></div>{missing.length > 0 && <AuditList title="缺失章节" values={missing} />}{unreferenced.length > 0 && <AuditList title="无依据段落" values={unreferenced} />}</div>;
   }
   return <pre className="agent-json-view">{JSON.stringify(artifact.content, null, 2)}</pre>;
 }
 
-function ArtifactHeading({ artifact }: { artifact: AgentArtifactRecord }) { return <header className="agent-artifact-heading"><div><span>{artifactLabel(artifact.artifactKind)}</span><h3>{artifact.artifactKind === "report_draft" ? String(asRecord(artifact.content).topic ?? "研究报告") : artifact.artifactKind === "research_evidence" ? String(asRecord(artifact.content).topic ?? "证据包") : "报告质量审计"}</h3></div><div><span>{artifact.reviewStatus === "needs-review" ? "待复核" : "不可变成果"}</span><code>{shortHash(artifact.contentSha256)}</code></div></header>; }
+function artifactReviewLabel(status: string | undefined, fallbackHash?: string) { return status === "approved" ? "已通过" : status === "warning" ? "有警告" : status === "needs-review" ? "待复核" : fallbackHash ? shortHash(fallbackHash) : "不可变成果"; }
+function ArtifactHeading({ artifact, reviewStatus }: { artifact: AgentArtifactRecord; reviewStatus?: string }) { return <header className="agent-artifact-heading"><div><span>{artifactLabel(artifact.artifactKind)}</span><h3>{artifact.artifactKind === "report_draft" ? String(asRecord(artifact.content).topic ?? "研究报告") : artifact.artifactKind === "research_evidence" ? String(asRecord(artifact.content).topic ?? "证据包") : "报告质量审计"}</h3></div><div><span>{artifactReviewLabel(reviewStatus)}</span><code>{shortHash(artifact.contentSha256)}</code></div></header>; }
 function Metric({ label, value }: { label: string; value: string }) { return <div className="agent-metric"><span>{label}</span><strong>{value}</strong></div>; }
 function AuditList({ title, values }: { title: string; values: unknown[] }) { return <section className="agent-audit-list"><h4>{title}</h4>{values.map((value, index) => <p key={`${index}-${String(value)}`}><AlertTriangle size={13} />{String(value)}</p>)}</section>; }
 

@@ -47,6 +47,29 @@ pub enum ActionPlannerTurn {
     Complete { summary: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutableActionPlannerTurn {
+    pub action: ExecutableActionPlannerKind,
+    pub tool: String,
+    pub input: Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutableActionPlannerKind {
+    CallTool,
+}
+
+impl From<ExecutableActionPlannerTurn> for ActionPlannerTurn {
+    fn from(turn: ExecutableActionPlannerTurn) -> Self {
+        Self::CallTool {
+            tool: turn.tool,
+            input: turn.input,
+        }
+    }
+}
+
 impl AgentQuestionDraft {
     pub fn validate(&self) -> Result<(), String> {
         validate_question_request(&AgentQuestionRequest {
@@ -211,6 +234,7 @@ pub fn build_flagship_research_plan(
         .chars()
         .take(500)
         .collect::<String>();
+    validate_flagship_search_query(&query)?;
     let mode = draft
         .steps
         .iter()
@@ -247,22 +271,13 @@ pub fn build_flagship_research_plan(
             json!({"query":query,"limit":5}),
         ),
         (
-            "load-evidence",
-            "Load persisted representative evidence",
-            "load_hotspot_evidence",
-            json!({
-                "hotspotIds":[reference("search-hotspots","/hotspots/0/id")],
-                "maxPapersPerHotspot":18
-            }),
-        ),
-        (
             "save-evidence",
             "Save an immutable evidence artifact",
             "save_research_evidence",
             json!({
                 "topic":objective,
-                "paperIds":reference("load-evidence","/paperIds"),
-                "hotspotIds":[reference("search-hotspots","/hotspots/0/id")],
+                "paperIds":reference("search-papers","/paperIds"),
+                "hotspotIds":reference("search-hotspots","/hotspotIds"),
                 "mode":mode
             }),
         ),
@@ -346,6 +361,59 @@ pub fn build_flagship_research_plan(
         success_criteria,
         steps,
     })
+}
+
+fn validate_flagship_search_query(query: &str) -> Result<(), String> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > 120 {
+        return Err("AGENT_PLAN_SEARCH_QUERY_INVALID".into());
+    }
+    let terms = query
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    ',' | '.'
+                        | ';'
+                        | ':'
+                        | '/'
+                        | '\\'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '，'
+                        | '。'
+                        | '；'
+                        | '：'
+                )
+        })
+        .map(|term| {
+            term.trim_matches(|character: char| !character.is_alphanumeric() && character != '-')
+        })
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    if !(2..=8).contains(&terms.len())
+        || !terms
+            .iter()
+            .any(|term| term.chars().filter(|character| character.is_ascii_alphabetic()).count() >= 3)
+    {
+        return Err("AGENT_PLAN_SEARCH_QUERY_INVALID".into());
+    }
+    const WORKFLOW_TERMS: &[&str] = &[
+        "v20",
+        "snapshot",
+        "report",
+        "local library",
+        "论文库",
+        "快照",
+        "报告",
+    ];
+    let lower = query.to_lowercase();
+    if WORKFLOW_TERMS.iter().any(|term| lower.contains(term)) {
+        return Err("AGENT_PLAN_SEARCH_QUERY_INVALID".into());
+    }
+    Ok(())
 }
 
 pub fn build_governed_task_plan(
@@ -532,15 +600,15 @@ pub fn action_planner_output_schema() -> Value {
 /// input schema have already been validated. At that boundary the only valid
 /// model decision is to confirm the planned tool call; deterministic Core
 /// checks own user questions and completion decisions.
-pub fn executable_action_planner_output_schema() -> Value {
+pub fn executable_action_planner_output_schema(tool: &str, input: &Value) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["action", "tool", "input"],
         "properties": {
             "action": {"const": "call_tool"},
-            "tool": {"type": "string"},
-            "input": {"type": "object"}
+            "tool": {"const": tool},
+            "input": {"const": input}
         }
     })
 }
@@ -568,10 +636,37 @@ mod tests {
 
     #[test]
     fn executable_action_schema_only_allows_tool_calls() {
-        let schema = executable_action_planner_output_schema();
+        let schema =
+            executable_action_planner_output_schema("inspect_v20_snapshot", &json!({}));
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["properties"]["action"]["const"], "call_tool");
+        assert_eq!(
+            schema["properties"]["tool"]["const"],
+            "inspect_v20_snapshot"
+        );
+        assert_eq!(schema["properties"]["input"]["const"], json!({}));
         assert!(schema.get("oneOf").is_none());
+
+        let valid = serde_json::from_value::<ExecutableActionPlannerTurn>(json!({
+            "action":"call_tool",
+            "tool":"inspect_library_state",
+            "input":{}
+        }))
+        .unwrap();
+        assert_eq!(valid.action, ExecutableActionPlannerKind::CallTool);
+        assert!(
+            serde_json::from_value::<ExecutableActionPlannerTurn>(json!({
+                "action":"ask_user",
+                "question":{
+                    "prompt":"Should I continue?",
+                    "answerType":"confirm",
+                    "options":[],
+                    "requiresReplan":true
+                }
+            }))
+            .is_err(),
+            "an executable step must reject a model-authored user question so the gateway can repair it"
+        );
     }
 
     #[test]
@@ -622,10 +717,10 @@ mod tests {
             build_flagship_research_plan(&draft, "Analyse quantum error correction", 1, &registry)
                 .unwrap();
         assert_eq!(plan.objective, "Analyse quantum error correction");
-        assert_eq!(plan.steps.len(), 10);
-        assert_eq!(plan.steps[5].risk, AgentRiskLevel::Write);
+        assert_eq!(plan.steps.len(), 9);
+        assert_eq!(plan.steps[4].risk, AgentRiskLevel::Write);
         assert_eq!(
-            plan.steps[4].input["hotspotIds"][0]["$ref"]["stepId"],
+            plan.steps[4].input["hotspotIds"]["$ref"]["stepId"],
             "search-hotspots"
         );
         assert!(plan
@@ -654,6 +749,31 @@ mod tests {
         assert_eq!(
             build_flagship_research_plan(&draft, "Safe local analysis", 1, &registry).unwrap_err(),
             "AGENT_TOOL_UNKNOWN:execute_sql"
+        );
+    }
+
+    #[test]
+    fn flagship_plan_rejects_a_full_workflow_objective_as_the_search_query() {
+        let registry = AgentToolRegistry::standard().unwrap();
+        let objective =
+            "基于当前本地论文库与 V20 快照，分析检索增强科研智能体并生成可追溯报告";
+        let draft = AgentPlanDraft {
+            objective: objective.into(),
+            assumptions: vec![],
+            success_criteria: vec![AgentSuccessCriterion {
+                id: "relevant".into(),
+                description: "Evidence remains on topic".into(),
+            }],
+            steps: vec![AgentPlanStepDraft {
+                id: "search".into(),
+                title: "Search".into(),
+                tool: "search_local_papers".into(),
+                input: json!({"query":objective,"limit":20}),
+            }],
+        };
+        assert_eq!(
+            build_flagship_research_plan(&draft, objective, 1, &registry).unwrap_err(),
+            "AGENT_PLAN_SEARCH_QUERY_INVALID"
         );
     }
 }

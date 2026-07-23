@@ -75,16 +75,49 @@ export function findLatestArtifact(overview: AgentRunOverview, kind: string): Ag
   return [...overview.artifacts].reverse().find((artifact) => artifact.artifactKind === kind);
 }
 
+function latestEffectiveArtifactReview(
+  overview: AgentRunOverview,
+  artifact: AgentArtifactMetadata,
+) {
+  return overview.artifactReviews
+    .filter((review) =>
+      review.artifactId === artifact.id
+      && review.artifactSha256 === artifact.contentSha256
+    )
+    .sort((left, right) => right.decisionSequence - left.decisionSequence)[0];
+}
+
+function latestAuditForReport(
+  overview: AgentRunOverview,
+  reportArtifactId: string,
+) {
+  return overview.artifacts
+    .filter((artifact) => artifact.artifactKind === "report_audit")
+    .filter((artifact) => {
+      const step = overview.steps.find((candidate) => candidate.stepId === artifact.stepId);
+      if (!step?.resolvedInput || typeof step.resolvedInput !== "object") return false;
+      return (step.resolvedInput as { reportArtifactId?: unknown }).reportArtifactId === reportArtifactId;
+    })
+    .sort((left, right) =>
+      right.createdAtMs - left.createdAtMs || right.id.localeCompare(left.id)
+    )[0];
+}
+
+export function effectiveArtifactReviewStatus(
+  overview: AgentRunOverview,
+  artifact: AgentArtifactMetadata,
+) {
+  const explicitReview = latestEffectiveArtifactReview(overview, artifact);
+  if (explicitReview?.decision === "approved") return "approved";
+  if (explicitReview?.decision === "rejected") return "needs-review";
+  if (artifact.artifactKind !== "report_draft") return artifact.reviewStatus;
+  return latestAuditForReport(overview, artifact.id)?.reviewStatus ?? artifact.reviewStatus;
+}
+
 export function findPendingReviewArtifact(overview: AgentRunOverview): AgentArtifactMetadata | undefined {
-  const reviewed = new Set(
-    overview.artifactReviews
-      .filter((review) => review.decision === "approved")
-      .map((review) => `${review.artifactId}:${review.artifactSha256}`),
-  );
   return [...overview.artifacts].reverse().find((artifact) =>
     artifact.artifactKind === "report_draft"
-    && artifact.reviewStatus === "needs-review"
-    && !reviewed.has(`${artifact.id}:${artifact.contentSha256}`),
+    && effectiveArtifactReviewStatus(overview, artifact) === "needs-review",
   );
 }
 

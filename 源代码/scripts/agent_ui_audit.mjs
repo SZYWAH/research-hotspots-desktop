@@ -7,6 +7,7 @@ import {
   AGENT_ACTIVE_POLL_STATUSES,
   AGENT_STATUS_META,
   canAutoContinueAfterUserAction,
+  effectiveArtifactReviewStatus,
   matchesAgentArtifactRequestFence,
   matchesAgentRequestFence,
   normalizeAgentError,
@@ -44,6 +45,21 @@ assert.equal(pendingKind({ ...baseOverview, run: { ...baseOverview.run, status: 
 assert.equal(pendingKind({ ...baseOverview, questions: [{ id: "q", answerType: "text", prompt: "?", requiresReplan: false }] }), "question");
 assert.equal(pendingKind({ ...baseOverview, artifacts: [{ id: "a", artifactKind: "report_draft", reviewStatus: "needs-review", contentSha256: "h" }] }), "artifact_review");
 assert.equal(pendingKind(baseOverview), "blocker");
+const auditedOverview = {
+  ...baseOverview,
+  artifacts: [
+    { id: "report", artifactKind: "report_draft", reviewStatus: "needs-review", contentSha256: "report-sha", createdAtMs: 1 },
+    { id: "audit", artifactKind: "report_audit", reviewStatus: "approved", contentSha256: "audit-sha", stepId: "audit-step", createdAtMs: 2 },
+  ],
+  steps: [{ stepId: "audit-step", resolvedInput: { reportArtifactId: "report" } }],
+};
+assert.equal(effectiveArtifactReviewStatus(auditedOverview, auditedOverview.artifacts[0]), "approved", "low-risk audit must derive an approved immutable report");
+assert.equal(pendingKind(auditedOverview), "blocker", "an approved low-risk audit must not request manual report review");
+const reviewedOverview = {
+  ...auditedOverview,
+  artifactReviews: [{ artifactId: "report", artifactSha256: "report-sha", decision: "rejected", decisionSequence: 1 }],
+};
+assert.equal(effectiveArtifactReviewStatus(reviewedOverview, reviewedOverview.artifacts[0]), "needs-review", "latest explicit review must override the derived audit state");
 
 assert.equal(safeExternalUrl("https://example.com/a"), "https://example.com/a");
 assert.equal(safeExternalUrl("http://localhost:1234/a"), "http://localhost:1234/a");
@@ -75,6 +91,8 @@ assert.match(workspaceSource, /加载更多审计事件/);
 assert.match(workspaceSource, /setRunLimit\(\(current\) => current \+ RUN_PAGE_SIZE\)/);
 assert.match(workspaceSource, /getDraftModelProfiles/);
 assert.match(workspaceSource, /agent-inspector-open/);
+const emptySelectionEffect = workspaceSource.match(/if \(!selectedRunId\) \{([\s\S]*?)\n    \}/)?.[1] ?? "";
+assert.doesNotMatch(emptySelectionEffect, /requestSequence\.current\s*\+=/, "the initial empty selection effect must not invalidate the cold-start run list request");
 assert.match(storeSource, /status NOT IN \('completed','cancelled','failed'\)/);
 assert.match(storeSource, /TransactionBehavior::Immediate/);
 assert.match(storeSource, /AGENT_ARTIFACT_HASH_MISMATCH/);

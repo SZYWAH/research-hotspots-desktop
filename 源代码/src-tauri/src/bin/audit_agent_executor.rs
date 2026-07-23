@@ -171,7 +171,6 @@ fn audit_supervised_write_and_completion(
         "inspect-snapshot",
         "search-papers",
         "search-hotspots",
-        "load-evidence",
     ]
     .iter()
     .enumerate()
@@ -606,12 +605,6 @@ fn canonical_flagship_plan(
             "Search V20 hotspots",
             "search_v20_hotspots",
             json!({"query":"quantum error correction","limit":10}),
-        ),
-        (
-            "load-evidence",
-            "Load hotspot evidence",
-            "load_hotspot_evidence",
-            json!({"hotspotIds":["h1"],"maxPapersPerHotspot":18}),
         ),
         (
             "save-evidence",
