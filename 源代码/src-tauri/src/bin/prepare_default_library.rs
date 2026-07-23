@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DATABASE_FILE: &str = "research-hotspots-v7.sqlite";
 const DEFAULT_PROJECT_ID: &str = "project-default";
-const MANIFEST_SCHEMA_VERSION: i64 = 2;
-const GENERATOR_VERSION: &str = "v20-seed-2";
+const MANIFEST_SCHEMA_VERSION: i64 = 3;
+const GENERATOR_VERSION: &str = "agent-seed-3";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +30,7 @@ struct DefaultLibraryManifest {
     paper_count: i64,
     hotspot_count: i64,
     membership_count: i64,
+    library_revision: i64,
     generated_at: String,
 }
 
@@ -66,10 +67,14 @@ fn run() -> Result<(), String> {
         .snapshot_id
         .clone()
         .ok_or_else(|| format!("source project {project_id} has no active V20 snapshot"))?;
-    if source_validation.schema_version != research_hotspots_core::V20_SCHEMA_VERSION {
+    if !(research_hotspots_core::MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION
+        ..=research_hotspots_core::LIBRARY_SCHEMA_VERSION)
+        .contains(&source_validation.schema_version)
+    {
         return Err(format!(
-            "source schema must be {}, got {}",
-            research_hotspots_core::V20_SCHEMA_VERSION,
+            "source schema must be between {} and {}, got {}",
+            research_hotspots_core::MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION,
+            research_hotspots_core::LIBRARY_SCHEMA_VERSION,
             source_validation.schema_version
         ));
     }
@@ -93,11 +98,21 @@ fn run() -> Result<(), String> {
             })?;
         drop(source);
 
+        research_hotspots_core::agent_store::migrate_library_file(
+            &partial_path,
+            &project_id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+                .unwrap_or(0),
+            false,
+        )?;
+
         let snapshot = Connection::open(&partial_path)
             .map_err(|error| format!("cannot open generated snapshot: {error}"))?;
         snapshot
-            .execute_batch("PRAGMA foreign_keys = ON;")
-            .map_err(|error| format!("cannot enable seed foreign keys: {error}"))?;
+            .execute_batch("PRAGMA foreign_keys = OFF;")
+            .map_err(|error| format!("cannot prepare seed pruning: {error}"))?;
         {
             let tx = snapshot
                 .unchecked_transaction()
@@ -128,8 +143,16 @@ fn run() -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
             clear_legacy_app17_rows(&tx)?;
+            clear_agent_runtime_rows(&tx)?;
             tx.commit().map_err(|error| error.to_string())?;
         }
+        snapshot
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|error| format!("cannot enable seed foreign keys: {error}"))?;
+        let library_revision = research_hotspots_core::current_library_revision(
+            &snapshot,
+            &project_id,
+        )?;
         snapshot
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
             .map_err(|error| format!("cannot compact generated seed: {error}"))?;
@@ -137,7 +160,7 @@ fn run() -> Result<(), String> {
 
         let verified =
             research_hotspots_core::validate_library_candidate_file(&partial_path, &project_id)?;
-        if verified.schema_version != research_hotspots_core::V20_SCHEMA_VERSION
+        if verified.schema_version != research_hotspots_core::LIBRARY_SCHEMA_VERSION
             || verified.snapshot_id.as_deref() != Some(snapshot_id.as_str())
             || verified.paper_count != source_validation.paper_count
             || verified.hotspot_count != source_validation.hotspot_count
@@ -176,6 +199,7 @@ fn run() -> Result<(), String> {
             paper_count: verified.paper_count,
             hotspot_count: verified.hotspot_count,
             membership_count: verified.membership_count,
+            library_revision,
             generated_at,
         };
         let content = serde_json::to_string_pretty(&manifest)
@@ -224,6 +248,31 @@ fn clear_legacy_app17_rows(conn: &Connection) -> Result<(), String> {
             conn.execute(&format!("DELETE FROM {table}"), [])
                 .map_err(|error| error.to_string())?;
         }
+    }
+    Ok(())
+}
+
+fn clear_agent_runtime_rows(conn: &Connection) -> Result<(), String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'agent_%' OR name='library_operation_leases') ORDER BY name",
+        )
+        .map_err(|error| error.to_string())?;
+    let tables = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    for table in tables {
+        if !table
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || value == b'_')
+        {
+            return Err("unsafe Agent table name in seed source".to_string());
+        }
+        conn.execute(&format!("DELETE FROM {table}"), [])
+            .map_err(|error| format!("cannot clear {table} from seed: {error}"))?;
     }
     Ok(())
 }

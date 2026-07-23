@@ -148,6 +148,7 @@ export type LibrarySetupState = {
   seedPaperCount?: number;
   seedHotspotCount?: number;
   seedMembershipCount?: number;
+  seedLibraryRevision?: number;
   seedSnapshotId?: string;
   seedDatabaseSchemaVersion?: number;
   seedVersion?: string;

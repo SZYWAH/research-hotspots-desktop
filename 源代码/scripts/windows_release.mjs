@@ -9,8 +9,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const VERSION = PACKAGE.version;
 const DATABASE_FILE = "research-hotspots-v7.sqlite";
-const MANIFEST_SCHEMA_VERSION = 2;
-const GENERATOR_VERSION = "v20-seed-2";
+const MANIFEST_SCHEMA_VERSION = 3;
+const GENERATOR_VERSION = "agent-seed-3";
 const DATABASE_DIR = join(ROOT, "data", "library");
 const SOURCE_DATABASE = join(DATABASE_DIR, DATABASE_FILE);
 const SEED_DIR = join(ROOT, "release-assets", "default-library");
@@ -134,6 +134,17 @@ function preflight(revision) {
   run(PNPM, ["audit:backup-restore"]);
   run(PNPM, ["audit:hotspot-library"]);
   run(PNPM, ["visual:galaxy:paper-audit"]);
+  run(PNPM, ["audit:agent-ui"]);
+  run(PNPM, ["audit:agent-persistence"]);
+  run(PNPM, ["audit:agent-executor"]);
+  run(PNPM, ["audit:agent-model-gateway"]);
+  run(PNPM, ["audit:agent-capabilities"]);
+  run(PNPM, ["audit:agent-long-tasks"]);
+  run(PNPM, ["audit:agent-quality"]);
+  run(PNPM, ["audit:agent-atomicity"]);
+  run(PNPM, ["audit:agent-release-security"]);
+  run(PNPM, ["audit:agent-migrations"]);
+  run(PNPM, ["audit:agent-desktop-acceptance"]);
   run(PNPM, ["audit:windows-release"]);
   run(PNPM, ["build"], revision);
   run("cargo", ["check", "--workspace", "--manifest-path", "src-tauri/Cargo.toml"]);
@@ -142,7 +153,7 @@ function preflight(revision) {
 }
 
 function removeDevelopmentBinaries() {
-  for (const name of ["audit_library.exe", "export_app17_visual_review.exe", "export_hotspot_evidence.exe", "export_star_map.exe", "import_library.exe", "prepare_default_library.exe"]) {
+  for (const name of ["audit_library.exe", "audit_agent_performance.exe", "export_app17_visual_review.exe", "export_hotspot_evidence.exe", "export_star_map.exe", "import_library.exe", "prepare_default_library.exe"]) {
     const path = join(TARGET_RELEASE_DIR, name);
     if (existsSync(path)) rmSync(path, { force: true });
   }
@@ -191,8 +202,8 @@ function writeReleaseNotes(revision) {
   const manifest = existsSync(SEED_MANIFEST) ? JSON.parse(readFileSync(SEED_MANIFEST, "utf8")) : undefined;
   const snapshotZh = manifest ? `Full 默认库快照：${manifest.snapshotId}，${manifest.paperCount.toLocaleString("zh-CN")} 篇论文、${manifest.hotspotCount} 个热点、${manifest.membershipCount.toLocaleString("zh-CN")} 条归属。\n` : "";
   const snapshotEn = manifest ? `Full seed snapshot: ${manifest.snapshotId}; ${manifest.paperCount.toLocaleString("en-US")} papers, ${manifest.hotspotCount} hotspots, and ${manifest.membershipCount.toLocaleString("en-US")} memberships.\n` : "";
-  const zh = `# Research Hotspots Desktop ${VERSION}\n\n这是未签名的 Windows x64 内部测试版，构建提交 ${revision}.\n\n${snapshotZh}\n## 安装包区别\n\n- **Full**：包含上述 V20 默认论文库；首次启动默认选择安装默认库。\n- **Lite**：不含任何论文数据；首次启动默认选择创建空白库。\n- 两个版本均可创建空白库或接入现有 SQLite 库，且不会自动运行热点聚类。\n\n## 安装提示\n\n- 安装器支持简体中文和英文。\n- 缺少 Microsoft Edge WebView2 Runtime 时，安装过程需要联网下载。\n- 当前版本未代码签名，Windows SmartScreen 可能拦截；请先核对 SHA-256。\n- 首次启动必须选择可写的数据目录，应用禁止覆盖已有数据库。\n- 升级、重装和卸载不会删除用户选择的数据库目录或 Windows Credential Manager 凭据。\n`;
-  const en = `# Research Hotspots Desktop ${VERSION}\n\nThis is an unsigned Windows x64 internal beta built from commit ${revision}.\n\n${snapshotEn}\n## Packages\n\n- **Full** embeds the V20 seed above and defaults to installing it on first launch.\n- **Lite** embeds no paper data and defaults to creating an empty library.\n- Both editions can create an empty library or attach an existing SQLite library; neither starts clustering automatically.\n\n## Installation notes\n\n- The installer supports English and Simplified Chinese.\n- If Microsoft Edge WebView2 Runtime is missing, setup needs internet access to download it.\n- This build is not code-signed, so Windows SmartScreen may warn. Verify SHA-256 before continuing.\n- First launch requires a writable data directory, and existing databases are never overwritten.\n- Upgrade, reinstall, and uninstall do not delete the selected database directory or Windows Credential Manager credentials.\n`;
+  const zh = `# Research Hotspots Desktop ${VERSION}\n\n这是未签名的 Windows x64 Beta 预发布版，构建提交 ${revision}.\n\n${snapshotZh}\n## 主要内容\n\n- 新增受监督研究 Agent：计划审批、写动作审批、证据固化、报告审计、恢复与成本统计。\n- 导入、清洗、V20 建模和 Markdown/HTML 正式导出均受高风险审批、租约和幂等 receipt 约束。\n- 本版本不包含在线学术来源或校园图书馆连接器。\n\n## 安装包区别\n\n- **Full**：包含上述 schema 11 V20 默认论文库；首次启动默认选择安装默认库。\n- **Lite**：不含任何论文数据；首次启动默认选择创建 schema 11 空白库。\n- 两个版本均可创建空白库或接入现有 SQLite 库，且不会自动运行热点聚类。\n\n## 安装提示\n\n- 安装器支持简体中文和英文。\n- 缺少 Microsoft Edge WebView2 Runtime 时，安装过程需要联网下载。\n- 当前版本未代码签名，Windows SmartScreen 可能拦截；请先核对 SHA-256。\n- 用户库升级前会创建迁移安全副本；首次启动禁止覆盖已有数据库。\n- 升级、重装和卸载不会删除用户选择的数据库目录或 Windows Credential Manager 凭据。\n`;
+  const en = `# Research Hotspots Desktop ${VERSION}\n\nThis is an unsigned Windows x64 beta prerelease built from commit ${revision}.\n\n${snapshotEn}\n## Highlights\n\n- Adds the supervised Research Agent with plan/action approvals, immutable evidence, report auditing, recovery, and usage insights.\n- Import, cleaning, V20 modeling, and Markdown/HTML export are governed by high-risk approval, leases, and idempotent receipts.\n- Online academic sources and campus-library connectors are not included in this release.\n\n## Packages\n\n- **Full** embeds the schema 11 V20 seed above and defaults to installing it on first launch.\n- **Lite** embeds no paper data and defaults to creating an empty schema 11 library.\n- Both editions can create an empty library or attach an existing SQLite library; neither starts clustering automatically.\n\n## Installation notes\n\n- The installer supports English and Simplified Chinese.\n- If Microsoft Edge WebView2 Runtime is missing, setup needs internet access to download it.\n- This build is not code-signed, so Windows SmartScreen may warn. Verify SHA-256 before continuing.\n- A safety backup is created before user-library migration; existing databases are never overwritten during first run.\n- Upgrade, reinstall, and uninstall do not delete the selected database directory or Windows Credential Manager credentials.\n`;
   writeFileSync(join(OUTPUT_DIR, "RELEASE_NOTES_zh-CN.md"), zh, "utf8");
   writeFileSync(join(OUTPUT_DIR, "RELEASE_NOTES_en-US.md"), en, "utf8");
 }
