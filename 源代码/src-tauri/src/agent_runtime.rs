@@ -39,12 +39,12 @@ use research_hotspots_core::agent_tools::{
     execute_read_tool, load_hotspot_evidence, resolve_dynamic_input, AgentHotspotEvidenceResult,
     AgentReadToolContext, AgentReferenceSource, AgentToolDefinition, AgentToolRegistry,
 };
-#[cfg(not(test))]
 use research_hotspots_core::current_library_revision;
 use research_hotspots_core::{sha256_file, validate_active_snapshot, AnalysisState};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::State;
 
 use super::agent_model_gateway::{
@@ -1407,7 +1407,12 @@ fn write_export_file(
         return Err("AGENT_EXPORT_FILE_NAME_INVALID".into());
     }
     let final_path = directory.join(file_name);
+    let expected_sha256 = format!("{:x}", Sha256::digest(content));
     if final_path.exists() {
+        let existing_sha256 = sha256_file(&final_path)?;
+        if existing_sha256 == expected_sha256 {
+            return Ok((final_path, existing_sha256));
+        }
         return Err("AGENT_EXPORT_FILE_EXISTS".into());
     }
     let partial_path = directory.join(format!(".{file_name}.partial"));
@@ -1433,7 +1438,11 @@ fn write_export_file(
         let _ = fs::remove_file(&partial_path);
         return Err(error);
     }
-    Ok((final_path.clone(), sha256_file(&final_path)?))
+    let written_sha256 = sha256_file(&final_path)?;
+    if written_sha256 != expected_sha256 {
+        return Err("AGENT_EXPORT_HASH_MISMATCH".into());
+    }
+    Ok((final_path, written_sha256))
 }
 
 #[cfg(not(test))]
@@ -1447,7 +1456,7 @@ fn execute_extended_tool_sync(
     input: &Value,
     cancellation: ModelCancellation,
 ) -> Result<ToolExecutionSuccess, ToolExecutionFailure> {
-    let mut connection = open_agent_connection(path).map_err(ToolExecutionFailure::policy)?;
+    let connection = open_agent_connection(path).map_err(ToolExecutionFailure::policy)?;
     match definition.name.as_str() {
         "import_papers" => {
             let grant_id = input
@@ -1502,7 +1511,7 @@ fn execute_extended_tool_sync(
                 true,
             )
             .map_err(ToolExecutionFailure::policy)?;
-            let _lease_release = LibraryLeaseRelease::new(path, lease.clone());
+            let lease_release = LibraryLeaseRelease::new(path, lease.clone());
             AgentCapabilityRepository::new(&connection)
                 .and_then(|repo| {
                     repo.update_operation_progress(
@@ -1656,36 +1665,20 @@ fn execute_extended_tool_sync(
                     )
                 })
                 .map_err(ToolExecutionFailure::policy)?;
-            let mutation = super::upsert_paper_rows(&mut connection, &run.project_id, papers)
-                .map_err(ToolExecutionFailure::policy)?;
-            let revision = current_library_revision(&connection, &run.project_id)
-                .map_err(ToolExecutionFailure::policy)?;
-            AgentCapabilityRepository::new(&connection)
-                .and_then(|repo| repo.consume_resource_grant(&grant.id, &run.id, timestamp_ms()))
-                .map_err(ToolExecutionFailure::policy)?;
-            AgentCapabilityRepository::new(&connection)
-                .and_then(|repo| repo.clear_staging(&operation.id).map(|_| ()))
-                .map_err(ToolExecutionFailure::policy)?;
-            let content = json!({"operationId":operation.id,"inserted":mutation.inserted,"updated":mutation.updated,"total":mutation.total,"libraryRevision":revision,"snapshotInvalidated":true,"stagingCleaned":true,"sourceFingerprint":grant.fingerprint_sha256});
-            finish_long_operation(&connection, &operation, lease.as_ref(), Ok(&content))
-                .map_err(ToolExecutionFailure::policy)?;
-            safe_remove_operation_staging(&staging_root, &staging_dir);
-            let artifact = artifact_record(
-                &run.id,
-                step_id,
-                "import_audit",
-                content,
-                None,
-                None,
-                Some("approved"),
-                None,
-            )
-            .map_err(ToolExecutionFailure::policy)?;
             Ok(ToolExecutionSuccess {
-                output: artifact_output(&artifact),
-                artifact: Some(artifact),
+                output: Value::Null,
+                artifact: None,
                 protocol_repairs: 0,
                 report_rewrite: false,
+                deferred_commit: Some(DeferredToolCommit::Import {
+                    project_id: run.project_id.clone(),
+                    papers,
+                    operation_id: operation.id,
+                    grant_id: grant.id,
+                    source_fingerprint: grant.fingerprint_sha256,
+                }),
+                library_lease_release: Some(lease_release),
+                cleanup_after_commit: Some((staging_root, staging_dir)),
             })
         }
         "clean_paper_library" => {
@@ -1725,7 +1718,7 @@ fn execute_extended_tool_sync(
                 true,
             )
             .map_err(ToolExecutionFailure::policy)?;
-            let _lease_release = LibraryLeaseRelease::new(path, lease.clone());
+            let lease_release = LibraryLeaseRelease::new(path, lease.clone());
             AgentCapabilityRepository::new(&connection)
                 .and_then(|repo| {
                     repo.update_operation_progress(
@@ -1740,29 +1733,18 @@ fn execute_extended_tool_sync(
                     )
                 })
                 .map_err(ToolExecutionFailure::policy)?;
-            let result = super::clean_library_connection(&mut connection, &run.project_id)
-                .map_err(ToolExecutionFailure::policy)?;
-            let revision = current_library_revision(&connection, &run.project_id)
-                .map_err(ToolExecutionFailure::policy)?;
-            let content = json!({"operationId":operation.id,"beforeCount":result.before_count,"afterCount":result.after_count,"removedCount":result.removed_count,"updatedCount":result.updated_count,"emptyRemovedCount":result.empty_removed_count,"duplicateRemovedCount":result.duplicate_removed_count,"libraryRevision":revision,"snapshotInvalidated":true,"previewHash":expected_hash});
-            finish_long_operation(&connection, &operation, lease.as_ref(), Ok(&content))
-                .map_err(ToolExecutionFailure::policy)?;
-            let artifact = artifact_record(
-                &run.id,
-                step_id,
-                "maintenance_audit",
-                content,
-                None,
-                None,
-                Some("approved"),
-                None,
-            )
-            .map_err(ToolExecutionFailure::policy)?;
             Ok(ToolExecutionSuccess {
-                output: artifact_output(&artifact),
-                artifact: Some(artifact),
+                output: Value::Null,
+                artifact: None,
                 protocol_repairs: 0,
                 report_rewrite: false,
+                deferred_commit: Some(DeferredToolCommit::Clean {
+                    project_id: run.project_id.clone(),
+                    operation_id: operation.id,
+                    preview_hash: expected_hash.to_string(),
+                }),
+                library_lease_release: Some(lease_release),
+                cleanup_after_commit: None,
             })
         }
         "rebuild_v20_snapshot" => {
@@ -1811,31 +1793,20 @@ fn execute_extended_tool_sync(
                     )
                 })
                 .map_err(ToolExecutionFailure::policy)?;
-            let _lease_release = LibraryLeaseRelease::new(path, lease.clone());
-            let result = super::cluster_library_connection(&connection, &run.project_id)
+            let lease_release = LibraryLeaseRelease::new(path, lease.clone());
+            let prepared = super::prepare_library_cluster(&connection, &run.project_id)
                 .map_err(ToolExecutionFailure::policy)?;
-            let active = validate_active_snapshot(&connection, &run.project_id)
-                .map_err(ToolExecutionFailure::policy)?
-                .ok_or_else(|| ToolExecutionFailure::policy("AGENT_V20_SNAPSHOT_NOT_ACTIVE"))?;
-            let content = json!({"operationId":operation.id,"snapshotId":result.snapshot_id,"paperCount":result.before_count,"hotspotCount":result.cluster_count,"membershipCount":result.membership_count,"libraryRevision":revision,"activeSnapshotId":active.active_snapshot_id});
-            finish_long_operation(&connection, &operation, lease.as_ref(), Ok(&content))
-                .map_err(ToolExecutionFailure::policy)?;
-            let artifact = artifact_record(
-                &run.id,
-                step_id,
-                "snapshot_reference",
-                content,
-                Some(result.snapshot_id),
-                None,
-                Some("approved"),
-                None,
-            )
-            .map_err(ToolExecutionFailure::policy)?;
             Ok(ToolExecutionSuccess {
-                output: artifact_output(&artifact),
-                artifact: Some(artifact),
+                output: Value::Null,
+                artifact: None,
                 protocol_repairs: 0,
                 report_rewrite: false,
+                deferred_commit: Some(DeferredToolCommit::RebuildV20 {
+                    operation_id: operation.id,
+                    prepared,
+                }),
+                library_lease_release: Some(lease_release),
+                cleanup_after_commit: None,
             })
         }
         "export_report_artifact" => {
@@ -1918,7 +1889,8 @@ fn execute_extended_tool_sync(
                     )
                 })
                 .map_err(ToolExecutionFailure::policy)?;
-            let base = format!("research-report-{safe_report_id}");
+            let operation_suffix = &operation_key[..operation_key.len().min(12)];
+            let base = format!("research-report-{safe_report_id}-{operation_suffix}");
             let mut files = Vec::new();
             for format in formats {
                 match format.as_str() {
@@ -1950,27 +1922,19 @@ fn execute_extended_tool_sync(
                 }
             }
             let content = json!({"operationId":operation.id,"reportArtifactId":report.id,"reportContentHash":report.content_sha256,"files":files,"partialFilesRemaining":false});
-            finish_long_operation(&connection, &operation, None, Ok(&content))
-                .map_err(ToolExecutionFailure::policy)?;
-            AgentCapabilityRepository::new(&connection)
-                .and_then(|repo| repo.consume_resource_grant(&grant.id, &run.id, timestamp_ms()))
-                .map_err(ToolExecutionFailure::policy)?;
-            let artifact = artifact_record(
-                &run.id,
-                step_id,
-                "export_manifest",
-                content,
-                report.snapshot_id,
-                None,
-                Some("approved"),
-                None,
-            )
-            .map_err(ToolExecutionFailure::policy)?;
             Ok(ToolExecutionSuccess {
-                output: artifact_output(&artifact),
-                artifact: Some(artifact),
+                output: Value::Null,
+                artifact: None,
                 protocol_repairs: 0,
                 report_rewrite: false,
+                deferred_commit: Some(DeferredToolCommit::Export {
+                    operation_id: operation.id,
+                    grant_id: grant.id,
+                    content,
+                    snapshot_id: report.snapshot_id,
+                }),
+                library_lease_release: None,
+                cleanup_after_commit: None,
             })
         }
         _ => Err(ToolExecutionFailure::policy("AGENT_TOOL_EXECUTOR_MISSING")),
@@ -2037,12 +2001,198 @@ fn find_artifact<'a>(
         .ok_or_else(|| "AGENT_ARTIFACT_NOT_FOUND".into())
 }
 
-#[derive(Debug)]
 struct ToolExecutionSuccess {
     output: Value,
     artifact: Option<AgentArtifactRecord>,
     protocol_repairs: u32,
     report_rewrite: bool,
+    deferred_commit: Option<DeferredToolCommit>,
+    library_lease_release: Option<LibraryLeaseRelease>,
+    cleanup_after_commit: Option<(PathBuf, PathBuf)>,
+}
+
+enum DeferredToolCommit {
+    Import {
+        project_id: String,
+        papers: Vec<super::PaperRecord>,
+        operation_id: String,
+        grant_id: String,
+        source_fingerprint: String,
+    },
+    Clean {
+        project_id: String,
+        operation_id: String,
+        preview_hash: String,
+    },
+    RebuildV20 {
+        operation_id: String,
+        prepared: super::PreparedLibraryCluster,
+    },
+    Export {
+        operation_id: String,
+        grant_id: String,
+        content: Value,
+        snapshot_id: Option<String>,
+    },
+}
+
+fn assert_library_operation_lease(
+    transaction: &Transaction<'_>,
+    lease: Option<&LibraryOperationLease>,
+    now: i64,
+) -> Result<(), String> {
+    let Some(lease) = lease else {
+        return Ok(());
+    };
+    let held: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM library_operation_leases WHERE lease_key=?1 AND owner_id=?2 AND lease_token=?3 AND generation=?4 AND expires_at_ms>?5",
+            params![lease.lease_key, lease.owner_id, lease.lease_token, lease.generation, now],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if held != 1 {
+        return Err("LIBRARY_OPERATION_LEASE_LOST".into());
+    }
+    Ok(())
+}
+
+fn apply_deferred_tool_commit(
+    transaction: &Transaction<'_>,
+    run_id: &str,
+    step_id: &str,
+    deferred: DeferredToolCommit,
+    lease: Option<&LibraryOperationLease>,
+    now: i64,
+) -> Result<(Value, Option<AgentArtifactRecord>), String> {
+    assert_library_operation_lease(transaction, lease, now)?;
+    let (kind, content, snapshot_id) = match deferred {
+        DeferredToolCommit::Import {
+            project_id,
+            papers,
+            operation_id,
+            grant_id,
+            source_fingerprint,
+        } => {
+            let mutation = super::upsert_paper_rows_in_transaction(
+                transaction,
+                &project_id,
+                papers,
+            )?;
+            let revision = current_library_revision(transaction, &project_id)?;
+            let capability = AgentCapabilityRepository::new(transaction)?;
+            capability.consume_resource_grant(&grant_id, run_id, now)?;
+            capability.clear_staging(&operation_id)?;
+            let content = json!({"operationId":operation_id,"inserted":mutation.inserted,"updated":mutation.updated,"total":mutation.total,"libraryRevision":revision,"snapshotInvalidated":true,"stagingCleaned":true,"sourceFingerprint":source_fingerprint});
+            capability.finish_operation(
+                &operation_id,
+                AgentOperationStatus::Succeeded,
+                Some(&content),
+                None,
+                now,
+            )?;
+            ("import_audit", content, None)
+        }
+        DeferredToolCommit::Clean {
+            project_id,
+            operation_id,
+            preview_hash,
+        } => {
+            let result = super::clean_library_in_transaction(transaction, &project_id)?;
+            let revision = current_library_revision(transaction, &project_id)?;
+            let content = json!({"operationId":operation_id,"beforeCount":result.before_count,"afterCount":result.after_count,"removedCount":result.removed_count,"updatedCount":result.updated_count,"emptyRemovedCount":result.empty_removed_count,"duplicateRemovedCount":result.duplicate_removed_count,"libraryRevision":revision,"snapshotInvalidated":true,"previewHash":preview_hash});
+            AgentCapabilityRepository::new(transaction)?.finish_operation(
+                &operation_id,
+                AgentOperationStatus::Succeeded,
+                Some(&content),
+                None,
+                now,
+            )?;
+            ("maintenance_audit", content, None)
+        }
+        DeferredToolCommit::RebuildV20 {
+            operation_id,
+            prepared,
+        } => {
+            let result = super::commit_prepared_library_cluster(transaction, &prepared)?;
+            let revision = current_library_revision(transaction, &prepared.snapshot.project_id)?;
+            let content = json!({"operationId":operation_id,"snapshotId":result.snapshot_id,"paperCount":result.before_count,"hotspotCount":result.cluster_count,"membershipCount":result.membership_count,"libraryRevision":revision,"activeSnapshotId":result.snapshot_id});
+            AgentCapabilityRepository::new(transaction)?.finish_operation(
+                &operation_id,
+                AgentOperationStatus::Succeeded,
+                Some(&content),
+                None,
+                now,
+            )?;
+            ("snapshot_reference", content, Some(result.snapshot_id))
+        }
+        DeferredToolCommit::Export {
+            operation_id,
+            grant_id,
+            content,
+            snapshot_id,
+        } => {
+            let capability = AgentCapabilityRepository::new(transaction)?;
+            capability.consume_resource_grant(&grant_id, run_id, now)?;
+            capability.finish_operation(
+                &operation_id,
+                AgentOperationStatus::Succeeded,
+                Some(&content),
+                None,
+                now,
+            )?;
+            ("export_manifest", content, snapshot_id)
+        }
+    };
+    let artifact = artifact_record(
+        run_id,
+        step_id,
+        kind,
+        content,
+        snapshot_id,
+        None,
+        Some("approved"),
+        None,
+    )?;
+    Ok((artifact_output(&artifact), Some(artifact)))
+}
+
+fn apply_execution_budget_updates(
+    transaction: &Transaction<'_>,
+    run_id: &str,
+    protocol_repairs: u32,
+    report_rewrite: bool,
+) -> Result<(), String> {
+    if protocol_repairs == 0 && !report_rewrite {
+        return Ok(());
+    }
+    let (budget_json, usage_json): (String, String) = transaction
+        .query_row(
+            "SELECT budget_json,budget_usage_json FROM agent_runs WHERE id=?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    let budget: AgentBudget =
+        serde_json::from_str(&budget_json).map_err(|error| error.to_string())?;
+    let mut usage: AgentBudgetUsage =
+        serde_json::from_str(&usage_json).map_err(|error| error.to_string())?;
+    if usage.protocol_repairs.saturating_add(protocol_repairs) > budget.max_protocol_repairs {
+        return Err("AGENT_PROTOCOL_REPAIR_BUDGET_EXHAUSTED".into());
+    }
+    if report_rewrite && usage.report_rewrites.saturating_add(1) > budget.max_report_rewrites {
+        return Err("AGENT_REPORT_REWRITE_BUDGET_EXHAUSTED".into());
+    }
+    usage.protocol_repairs += protocol_repairs;
+    usage.report_rewrites += u32::from(report_rewrite);
+    let encoded = serde_json::to_string(&usage).map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE agent_runs SET budget_usage_json=?2 WHERE id=?1",
+            params![run_id, encoded],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2250,6 +2400,9 @@ async fn execute_governed_tool(
             artifact: None,
             protocol_repairs: 0,
             report_rewrite: false,
+            deferred_commit: None,
+            library_lease_release: None,
+            cleanup_after_commit: None,
         });
     }
 
@@ -2299,6 +2452,9 @@ async fn execute_governed_tool(
                 artifact: Some(artifact),
                 protocol_repairs: 0,
                 report_rewrite: false,
+                deferred_commit: None,
+                library_lease_release: None,
+                cleanup_after_commit: None,
             })
         }
         "create_report_draft" => {
@@ -2361,6 +2517,9 @@ async fn execute_governed_tool(
                 artifact: Some(artifact),
                 protocol_repairs: turn.structure_repair_count as u32,
                 report_rewrite: false,
+                deferred_commit: None,
+                library_lease_release: None,
+                cleanup_after_commit: None,
             })
         }
         "revise_report_draft" => {
@@ -2429,6 +2588,9 @@ async fn execute_governed_tool(
                 artifact: Some(artifact),
                 protocol_repairs: turn.structure_repair_count as u32,
                 report_rewrite: true,
+                deferred_commit: None,
+                library_lease_release: None,
+                cleanup_after_commit: None,
             })
         }
         "inspect_report_audit" => {
@@ -2464,6 +2626,9 @@ async fn execute_governed_tool(
                 artifact: Some(artifact),
                 protocol_repairs: 0,
                 report_rewrite: false,
+                deferred_commit: None,
+                library_lease_release: None,
+                cleanup_after_commit: None,
             })
         }
         _ => Err(ToolExecutionFailure::policy("AGENT_TOOL_EXECUTOR_MISSING")),
@@ -3646,7 +3811,6 @@ async fn execute_run_loop(
         }
         match execution {
             Ok(success) => {
-                registry.validate_output(&definition.name, &success.output)?;
                 let operation_key = repository.operation_key(
                     &run.id,
                     version,
@@ -3656,54 +3820,72 @@ async fn execute_run_loop(
                 )?;
                 let protocol_repairs = success.protocol_repairs;
                 let report_rewrite = success.report_rewrite;
-                repository.commit_tool_success(
-                    fence,
-                    version,
-                    &step.step_id,
-                    &operation_key,
-                    &definition.name,
-                    &action_hash,
-                    &success.output,
-                    success.artifact.as_ref(),
-                    timestamp_ms(),
-                    move |transaction| {
-                        if protocol_repairs == 0 && !report_rewrite {
-                            return Ok(());
-                        }
-                        let (budget_json, usage_json): (String, String) = transaction
-                            .query_row(
-                                "SELECT budget_json,budget_usage_json FROM agent_runs WHERE id=?1",
-                                params![run.id],
-                                |row| Ok((row.get(0)?, row.get(1)?)),
+                let ToolExecutionSuccess {
+                    output,
+                    artifact,
+                    deferred_commit,
+                    library_lease_release,
+                    cleanup_after_commit,
+                    ..
+                } = success;
+                let now = timestamp_ms();
+                if let Some(deferred) = deferred_commit {
+                    let lease = library_lease_release
+                        .as_ref()
+                        .and_then(|release| release.lease.as_ref());
+                    repository.commit_tool_success_generated(
+                        fence,
+                        version,
+                        &step.step_id,
+                        &operation_key,
+                        &definition.name,
+                        &action_hash,
+                        now,
+                        |transaction| {
+                            apply_execution_budget_updates(
+                                transaction,
+                                &run.id,
+                                protocol_repairs,
+                                report_rewrite,
+                            )?;
+                            let (result, artifact) = apply_deferred_tool_commit(
+                                transaction,
+                                &run.id,
+                                &step.step_id,
+                                deferred,
+                                lease,
+                                now,
+                            )?;
+                            registry.validate_output(&definition.name, &result)?;
+                            Ok((result, artifact))
+                        },
+                    )?;
+                } else {
+                    registry.validate_output(&definition.name, &output)?;
+                    repository.commit_tool_success(
+                        fence,
+                        version,
+                        &step.step_id,
+                        &operation_key,
+                        &definition.name,
+                        &action_hash,
+                        &output,
+                        artifact.as_ref(),
+                        now,
+                        |transaction| {
+                            apply_execution_budget_updates(
+                                transaction,
+                                &run.id,
+                                protocol_repairs,
+                                report_rewrite,
                             )
-                            .map_err(|error| error.to_string())?;
-                        let budget: AgentBudget = serde_json::from_str(&budget_json)
-                            .map_err(|error| error.to_string())?;
-                        let mut usage: AgentBudgetUsage =
-                            serde_json::from_str(&usage_json).map_err(|error| error.to_string())?;
-                        if usage.protocol_repairs.saturating_add(protocol_repairs)
-                            > budget.max_protocol_repairs
-                        {
-                            return Err("AGENT_PROTOCOL_REPAIR_BUDGET_EXHAUSTED".into());
-                        }
-                        if report_rewrite
-                            && usage.report_rewrites.saturating_add(1) > budget.max_report_rewrites
-                        {
-                            return Err("AGENT_REPORT_REWRITE_BUDGET_EXHAUSTED".into());
-                        }
-                        usage.protocol_repairs += protocol_repairs;
-                        usage.report_rewrites += u32::from(report_rewrite);
-                        let encoded =
-                            serde_json::to_string(&usage).map_err(|error| error.to_string())?;
-                        transaction
-                            .execute(
-                                "UPDATE agent_runs SET budget_usage_json=?2 WHERE id=?1",
-                                params![run.id, encoded],
-                            )
-                            .map_err(|error| error.to_string())?;
-                        Ok(())
-                    },
-                )?;
+                        },
+                    )?;
+                }
+                if let Some((root, directory)) = cleanup_after_commit {
+                    safe_remove_operation_staging(&root, &directory);
+                }
+                drop(library_lease_release);
             }
             Err(failure) => {
                 if failure.protocol_repairs > 0 {

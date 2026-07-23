@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -149,6 +149,23 @@ pub fn write_snapshot_transaction(
     input: &SnapshotWriteInput,
 ) -> Result<AnalysisState, String> {
     ensure_v20_schema(conn)?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let state = write_snapshot_in_transaction(&tx, input)?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(state)
+}
+
+/// Writes and activates a prepared V20 snapshot inside the caller's transaction.
+///
+/// This is the commit primitive used by governed Agent operations so the V20
+/// rows, active-state switch, Agent artifact and idempotency receipt can share
+/// one SQLite commit boundary.
+pub fn write_snapshot_in_transaction(
+    tx: &Transaction<'_>,
+    input: &SnapshotWriteInput,
+) -> Result<AnalysisState, String> {
     if input.paper_count != input.memberships.len() as i64 {
         return Err(format!(
             "V20_MEMBERSHIP_COUNT_MISMATCH: papers={}, memberships={}",
@@ -168,9 +185,6 @@ pub fn write_snapshot_transaction(
     {
         return Err("V20_MEMBERSHIP_HOTSPOT_MISSING".to_string());
     }
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|error| error.to_string())?;
     tx.execute(
         "INSERT INTO library_revision_state(project_id,revision,updated_at_ms) VALUES (?1,0,0) ON CONFLICT(project_id) DO NOTHING",
         params![input.project_id],
@@ -229,9 +243,16 @@ pub fn write_snapshot_transaction(
         "INSERT INTO v20_analysis_state(project_id, active_snapshot_id, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(project_id) DO UPDATE SET active_snapshot_id = excluded.active_snapshot_id, updated_at = excluded.updated_at",
         params![input.project_id, input.snapshot_id, input.created_at],
     ).map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())?;
-    read_analysis_state(conn, &input.project_id)?
-        .ok_or_else(|| "V20_STATE_SWITCH_FAILED".to_string())
+    Ok(AnalysisState {
+        project_id: input.project_id.clone(),
+        active_snapshot_id: input.snapshot_id.clone(),
+        algorithm_version: input.algorithm_version.clone(),
+        paper_count: input.paper_count,
+        hotspot_count: input.hotspots.len() as i64,
+        membership_count: input.memberships.len() as i64,
+        generated_at: input.created_at.clone(),
+        library_revision,
+    })
 }
 
 pub fn read_analysis_state(

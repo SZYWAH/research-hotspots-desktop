@@ -2508,22 +2508,44 @@ impl<'a> AgentRepository<'a> {
     where
         F: FnOnce(&Transaction<'_>) -> Result<(), String>,
     {
+        let result = result.clone();
+        let artifact = artifact.cloned();
+        self.commit_tool_success_generated(
+            fence,
+            plan_version,
+            step_id,
+            operation_key,
+            tool_name,
+            action_hash,
+            now,
+            move |transaction| {
+                mutation(transaction)?;
+                Ok((result, artifact))
+            },
+        )
+    }
+
+    pub fn commit_tool_success_generated<F>(
+        &self,
+        fence: &AgentLeaseFence,
+        plan_version: u32,
+        step_id: &str,
+        operation_key: &str,
+        tool_name: &str,
+        action_hash: &str,
+        now: i64,
+        mutation: F,
+    ) -> Result<Value, String>
+    where
+        F: FnOnce(
+            &Transaction<'_>,
+        ) -> Result<(Value, Option<AgentArtifactRecord>), String>,
+    {
         let expected_operation_key =
             self.operation_key(&fence.run_id, plan_version, step_id, tool_name, action_hash)?;
         if expected_operation_key != operation_key {
             return Err("AGENT_OPERATION_KEY_INVALID".into());
         }
-        if let Some(artifact) = artifact {
-            if artifact.run_id != fence.run_id
-                || artifact
-                    .step_id
-                    .as_deref()
-                    .is_some_and(|value| value != step_id)
-            {
-                return Err("AGENT_ARTIFACT_EXECUTION_CONTEXT_MISMATCH".into());
-            }
-        }
-        let result_text = value_text(result, AGENT_OBSERVATION_MAX_BYTES)?;
         let tx = self
             .conn
             .unchecked_transaction()
@@ -2540,22 +2562,33 @@ impl<'a> AgentRepository<'a> {
             if stored_tool!=tool_name||stored_hash!=action_hash{return Err("AGENT_OPERATION_KEY_COLLISION".into());}
             return serde_json::from_str(&stored_result).map_err(|e|e.to_string());
         }
-        mutation(&tx)?;
-        if let Some(artifact) = artifact {
+        let (result, artifact) = mutation(&tx)?;
+        if let Some(artifact) = artifact.as_ref() {
+            if artifact.run_id != fence.run_id
+                || artifact
+                    .step_id
+                    .as_deref()
+                    .is_some_and(|value| value != step_id)
+            {
+                return Err("AGENT_ARTIFACT_EXECUTION_CONTEXT_MISMATCH".into());
+            }
+        }
+        let result_text = value_text(&result, AGENT_OBSERVATION_MAX_BYTES)?;
+        if let Some(artifact) = artifact.as_ref() {
             insert_artifact(&tx, artifact)?;
         }
-        tx.execute("INSERT INTO agent_tool_receipts(operation_key,run_id,plan_version,step_id,tool_name,action_hash,result_json,artifact_id,committed_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![operation_key,fence.run_id,plan_version,step_id,tool_name,action_hash,result_text,artifact.map(|value|value.id.as_str()),now]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO agent_tool_receipts(operation_key,run_id,plan_version,step_id,tool_name,action_hash,result_json,artifact_id,committed_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![operation_key,fence.run_id,plan_version,step_id,tool_name,action_hash,result_text,artifact.as_ref().map(|value|value.id.as_str()),now]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE agent_steps SET status='succeeded',operation_key=?4,observation_json=?5,last_error_code=NULL,finished_at_ms=?6,updated_at_ms=?6 WHERE run_id=?1 AND plan_version=?2 AND step_id=?3",params![fence.run_id,plan_version,step_id,operation_key,result_text,now]).map_err(|e|e.to_string())?;
         append_event(
             &tx,
             &fence.run_id,
             "tool_committed",
             Some(step_id),
-            &json!({"planVersion":plan_version,"operationKey":operation_key,"actionHash":action_hash,"artifactId":artifact.map(|value|value.id.as_str())}),
+            &json!({"planVersion":plan_version,"operationKey":operation_key,"actionHash":action_hash,"artifactId":artifact.as_ref().map(|value|value.id.as_str())}),
             now,
         )?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(result.clone())
+        Ok(result)
     }
 
     pub fn commit_tool_failure(
@@ -4749,21 +4782,45 @@ mod tests {
                 [],
             )
             .unwrap();
+        assert_eq!(
+            repository
+                .commit_tool_success_generated(
+                    &fence,
+                    1,
+                    "step",
+                    &operation_key,
+                    "inspect_library",
+                    "action",
+                    14,
+                    |tx| {
+                        tx.execute("INSERT INTO governed_business VALUES(2)", [])
+                            .map_err(|error| error.to_string())?;
+                        Err("AGENT_ATOMICITY_INJECTED_BEFORE_RECEIPT".into())
+                    },
+                )
+                .unwrap_err(),
+            "AGENT_ATOMICITY_INJECTED_BEFORE_RECEIPT"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM governed_business", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         repository
-            .commit_tool_success(
+            .commit_tool_success_generated(
                 &fence,
                 1,
                 "step",
                 &operation_key,
                 "inspect_library",
                 "action",
-                &json!({"ok":true}),
-                Some(&artifact),
                 14,
                 |tx| {
                     tx.execute("INSERT INTO governed_business VALUES(1)", [])
                         .map_err(|error| error.to_string())?;
-                    Ok(())
+                    Ok((json!({"ok":true}), Some(artifact.clone())))
                 },
             )
             .unwrap();

@@ -28,11 +28,12 @@ use research_hotspots_core::{
     atomic_replace_file_with_rollback, create_empty_library_atomically, current_library_revision,
     install_seed_library_atomically, read_analysis_state, read_unified_galaxy_rows,
     read_unified_hotspot_rows, validate_active_snapshot, validate_library_candidate_connection,
-    validate_library_candidate_file, write_snapshot_transaction, AnalysisState, FirstRunMode,
-    SeedExpectation, SnapshotHotspot, SnapshotMembership, SnapshotWriteInput,
+    validate_library_candidate_file, write_snapshot_in_transaction, write_snapshot_transaction,
+    AnalysisState, FirstRunMode, SeedExpectation, SnapshotHotspot, SnapshotMembership,
+    SnapshotWriteInput,
     ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
 };
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{path::BaseDirectory, Emitter, Manager};
@@ -197,6 +198,8 @@ struct DefaultLibraryManifest {
     paper_count: i64,
     hotspot_count: i64,
     membership_count: i64,
+    #[serde(default)]
+    library_revision: i64,
     generated_at: String,
 }
 
@@ -219,6 +222,7 @@ struct LibrarySetupState {
     seed_paper_count: Option<i64>,
     seed_hotspot_count: Option<i64>,
     seed_membership_count: Option<i64>,
+    seed_library_revision: Option<i64>,
     seed_snapshot_id: Option<String>,
     seed_database_schema_version: Option<i64>,
     seed_version: Option<String>,
@@ -339,7 +343,7 @@ struct PaperLibraryFacets {
     years: Vec<CountFacet>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct PaperLibraryMutationResult {
     inserted: i64,
@@ -1012,7 +1016,7 @@ struct PaperFileImportProgress {
     elapsed_ms: u128,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PaperLibraryCleanResult {
     before_count: i64,
@@ -1092,7 +1096,7 @@ struct HotspotRecord {
     updated_at: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LibraryClusterResult {
     before_count: i64,
@@ -1101,6 +1105,12 @@ struct LibraryClusterResult {
     membership_count: i64,
     hotspots: Vec<HotspotRecord>,
     summary: String,
+}
+
+#[derive(Clone)]
+struct PreparedLibraryCluster {
+    snapshot: SnapshotWriteInput,
+    result: LibraryClusterResult,
 }
 
 #[derive(Serialize)]
@@ -1182,6 +1192,9 @@ fn get_library_setup_state(
             seed_membership_count: seed_manifest
                 .as_ref()
                 .map(|manifest| manifest.membership_count),
+            seed_library_revision: seed_manifest
+                .as_ref()
+                .map(|manifest| manifest.library_revision),
             seed_snapshot_id: seed_manifest
                 .as_ref()
                 .map(|manifest| manifest.snapshot_id.clone()),
@@ -1257,6 +1270,9 @@ fn get_library_setup_state(
         seed_membership_count: seed_manifest
             .as_ref()
             .map(|manifest| manifest.membership_count),
+        seed_library_revision: seed_manifest
+            .as_ref()
+            .map(|manifest| manifest.library_revision),
         seed_snapshot_id: seed_manifest
             .as_ref()
             .map(|manifest| manifest.snapshot_id.clone()),
@@ -1795,6 +1811,16 @@ fn upsert_paper_rows(
     papers: Vec<PaperRecord>,
 ) -> Result<PaperLibraryMutationResult, String> {
     let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let result = upsert_paper_rows_in_transaction(&tx, project_id, papers)?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(result)
+}
+
+fn upsert_paper_rows_in_transaction(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    papers: Vec<PaperRecord>,
+) -> Result<PaperLibraryMutationResult, String> {
     let mut inserted = 0;
     let mut updated = 0;
     {
@@ -1870,7 +1896,6 @@ fn upsert_paper_rows(
         project_id,
         now_millis().min(i64::MAX as u128) as i64,
     )?;
-    tx.commit().map_err(|error| error.to_string())?;
     Ok(PaperLibraryMutationResult {
         inserted,
         updated,
@@ -2156,6 +2181,15 @@ fn clean_library_connection(
     project_id: &str,
 ) -> Result<PaperLibraryCleanResult, String> {
     let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let result = clean_library_in_transaction(&tx, project_id)?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(result)
+}
+
+fn clean_library_in_transaction(
+    tx: &Transaction<'_>,
+    project_id: &str,
+) -> Result<PaperLibraryCleanResult, String> {
     let before_count = tx
         .query_row(
             "SELECT COUNT(*) FROM papers WHERE project_id = ?1",
@@ -2269,8 +2303,6 @@ fn clean_library_connection(
             now_millis().min(i64::MAX as u128) as i64,
         )?;
     }
-    tx.commit().map_err(|error| error.to_string())?;
-
     let removed_count = before_count - after_count;
     Ok(PaperLibraryCleanResult {
         before_count,
@@ -2382,6 +2414,15 @@ fn cluster_library_connection(
     conn: &Connection,
     project_id: &str,
 ) -> Result<LibraryClusterResult, String> {
+    let prepared = prepare_library_cluster(conn, project_id)?;
+    write_snapshot_transaction(conn, &prepared.snapshot)?;
+    Ok(prepared.result)
+}
+
+fn prepare_library_cluster(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<PreparedLibraryCluster, String> {
     let mut stmt = conn
         .prepare("SELECT id, field, title, abstract, year, source, categories, doi, url FROM papers WHERE project_id = ?1")
         .map_err(|error| error.to_string())?;
@@ -2519,9 +2560,7 @@ fn cluster_library_connection(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    write_snapshot_transaction(
-        conn,
-        &SnapshotWriteInput {
+    let snapshot = SnapshotWriteInput {
             snapshot_id: snapshot_id.clone(),
             project_id: project_id.to_string(),
             algorithm_version: V20_ALGORITHM_VERSION.to_string(),
@@ -2529,10 +2568,9 @@ fn cluster_library_connection(
             created_at: timestamp.clone(),
             hotspots: snapshot_hotspots,
             memberships: memberships.clone(),
-        },
-    )?;
+        };
 
-    Ok(LibraryClusterResult {
+    let result = LibraryClusterResult {
         before_count,
         cluster_count: hotspots.len() as i64,
         snapshot_id,
@@ -2543,7 +2581,16 @@ fn cluster_library_connection(
             memberships.len()
         ),
         hotspots,
-    })
+    };
+    Ok(PreparedLibraryCluster { snapshot, result })
+}
+
+fn commit_prepared_library_cluster(
+    tx: &Transaction<'_>,
+    prepared: &PreparedLibraryCluster,
+) -> Result<LibraryClusterResult, String> {
+    write_snapshot_in_transaction(tx, &prepared.snapshot)?;
+    Ok(prepared.result.clone())
 }
 
 fn hotspot_group_overlap(hotspot: &HotspotRecord, group: &ClusterGroup) -> f64 {
@@ -6283,13 +6330,16 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         .map_err(|error| format!("无法读取默认论文库清单 {:?}: {error}", manifest_path))?;
     let manifest: DefaultLibraryManifest = serde_json::from_str(&content)
         .map_err(|error| format!("默认论文库清单格式无效: {error}"))?;
-    if manifest.manifest_schema_version != 2
-        || manifest.database_schema_version != research_hotspots_core::V20_SCHEMA_VERSION
-    {
+    let beta2_compatible = manifest.manifest_schema_version == 2
+        && manifest.generator_version == "v20-seed-2"
+        && manifest.database_schema_version == research_hotspots_core::V20_SCHEMA_VERSION;
+    let v022_compatible = manifest.manifest_schema_version == 3
+        && manifest.generator_version == "agent-seed-3"
+        && manifest.database_schema_version == research_hotspots_core::LIBRARY_SCHEMA_VERSION;
+    if !beta2_compatible && !v022_compatible {
         return Err("默认论文库清单版本与当前应用不兼容。".to_string());
     }
-    if manifest.generator_version != "v20-seed-2"
-        || manifest.project_id.trim().is_empty()
+    if manifest.project_id.trim().is_empty()
         || manifest.snapshot_id.trim().is_empty()
         || manifest.membership_count != manifest.paper_count
     {
