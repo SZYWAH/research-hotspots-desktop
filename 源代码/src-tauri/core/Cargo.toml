@@ -1,6 +1,6 @@
 [package]
 name = "research-hotspots-core"
-version = "0.21.0-beta.2"
+version = "0.22.0-beta.1"
 edition = "2021"
 
 [dependencies]
