@@ -437,6 +437,8 @@ export type V20AnalysisState = {
   hotspotCount: number;
   membershipCount: number;
   generatedAt: string;
+  libraryRevision?: number;
+  currentLibraryRevision?: number;
 };
 
 export type V20HotspotSnapshot = V20AnalysisState & {

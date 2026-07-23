@@ -54,8 +54,20 @@ export function deriveAnalysisProgress({
       && snapshot.hotspotCount === hotspotCount
       && snapshot.hotspots.length === hotspotCount,
   );
-  const cleanCompletedAfterSnapshot = cleanJob?.status === "done" && jobIsNewerThanSnapshot(cleanJob, snapshot);
-  const snapshotCurrent = hasSnapshot && snapshotCountsMatch && !cleanCompletedAfterSnapshot;
+  const hasRevisionTruth = Number.isInteger(snapshot?.libraryRevision)
+    && Number.isInteger(snapshot?.currentLibraryRevision);
+  const snapshotRevisionMatches = !hasRevisionTruth
+    || snapshot?.libraryRevision === snapshot?.currentLibraryRevision;
+  // v11+ SQLite revision state is authoritative. IndexedDB jobs are retained
+  // for history and can belong to a previously selected database, so their
+  // timestamps must not invalidate a revision-matched snapshot.
+  const cleanCompletedAfterSnapshot = !hasRevisionTruth
+    && cleanJob?.status === "done"
+    && jobIsNewerThanSnapshot(cleanJob, snapshot);
+  const snapshotCurrent = hasSnapshot
+    && snapshotCountsMatch
+    && snapshotRevisionMatches
+    && !cleanCompletedAfterSnapshot;
   const snapshotStale = hasSnapshot && !snapshotCurrent;
 
   let cleanState: AnalysisStageState = "pending";

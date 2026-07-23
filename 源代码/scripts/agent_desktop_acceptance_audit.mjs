@@ -12,6 +12,9 @@ const checks = {
   sqliteOverview: client.includes("agent_get_run_overview"),
   lazyArtifacts: client.includes("agent_get_artifact"),
   noFrontendStateMachineMutation: !client.includes("set_agent_status"),
+  synchronousDuplicateSubmissionGuard: workspace.includes("createRunInFlightRef.current") && workspace.includes("commandInFlightRef.current"),
+  artifactRunSwitchGuard: workspace.includes("artifactRequestSequence.current") && workspace.includes("changingRun"),
+  artifactMetadataGuard: workspace.includes("overview.artifacts.some((artifact) => artifact.id === selectedArtifactId)"),
 };
 const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
 if (failed.length) throw new Error(`Agent desktop acceptance audit failed: ${failed.join(", ")}`);

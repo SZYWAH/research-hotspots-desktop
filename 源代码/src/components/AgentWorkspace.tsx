@@ -208,6 +208,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const requestSequence = useRef(0);
+  const commandInFlightRef = useRef(false);
+  const createRunInFlightRef = useRef(false);
+  const artifactRequestSequence = useRef(0);
   const currentRunRef = useRef("");
   const eventsRef = useRef<AgentEventRecord[]>([]);
 
@@ -245,10 +248,18 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   const applySnapshot = useCallback((snapshot: AgentRunSnapshot) => {
     const next = overviewFromSnapshot(snapshot);
+    const changingRun = currentRunRef.current !== next.run.id;
     setOverview(next);
     setEvents(snapshot.events);
     eventsRef.current = snapshot.events;
-    setArtifactCache((current) => ({ ...current, ...Object.fromEntries(snapshot.artifacts.map((artifact) => [artifact.id, artifact])) }));
+    const snapshotArtifacts = Object.fromEntries(snapshot.artifacts.map((artifact) => [artifact.id, artifact]));
+    if (changingRun) {
+      artifactRequestSequence.current += 1;
+      setSelectedArtifactId("");
+      setArtifactCache(snapshotArtifacts);
+    } else {
+      setArtifactCache((current) => ({ ...current, ...snapshotArtifacts }));
+    }
     currentRunRef.current = next.run.id;
     setSelectedRunId(next.run.id);
   }, []);
@@ -282,6 +293,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     setOverview(null);
     setEvents([]);
     eventsRef.current = [];
+    artifactRequestSequence.current += 1;
     setArtifactCache({});
     setSelectedArtifactId("");
     void loadRuns(false);
@@ -295,6 +307,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     }
     currentRunRef.current = selectedRunId;
     sessionStorage.setItem(`agent-run:${context.projectId}`, selectedRunId);
+    artifactRequestSequence.current += 1;
     setSelectedArtifactId("");
     setArtifactCache({});
     eventsRef.current = [];
@@ -318,7 +331,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   }, [loadOverview]);
 
   useEffect(() => {
-    if (!overview?.artifacts.length) return;
+    if (!overview?.artifacts.length) {
+      if (selectedArtifactId) setSelectedArtifactId("");
+      return;
+    }
     if (!selectedArtifactId || !overview.artifacts.some((artifact) => artifact.id === selectedArtifactId)) {
       setSelectedArtifactId(overview.artifacts[overview.artifacts.length - 1].id);
     }
@@ -326,16 +342,26 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   useEffect(() => {
     if (!selectedArtifactId || !overview || artifactCache[selectedArtifactId]) return;
+    if (!overview.artifacts.some((artifact) => artifact.id === selectedArtifactId)) return;
     const runId = overview.run.id;
+    const artifactId = selectedArtifactId;
+    const sequence = ++artifactRequestSequence.current;
     let active = true;
-    void client.getArtifact(context, runId, selectedArtifactId).then((artifact) => {
-      if (active && currentRunRef.current === runId) setArtifactCache((current) => ({ ...current, [artifact.id]: artifact }));
-    }).catch((value) => active && setError(errorMessage(value)));
+    void client.getArtifact(context, runId, artifactId).then((artifact) => {
+      if (active && sequence === artifactRequestSequence.current && currentRunRef.current === runId) {
+        setArtifactCache((current) => ({ ...current, [artifact.id]: artifact }));
+      }
+    }).catch((value) => {
+      if (active && sequence === artifactRequestSequence.current && currentRunRef.current === runId) {
+        setError(errorMessage(value));
+      }
+    });
     return () => { active = false; };
   }, [selectedArtifactId, overview, artifactCache, client, context]);
 
   const runCommand = useCallback(async (label: string, operation: () => Promise<AgentRunSnapshot>, autoContinue = false) => {
-    if (busy) return;
+    if (busy || commandInFlightRef.current) return;
+    commandInFlightRef.current = true;
     setBusy(label);
     setError("");
     try {
@@ -356,12 +382,14 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     } catch (value) {
       setError(errorMessage(value));
     } finally {
+      commandInFlightRef.current = false;
       setBusy("");
     }
   }, [busy, applySnapshot, client, context, loadRuns]);
 
   async function createRun() {
-    if ((draft.kind === "research_report" && !snapshotReady) || busy) return;
+    if ((draft.kind === "research_report" && !snapshotReady) || busy || createRunInFlightRef.current) return;
+    createRunInFlightRef.current = true;
     setBusy("create");
     setError("");
     let pendingGrantId = "";
@@ -421,6 +449,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         setError(errorMessage(value));
       }
     } finally {
+      createRunInFlightRef.current = false;
       setBusy("");
     }
   }

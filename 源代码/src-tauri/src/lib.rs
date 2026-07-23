@@ -739,6 +739,8 @@ struct V20HotspotSnapshot {
     hotspot_count: i64,
     membership_count: i64,
     generated_at: String,
+    library_revision: i64,
+    current_library_revision: i64,
     hotspots: Vec<HotspotRecord>,
 }
 
@@ -3609,6 +3611,7 @@ fn get_v20_hotspot_snapshot(
     let (conn, _, database_path) = open_library_database(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let database_key = normalized_database_key(&database_path);
+    let current_library_revision = current_library_revision(&conn, &project_id)?;
     let Some(rows) = read_unified_hotspot_rows(&conn, &project_id)? else {
         return Ok(V20HotspotSnapshot {
             database_key,
@@ -3620,6 +3623,8 @@ fn get_v20_hotspot_snapshot(
             hotspot_count: 0,
             membership_count: 0,
             generated_at: now_millis_string(),
+            library_revision: current_library_revision,
+            current_library_revision,
             hotspots: Vec::new(),
         });
     };
@@ -3641,6 +3646,8 @@ fn get_v20_hotspot_snapshot(
         hotspot_count: rows.state.hotspot_count,
         membership_count: rows.state.membership_count,
         generated_at: rows.state.generated_at,
+        library_revision: rows.state.library_revision,
+        current_library_revision,
         hotspots,
     })
 }

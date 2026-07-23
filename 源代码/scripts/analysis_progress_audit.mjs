@@ -12,6 +12,8 @@ const snapshot = {
   hotspotCount: 160,
   membershipCount: 25_463,
   generatedAt: "2026-07-20T08:00:00.000Z",
+  libraryRevision: 7,
+  currentLibraryRevision: 7,
   hotspots: Array.from({ length: 160 }, (_, index) => ({ id: `hotspot-${index}` })),
 };
 
@@ -42,7 +44,8 @@ assert.deepEqual(
 assert.equal(derive({ jobs: [job("clean", "queued", "2026-07-20T09:00:00.000Z")] }).cleanState, "done", "queued must not mean running");
 assert.equal(derive({ jobs: [job("clean", "running", "2026-07-20T09:00:00.000Z")] }).cleanState, "running", "real running job must override snapshot");
 assert.equal(derive({ jobs: [job("cluster", "running", "2026-07-20T09:00:00.000Z")] }).clusterState, "running", "real cluster task must override snapshot");
-assert.equal(derive({ jobs: [job("clean", "done", "2026-07-20T09:00:00.000Z")] }).clusterState, "pending", "cleaning after snapshot must stale clustering");
+assert.equal(derive({ jobs: [job("clean", "done", "2026-07-20T09:00:00.000Z")] }).clusterState, "done", "cross-database job timestamps must not stale a revision-matched snapshot");
+assert.equal(derive({ snapshot: { ...snapshot, currentLibraryRevision: 8 } }).clusterState, "pending", "library revision drift must stale clustering");
 assert.equal(derive({ paperCount: 25_464 }).snapshotStale, true, "paper count mismatch must stale snapshot");
 assert.equal(derive({ hotspotCount: 159 }).clusterState, "pending", "hotspot count mismatch must require modeling");
 assert.equal(derive({ snapshot: null }).requiresModeling, true, "missing snapshot must show explicit modeling guidance");
@@ -52,4 +55,4 @@ assert.deepEqual(
   "empty library must remain pending without sample data",
 );
 
-console.log(JSON.stringify({ ok: true, cases: 8, snapshotId: snapshot.snapshotId }));
+console.log(JSON.stringify({ ok: true, cases: 9, snapshotId: snapshot.snapshotId }));

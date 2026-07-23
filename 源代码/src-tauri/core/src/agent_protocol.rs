@@ -528,6 +528,23 @@ pub fn action_planner_output_schema() -> Value {
     })
 }
 
+/// Core calls the ActionPlanner only after the current step's references and
+/// input schema have already been validated. At that boundary the only valid
+/// model decision is to confirm the planned tool call; deterministic Core
+/// checks own user questions and completion decisions.
+pub fn executable_action_planner_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "tool", "input"],
+        "properties": {
+            "action": {"const": "call_tool"},
+            "tool": {"type": "string"},
+            "input": {"type": "object"}
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,6 +564,14 @@ mod tests {
             requires_replan: true,
         };
         assert_eq!(question.validate().unwrap_err(), "AGENT_QUESTION_REQUIRED");
+    }
+
+    #[test]
+    fn executable_action_schema_only_allows_tool_calls() {
+        let schema = executable_action_planner_output_schema();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"]["action"]["const"], "call_tool");
+        assert!(schema.get("oneOf").is_none());
     }
 
     #[test]
