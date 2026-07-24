@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = join(root, "resources", "semantic-model", "semantic-model-manifest.json");
+const licensePath = join(root, "resources", "semantic-model", "LICENSE-MIT.txt");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const destination = resolve(process.env.SEMANTIC_MODEL_DIR || join(root, "release-assets", "semantic-model"));
 const base = `https://huggingface.co/${manifest.modelId}/resolve/${manifest.revision}`;
@@ -55,6 +56,7 @@ for (const key of selected) {
 }
 
 await copyFile(manifestPath, join(destination, "semantic-model-manifest.json"));
+await copyFile(licensePath, join(destination, "LICENSE-MIT.txt"));
 console.log(JSON.stringify({
   modelId: manifest.modelId,
   revision: manifest.revision,

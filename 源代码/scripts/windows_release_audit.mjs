@@ -11,13 +11,16 @@ const tauri = json("src-tauri/tauri.conf.json");
 const full = json("src-tauri/tauri.full.conf.json");
 const lite = json("src-tauri/tauri.lite.conf.json");
 const installSmoke = text("scripts/windows_install_smoke.ps1");
+const releaseSource = text("scripts/windows_release.mjs");
 const seedDir = join(ROOT, "release-assets", "default-library");
 const seedPath = join(seedDir, "research-hotspots-v7.sqlite");
 const manifestPath = join(seedDir, "default-library-manifest.json");
+const semanticManifestPath = join(ROOT, "resources", "semantic-model", "semantic-model-manifest.json");
+const modelDir = join(ROOT, "release-assets", "semantic-model");
 const outputDir = join(ROOT, "release", "windows", version);
 const expected = { papers: 25463, hotspots: 160, memberships: 25463 };
 
-assert(/^0\.22\.0-beta\.\d+$/.test(version), `unexpected package version ${version}`);
+assert(version === "0.22.0-beta.2", `unexpected package version ${version}`);
 assert(tauri.version === version, "Tauri/package version mismatch");
 for (const path of ["src-tauri/Cargo.toml", "src-tauri/core/Cargo.toml"]) {
   assert(new RegExp(`^version = "${escapeRegExp(version)}"$`, "m").test(text(path)), `${path} version mismatch`);
@@ -27,15 +30,22 @@ assert((lock.match(new RegExp(`version = "${escapeRegExp(version)}"`, "g")) || [
 assert(text(".gitignore").split(/\r?\n/).includes("data/library/"), "data/library must stay ignored");
 assert(/autobins\s*=\s*false/.test(text("src-tauri/Cargo.toml")), "Cargo autobins must be disabled for release");
 assert(/name\s*=\s*"prepare_default_library"[\s\S]*?required-features\s*=\s*\["dev-tools"\]/.test(text("src-tauri/Cargo.toml")), "default library generator must require dev-tools");
+assert(releaseSource.includes("RESEARCH_HOTSPOTS_RELEASE_SOURCE_DIR"), "release source must be explicit");
+assert(releaseSource.includes("must be an isolated copy, not data/library"), "release script must reject the active data/library directory");
 
 const fullResources = full.bundle?.resources || {};
+const liteResources = lite.bundle?.resources || {};
 assert(Object.keys(fullResources).some((value) => value.endsWith("research-hotspots-v7.sqlite")), "Full config omits seed database");
 assert(Object.keys(fullResources).some((value) => value.endsWith("default-library-manifest.json")), "Full config omits seed manifest");
-assert(Array.isArray(lite.bundle?.resources) && lite.bundle.resources.length === 0, "Lite config must contain no resources");
-assert(/\$PreviousVersion\s*=\s*'0\.21\.0-beta\.2'/.test(installSmoke), "install smoke previous version mismatch");
-assert(/\$CurrentVersion\s*=\s*'0\.22\.0-beta\.1'/.test(installSmoke), "install smoke current version mismatch");
-assert(/databaseSchemaVersion\s+-eq\s+11/.test(installSmoke), "install smoke must require schema 11");
-assert(!/0\.21\.0-beta\.1|\$(?:Beta1|Beta2|FullBeta1|FullBeta2|LiteBeta2)\b|databaseSchemaVersion\s+-eq\s+8/.test(installSmoke), "legacy beta variables, versions, or schema 8 assertion remain in install smoke");
+assert(Object.values(fullResources).includes("semantic-model/model.cpu-portable.onnx"), "Full config omits CPU semantic model");
+assert(Object.values(fullResources).includes("semantic-model/model.gpu.onnx"), "Full config omits GPU semantic model");
+assert(Object.values(liteResources).includes("semantic-model/model.cpu-portable.onnx"), "Lite config omits CPU semantic model");
+assert(!Object.values(liteResources).includes("semantic-model/model.gpu.onnx"), "Lite config must not contain GPU semantic model");
+assert(!Object.keys(liteResources).some((value) => /default-library|research-hotspots-v7\.sqlite/.test(value)), "Lite config must not contain a default library");
+assert(/\$PreviousVersion\s*=\s*'0\.22\.0-beta\.1'/.test(installSmoke), "install smoke previous version mismatch");
+assert(/\$CurrentVersion\s*=\s*'0\.22\.0-beta\.2'/.test(installSmoke), "install smoke current version mismatch");
+assert(/databaseSchemaVersion\s+-eq\s+12/.test(installSmoke), "install smoke must require schema 12");
+assert(!/0\.21\.0-beta\.1|\$(?:Beta1|Beta2|FullBeta1|FullBeta2|LiteBeta2)\b|databaseSchemaVersion\s+-eq\s+(?:8|11)/.test(installSmoke), "legacy beta variables, versions, or schema assertions remain in install smoke");
 assert(/src-tauri\\target\\windows-install-smoke/.test(installSmoke), "install smoke work root must stay under src-tauri target");
 assert(!/验收安装|data\\library/.test(installSmoke), "install smoke must not reference user acceptance directories or the active library");
 assert(/ExternalDatabase must stay inside WorkRoot/.test(installSmoke), "install smoke must fence its isolated database to WorkRoot");
@@ -48,20 +58,26 @@ assert(/Invoke-Installer\s+\$CurrentFullInstaller\s+\$FinalInstallDir/.test(inst
 
 assert(existsSync(seedPath) && existsSync(manifestPath), "V20 default seed and manifest must be generated before audit");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-assert(manifest.manifestSchemaVersion === 3, "manifest schema must be v3");
-assert(manifest.generatorVersion === "agent-seed-3", "manifest generator version mismatch");
-assert(manifest.databaseSchemaVersion === 11, "seed database schema must be 11");
+assert(manifest.manifestSchemaVersion === 4, "manifest schema must be v4");
+assert(manifest.generatorVersion === "semantic-seed-4", "manifest generator version mismatch");
+assert(manifest.databaseSchemaVersion === 12, "seed database schema must be 12");
 assert(Number.isInteger(manifest.libraryRevision) && manifest.libraryRevision >= 0, "seed library revision is missing");
 assert(manifest.appVersion === version, "seed app version mismatch");
 assert(manifest.databaseFile === "research-hotspots-v7.sqlite", "compatible seed filename changed");
 assert(manifest.projectId === "project-default" && typeof manifest.snapshotId === "string" && manifest.snapshotId.length > 0, "manifest V20 identity is missing");
 assert(manifest.paperCount === expected.papers && manifest.hotspotCount === expected.hotspots && manifest.membershipCount === expected.memberships, "manifest V20 counts mismatch");
+assert(manifest.algorithmVersion === "v20-semantic-e5-small-1", "semantic algorithm mismatch");
+assert(manifest.paperLayoutVersion === "semantic-e5-pca3-v1", "semantic layout mismatch");
+assert(manifest.projectionVersion === "robust-pca-whiten-v1", "semantic projection mismatch");
+assert(manifest.embeddingModelId === "intfloat/multilingual-e5-small" && typeof manifest.embeddingModelRevision === "string", "semantic model identity mismatch");
+assert(manifest.embeddingDimensions === 384 && manifest.embeddingEncoding === "float16-le", "semantic embedding format mismatch");
+assert(manifest.embeddingCount === expected.papers, "semantic embedding count mismatch");
 assert(statSync(seedPath).size === manifest.sizeBytes, "seed file size does not match manifest");
 assert(sha256(seedPath) === manifest.sha256, "seed SHA-256 does not match manifest");
 
 const db = new DatabaseSync(seedPath, { readOnly: true });
 const scalar = (sql, ...params) => Object.values(db.prepare(sql).get(...params))[0];
-assert(scalar("PRAGMA user_version") === 11, "seed PRAGMA user_version is not 11");
+assert(scalar("PRAGMA user_version") === 12, "seed PRAGMA user_version is not 12");
 assert(String(scalar("PRAGMA integrity_check")).toLowerCase() === "ok", "seed integrity_check failed");
 assert(!db.prepare("PRAGMA foreign_key_check").get(), "seed foreign_key_check failed");
 const active = db.prepare("SELECT active_snapshot_id AS snapshotId FROM v20_analysis_state WHERE project_id = ?").get(manifest.projectId);
@@ -70,6 +86,7 @@ assert(scalar("SELECT COUNT(*) FROM papers WHERE project_id = ?", manifest.proje
 assert(scalar("SELECT COUNT(*) FROM v20_analysis_snapshots") === 1, "seed must contain exactly one V20 snapshot");
 assert(scalar("SELECT COUNT(*) FROM v20_hotspots WHERE project_id = ? AND snapshot_id = ?", manifest.projectId, manifest.snapshotId) === expected.hotspots, "seed hotspot count mismatch");
 assert(scalar("SELECT COUNT(*) FROM v20_paper_memberships WHERE project_id = ? AND snapshot_id = ?", manifest.projectId, manifest.snapshotId) === expected.memberships, "seed membership count mismatch");
+assert(scalar("SELECT COUNT(*) FROM paper_semantic_embeddings WHERE project_id=? AND model_id=? AND model_revision=? AND dimensions=? AND encoding='float16-le'", manifest.projectId, manifest.embeddingModelId, manifest.embeddingModelRevision, manifest.embeddingDimensions) === expected.papers, "seed semantic embedding count mismatch");
 for (const table of ["app17_hotspots", "app17_paper_topics", "app17_hotspot_reviews"]) {
   const present = scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)", table);
   if (present) assert(scalar(`SELECT COUNT(*) FROM ${table}`) === 0, `${table} legacy rows leaked into seed`);
@@ -78,6 +95,15 @@ for (const table of ["agent_runs", "agent_artifacts", "agent_operations", "agent
   assert(scalar(`SELECT COUNT(*) FROM ${table}`) === 0, `${table} runtime rows leaked into seed`);
 }
 db.close();
+
+assert(existsSync(semanticManifestPath), "semantic model manifest is missing");
+const semanticManifest = JSON.parse(readFileSync(semanticManifestPath, "utf8"));
+for (const key of ["cpuPortable", "gpu", "tokenizer", "config", "specialTokens", "tokenizerConfig"]) {
+  const file = semanticManifest.files[key];
+  const path = join(modelDir, file.target);
+  assert(existsSync(path), `${key} model resource is missing`);
+  assert(statSync(path).size === file.size && sha256(path) === file.sha256, `${key} model resource failed verification`);
+}
 
 const fullInstaller = join(outputDir, `Research-Hotspots-Desktop_${version}_x64-full-setup.exe`);
 const liteInstaller = join(outputDir, `Research-Hotspots-Desktop_${version}_x64-lite-setup.exe`);
@@ -89,10 +115,24 @@ if (existsSync(fullInstaller) || existsSync(liteInstaller)) {
   const sumsPath = join(outputDir, "SHA256SUMS.txt");
   assert(existsSync(sumsPath), "SHA256SUMS.txt missing");
   const sums = readFileSync(sumsPath, "utf8");
-  for (const file of [fullInstaller, liteInstaller].filter(existsSync)) {
+  const releaseFiles = [
+    fullInstaller,
+    liteInstaller,
+    join(outputDir, "RELEASE_NOTES_zh-CN.md"),
+    join(outputDir, "RELEASE_NOTES_en-US.md"),
+    join(outputDir, "default-library-manifest.json"),
+    join(outputDir, "semantic-model-manifest.json"),
+    join(outputDir, "SEMANTIC_MODEL_LICENSE_MIT.txt"),
+    join(outputDir, "BUILD_METADATA.json"),
+  ];
+  for (const file of releaseFiles.filter(existsSync)) {
     const name = file.split(/[\\/]/).at(-1);
     assert(sums.includes(`${sha256(file)}  ${name}`), `checksum entry missing for ${name}`);
   }
+  const metadata = JSON.parse(readFileSync(join(outputDir, "BUILD_METADATA.json"), "utf8"));
+  assert(metadata.appVersion === version && metadata.defaultLibrarySchema === 12, "build metadata version/schema mismatch");
+  assert(metadata.defaultSnapshotId === manifest.snapshotId, "build metadata snapshot mismatch");
+  assert(metadata.semanticModelId === manifest.embeddingModelId && metadata.semanticModelRevision === manifest.embeddingModelRevision, "build metadata semantic model mismatch");
 }
 
 console.log(JSON.stringify({ ok: true, version, snapshotId: manifest.snapshotId, ...expected, seedBytes: manifest.sizeBytes, installersPresent: existsSync(fullInstaller) && existsSync(liteInstaller) }));

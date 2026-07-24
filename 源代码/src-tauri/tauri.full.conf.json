@@ -2,7 +2,15 @@
   "bundle": {
     "resources": {
       "../release-assets/default-library/research-hotspots-v7.sqlite": "default-library/research-hotspots-v7.sqlite",
-      "../release-assets/default-library/default-library-manifest.json": "default-library/default-library-manifest.json"
+      "../release-assets/default-library/default-library-manifest.json": "default-library/default-library-manifest.json",
+      "../release-assets/semantic-model/model.cpu-portable.onnx": "semantic-model/model.cpu-portable.onnx",
+      "../release-assets/semantic-model/model.gpu.onnx": "semantic-model/model.gpu.onnx",
+      "../release-assets/semantic-model/tokenizer.json": "semantic-model/tokenizer.json",
+      "../release-assets/semantic-model/config.json": "semantic-model/config.json",
+      "../release-assets/semantic-model/special_tokens_map.json": "semantic-model/special_tokens_map.json",
+      "../release-assets/semantic-model/tokenizer_config.json": "semantic-model/tokenizer_config.json",
+      "../resources/semantic-model/semantic-model-manifest.json": "semantic-model/semantic-model-manifest.json",
+      "../resources/semantic-model/LICENSE-MIT.txt": "semantic-model/LICENSE-MIT.txt"
     }
   }
 }

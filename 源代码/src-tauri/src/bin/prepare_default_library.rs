@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DATABASE_FILE: &str = "research-hotspots-v7.sqlite";
 const DEFAULT_PROJECT_ID: &str = "project-default";
-const MANIFEST_SCHEMA_VERSION: i64 = 3;
-const GENERATOR_VERSION: &str = "agent-seed-3";
+const MANIFEST_SCHEMA_VERSION: i64 = 4;
+const GENERATOR_VERSION: &str = "semantic-seed-4";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +31,14 @@ struct DefaultLibraryManifest {
     hotspot_count: i64,
     membership_count: i64,
     library_revision: i64,
+    algorithm_version: String,
+    paper_layout_version: String,
+    projection_version: String,
+    embedding_model_id: String,
+    embedding_model_revision: String,
+    embedding_dimensions: usize,
+    embedding_encoding: String,
+    embedding_count: i64,
     generated_at: String,
 }
 
@@ -142,6 +150,7 @@ fn run() -> Result<(), String> {
                 params![project_id],
             )
             .map_err(|error| error.to_string())?;
+            prune_semantic_embedding_cache(&tx, &project_id)?;
             clear_legacy_app17_rows(&tx)?;
             clear_agent_runtime_rows(&tx)?;
             tx.commit().map_err(|error| error.to_string())?;
@@ -153,6 +162,33 @@ fn run() -> Result<(), String> {
             &snapshot,
             &project_id,
         )?;
+        let algorithm_version: String = snapshot
+            .query_row(
+                "SELECT algorithm_version FROM v20_analysis_snapshots WHERE id=?1 AND project_id=?2",
+                params![snapshot_id, project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("cannot read active semantic algorithm: {error}"))?;
+        if algorithm_version != research_hotspots_core::V20_ALGORITHM_VERSION {
+            return Err(format!(
+                "active snapshot uses {algorithm_version}, expected {}",
+                research_hotspots_core::V20_ALGORITHM_VERSION
+            ));
+        }
+        let embedding_count: i64 = snapshot
+            .query_row(
+                "SELECT COUNT(*) FROM paper_semantic_embeddings
+                 WHERE project_id=?1 AND model_id=?2 AND model_revision=?3
+                   AND dimensions=?4 AND encoding='float16-le'",
+                params![
+                    project_id,
+                    research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID,
+                    research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION,
+                    research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS as i64,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("cannot count semantic embeddings: {error}"))?;
         snapshot
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
             .map_err(|error| format!("cannot compact generated seed: {error}"))?;
@@ -165,15 +201,17 @@ fn run() -> Result<(), String> {
             || verified.paper_count != source_validation.paper_count
             || verified.hotspot_count != source_validation.hotspot_count
             || verified.membership_count != source_validation.membership_count
+            || embedding_count != verified.paper_count
         {
             return Err(format!(
-                "generated V20 snapshot mismatch: source={}/{}/{}, generated={}/{}/{}",
+                "generated semantic snapshot mismatch: source={}/{}/{}, generated={}/{}/{}, embeddings={}",
                 source_validation.paper_count,
                 source_validation.hotspot_count,
                 source_validation.membership_count,
                 verified.paper_count,
                 verified.hotspot_count,
-                verified.membership_count
+                verified.membership_count,
+                embedding_count,
             ));
         }
 
@@ -200,6 +238,19 @@ fn run() -> Result<(), String> {
             hotspot_count: verified.hotspot_count,
             membership_count: verified.membership_count,
             library_revision,
+            algorithm_version,
+            paper_layout_version:
+                research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION.to_string(),
+            projection_version:
+                research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION.to_string(),
+            embedding_model_id:
+                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID.to_string(),
+            embedding_model_revision:
+                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION.to_string(),
+            embedding_dimensions:
+                research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS,
+            embedding_encoding: "float16-le".to_string(),
+            embedding_count,
             generated_at,
         };
         let content = serde_json::to_string_pretty(&manifest)
@@ -219,8 +270,8 @@ fn run() -> Result<(), String> {
         replace_generated_file(&partial_path, &output_path)?;
         replace_generated_file(&partial_manifest_path, &manifest_path)?;
         println!(
-            "seed snapshot ready: snapshot={} papers={} hotspots={} memberships={} bytes={} path={}",
-            snapshot_id, verified.paper_count, verified.hotspot_count, verified.membership_count, size_bytes, output_path.display()
+            "semantic seed ready: snapshot={} papers={} hotspots={} memberships={} embeddings={} bytes={} path={}",
+            snapshot_id, verified.paper_count, verified.hotspot_count, verified.membership_count, embedding_count, size_bytes, output_path.display()
         );
         Ok(())
     })();
@@ -249,6 +300,78 @@ fn clear_legacy_app17_rows(conn: &Connection) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
     }
+    Ok(())
+}
+
+fn prune_semantic_embedding_cache(conn: &Connection, project_id: &str) -> Result<(), String> {
+    use research_hotspots_core::semantic_layout::{
+        semantic_content_sha256, SemanticPaperDocument, SEMANTIC_EMBEDDING_DIMENSIONS,
+        SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION,
+    };
+
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS temp.seed_semantic_embedding_keep;
+         CREATE TEMP TABLE seed_semantic_embedding_keep(
+           paper_id TEXT PRIMARY KEY,
+           content_sha256 TEXT NOT NULL
+         ) WITHOUT ROWID;",
+    )
+    .map_err(|error| format!("cannot prepare semantic seed cache filter: {error}"))?;
+    let mut read = conn
+        .prepare(
+            "SELECT id,title,field,categories,abstract
+             FROM papers WHERE project_id=?1 ORDER BY id",
+        )
+        .map_err(|error| error.to_string())?;
+    let documents = read
+        .query_map(params![project_id], |row| {
+            Ok(SemanticPaperDocument {
+                paper_id: row.get(0)?,
+                title: row.get(1)?,
+                field: row.get(2)?,
+                categories: row.get(3)?,
+                abstract_text: row.get(4)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(read);
+    {
+        let mut insert = conn
+            .prepare(
+                "INSERT INTO seed_semantic_embedding_keep(paper_id,content_sha256)
+                 VALUES(?1,?2)",
+            )
+            .map_err(|error| error.to_string())?;
+        for document in &documents {
+            insert
+                .execute(params![
+                    document.paper_id,
+                    semantic_content_sha256(document)
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    conn.execute(
+        "DELETE FROM paper_semantic_embeddings
+         WHERE project_id<>?1 OR model_id<>?2 OR model_revision<>?3
+           OR dimensions<>?4 OR encoding<>'float16-le'
+           OR NOT EXISTS(
+             SELECT 1 FROM seed_semantic_embedding_keep keep
+             WHERE keep.paper_id=paper_semantic_embeddings.paper_id
+               AND keep.content_sha256=paper_semantic_embeddings.content_sha256
+           )",
+        params![
+            project_id,
+            SEMANTIC_MODEL_ID,
+            SEMANTIC_MODEL_REVISION,
+            SEMANTIC_EMBEDDING_DIMENSIONS as i64,
+        ],
+    )
+    .map_err(|error| format!("cannot prune stale semantic embeddings: {error}"))?;
+    conn.execute_batch("DROP TABLE temp.seed_semantic_embedding_keep;")
+        .map_err(|error| format!("cannot finalize semantic seed cache filter: {error}"))?;
     Ok(())
 }
 

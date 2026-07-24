@@ -10,8 +10,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $ProductName = 'Research Hotspots Desktop'
-$PreviousVersion = '0.21.0-beta.2'
-$CurrentVersion = '0.22.0-beta.1'
+$PreviousVersion = '0.22.0-beta.1'
+$CurrentVersion = '0.22.0-beta.2'
 $PreviousFullInstaller = Join-Path $ReleaseRoot "$PreviousVersion\Research-Hotspots-Desktop_${PreviousVersion}_x64-full-setup.exe"
 $CurrentFullInstaller = Join-Path $ReleaseRoot "$CurrentVersion\Research-Hotspots-Desktop_${CurrentVersion}_x64-full-setup.exe"
 $CurrentLiteInstaller = Join-Path $ReleaseRoot "$CurrentVersion\Research-Hotspots-Desktop_${CurrentVersion}_x64-lite-setup.exe"
@@ -102,17 +102,24 @@ function Assert-FullResources([string]$InstallDir) {
   Assert-True (Test-Path -LiteralPath $seed -PathType Leaf) "Full seed missing: $seed"
   Assert-True (Test-Path -LiteralPath $manifest -PathType Leaf) "Full manifest missing: $manifest"
   $data = Get-Content -LiteralPath $manifest -Raw -Encoding utf8 | ConvertFrom-Json
-  Assert-True ($data.manifestSchemaVersion -eq 3) 'Full manifest schema is not 3.'
-  Assert-True ($data.databaseSchemaVersion -eq 11) 'Full manifest schema is not 11.'
+  Assert-True ($data.manifestSchemaVersion -eq 4) 'Full manifest schema is not 4.'
+  Assert-True ($data.databaseSchemaVersion -eq 12) 'Full manifest schema is not 12.'
   Assert-True ($data.appVersion -eq $CurrentVersion) "Full manifest app version is not $CurrentVersion."
   Assert-True ($null -ne $data.PSObject.Properties['libraryRevision'] -and [int64]$data.libraryRevision -ge 0) 'Full manifest library revision is invalid.'
   Assert-True ($data.paperCount -eq 25463 -and $data.hotspotCount -eq 160 -and $data.membershipCount -eq 25463) 'Full manifest V20 counts are invalid.'
+  Assert-True ($data.embeddingCount -eq 25463 -and $data.algorithmVersion -eq 'v20-semantic-e5-small-1') 'Full semantic manifest fields are invalid.'
   Assert-True ((Get-FileHash -LiteralPath $seed -Algorithm SHA256).Hash.ToLowerInvariant() -eq ([string]$data.sha256).ToLowerInvariant()) 'Installed Full seed SHA-256 mismatch.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\model.cpu-portable.onnx') -PathType Leaf) 'Full portable CPU semantic model is missing.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\model.gpu.onnx') -PathType Leaf) 'Full DirectML semantic model is missing.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\LICENSE-MIT.txt') -PathType Leaf) 'Full semantic model license is missing.'
 }
 
 function Assert-LiteResourcesAbsent([string]$InstallDir) {
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'default-library\research-hotspots-v7.sqlite'))) 'Lite unexpectedly contains the default database.'
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'default-library\default-library-manifest.json'))) 'Lite unexpectedly contains the default manifest.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\model.cpu-portable.onnx') -PathType Leaf) 'Lite portable CPU semantic model is missing.'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\model.gpu.onnx'))) 'Lite unexpectedly contains the DirectML semantic model.'
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\LICENSE-MIT.txt') -PathType Leaf) 'Lite semantic model license is missing.'
 }
 
 $running = Get-Process -Name 'research-hotspots-desktop' -ErrorAction SilentlyContinue
@@ -181,7 +188,8 @@ Assert-FullResources $FinalInstallDir
   version = [string]$finalEntry.DisplayVersion
   finalInstallDir = [IO.Path]::GetFullPath($FinalInstallDir)
   fullResources = $true
-  liteResourcesAbsent = $true
+  liteDefaultLibraryAbsent = $true
+  liteCpuModelPresent = $true
   externalDatabasePreserved = $true
   credentialTargetsPreserved = $true
 } | ConvertTo-Json -Compress
