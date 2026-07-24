@@ -245,6 +245,7 @@ export type AiSettings = {
   exportDir: string;
   workerTempDir: string;
   backupDir: string;
+  semanticEmbeddingDevice: "cpu" | "gpu";
   cnki: CnkiSettings;
   mysql: MysqlImportSettings;
   updatedAt: string;
@@ -428,6 +429,10 @@ export type App17GalaxyPayload = {
   papers: App17GalaxyPaperPoint[];
   hotspots: App17GalaxyHotspotPoint[];
   snapshotId?: string;
+  paperLayoutVersion?: string;
+  embeddingModelId?: string;
+  embeddingModelRevision?: string;
+  projectionVersion?: string;
   hotspotRecords?: Hotspot[];
 };
 

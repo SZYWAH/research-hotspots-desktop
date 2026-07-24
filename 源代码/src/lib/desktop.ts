@@ -424,11 +424,15 @@ export async function deletePapersFromLibrary(databaseDir: string | undefined, p
   return invoke<number>("delete_papers_from_library", { databaseDir, projectId, ids });
 }
 
-export async function runLibraryClusterWorker(databaseDir: string | undefined, projectId: string | undefined) {
+export async function runLibraryClusterWorker(
+  databaseDir: string | undefined,
+  projectId: string | undefined,
+  embeddingDevice: "cpu" | "gpu" = "cpu",
+) {
   if (!isDesktopRuntime()) {
     return runBrowserCluster([]);
   }
-  return invoke<ClusterWorkerResult>("cluster_paper_library", { databaseDir, projectId });
+  return invoke<ClusterWorkerResult>("cluster_paper_library", { databaseDir, projectId, embeddingDevice });
 }
 
 export async function exportHotspotEvidence(input: { databaseDir?: string; projectId?: string; hotspotId?: string; maxPapers?: number }) {

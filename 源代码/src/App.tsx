@@ -6805,6 +6805,18 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
               <DirField label="导出目录" value={draft.exportDir} onChange={(value) => setDraft({ ...draft, exportDir: value })} onChoose={() => void chooseDir("exportDir")} />
               <DirField label="任务临时目录" value={draft.workerTempDir} onChange={(value) => setDraft({ ...draft, workerTempDir: value })} onChoose={() => void chooseDir("workerTempDir")} />
               <DirField label="备份目录" value={draft.backupDir} onChange={(value) => setDraft({ ...draft, backupDir: value })} onChoose={() => void chooseDir("backupDir")} />
+              <label className="field-label">
+                语义建模设备
+                <SelectControl
+                  className="h-11 text-sm"
+                  value={draft.semanticEmbeddingDevice}
+                  options={[
+                    { value: "cpu", label: "CPU（默认稳定）" },
+                    { value: "gpu", label: "GPU（DirectML，失败回退 CPU）" },
+                  ]}
+                  onChange={(value) => setDraft({ ...draft, semanticEmbeddingDevice: value === "gpu" ? "gpu" : "cpu" })}
+                />
+              </label>
             </div>
           </section>
 
@@ -7095,7 +7107,9 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
       });
       onNotice(result.summary);
     } else {
-      const result = activeProject ? await runLibraryClusterWorker(settings.databaseDir, activeProject.id) : await runClusterWorker(papers, settings.workerTempDir);
+      const result = activeProject
+        ? await runLibraryClusterWorker(settings.databaseDir, activeProject.id, settings.semanticEmbeddingDevice)
+        : await runClusterWorker(papers, settings.workerTempDir);
       if (activeProject && isDesktopRuntime()) {
         const snapshot = await getV20HotspotSnapshot({ databaseDir: settings.databaseDir, projectId: activeProject.id });
         if (!snapshot || snapshot.snapshotId !== result.snapshotId) throw new Error("聚类完成后无法读取一致的 V20 活动快照。");

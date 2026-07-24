@@ -5067,9 +5067,14 @@ function buildGalaxySystemResources(
     topicPaperByCanonicalId.set(canonicalId, paper);
   });
   const topicPapers = [...topicPaperByCanonicalId.values()];
+  const semanticLayout = payload.paperLayoutVersion === "semantic-e5-pca3-v1";
   const relativePoints = topicPapers.map((paper) => ({
     paper,
-    vector: new THREE.Vector3(paper.x - hotspot.x, paper.y - hotspot.y, (paper.z - hotspot.z) * 0.62),
+    vector: new THREE.Vector3(
+      paper.x - hotspot.x,
+      paper.y - hotspot.y,
+      (paper.z - hotspot.z) * (semanticLayout ? 1 : 0.62),
+    ),
   }));
   const radii = relativePoints.map((item) => item.vector.length()).sort((a, b) => a - b);
   const percentileIndex = Math.min(radii.length - 1, Math.max(0, Math.floor(radii.length * 0.95)));
