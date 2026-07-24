@@ -7,7 +7,7 @@ const snapshot = {
   activeSnapshotId: "snapshot-1",
   snapshotId: "snapshot-1",
   databaseKey: "D:/library",
-  algorithmVersion: "v20-unified-1",
+  algorithmVersion: "v20-semantic-e5-small-1",
   paperCount: 25_463,
   hotspotCount: 160,
   membershipCount: 25_463,

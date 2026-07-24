@@ -70,6 +70,16 @@ name = "audit_agent_performance"
 path = "src/bin/audit_agent_performance.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "audit_semantic_embedding_runtime"
+path = "src/bin/audit_semantic_embedding_runtime.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "audit_galaxy_semantic_layout"
+path = "src/bin/audit_galaxy_semantic_layout.rs"
+required-features = ["dev-tools"]
+
 [lib]
 name = "research_hotspots_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

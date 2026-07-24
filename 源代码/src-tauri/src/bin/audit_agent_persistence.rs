@@ -28,7 +28,7 @@ fn main() -> Result<(), String> {
     remove_owned_files(
         &database,
         &root.join("too-new.sqlite"),
-        &root.join("agent-v8.pre-schema-v11.1000.sqlite"),
+        &root.join("agent-v8.pre-schema-v12.1000.sqlite"),
     )?;
     let conn = Connection::open(&database).map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE papers(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,source TEXT NOT NULL,title TEXT NOT NULL,abstract TEXT NOT NULL,field TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,search_blob TEXT NOT NULL DEFAULT '');").map_err(|e|e.to_string())?;
@@ -53,7 +53,7 @@ fn main() -> Result<(), String> {
     let too_new = root.join("too-new.sqlite");
     let too_new_conn = Connection::open(&too_new).map_err(|e| e.to_string())?;
     too_new_conn
-        .pragma_update(None, "user_version", 12)
+        .pragma_update(None, "user_version", 13)
         .map_err(|e| e.to_string())?;
     drop(too_new_conn);
     if migrate_library_file(&too_new, "project-default", 1001, true).unwrap_err()

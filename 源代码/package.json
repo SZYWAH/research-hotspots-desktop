@@ -4,6 +4,10 @@
   "version": "0.22.0-beta.1",
   "type": "module",
   "scripts": {
+    "prepare:semantic-model": "node scripts/prepare_semantic_embedding_model.mjs",
+    "audit:semantic-embedding-runtime": "pnpm prepare:semantic-model && pnpm prepare:semantic-model -- --gpu && cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin audit_semantic_embedding_runtime",
+    "audit:galaxy-semantic-layout": "cargo test --manifest-path src-tauri/Cargo.toml -p research-hotspots-core semantic_layout -- --nocapture && cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin audit_galaxy_semantic_layout -- --root src-tauri/target/galaxy-semantic-layout-audit && node scripts/galaxy_semantic_layout_audit.mjs",
+    "audit:galaxy-visual-invariants": "node scripts/galaxy_visual_invariants_audit.mjs",
     "dev": "vite --host 127.0.0.1",
     "visual:galaxy": "node scripts/app17_visual_review.mjs serve",
     "visual:galaxy:snapshot": "node scripts/app17_visual_review.mjs snapshot",

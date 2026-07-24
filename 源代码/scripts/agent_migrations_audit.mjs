@@ -4,13 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 const core = readFileSync(new URL("../src-tauri/core/src/lib.rs", import.meta.url), "utf8");
 const store = readFileSync(new URL("../src-tauri/core/src/agent_store.rs", import.meta.url), "utf8");
 const checks = {
-  schema11: /LIBRARY_SCHEMA_VERSION:\s*i64\s*=\s*11/.test(core),
+  schema12: /LIBRARY_SCHEMA_VERSION:\s*i64\s*=\s*12/.test(core),
   supportsSchema8: /MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION:\s*i64\s*=\s*8/.test(core),
   rejectsNewer: store.includes("LIBRARY_SCHEMA_TOO_NEW"),
   onlineBackup: store.includes("Backup::new"),
-  v8Fixture: store.includes("v8_seed_shape_migrates_directly_to_v11"),
-  v9Fixture: store.includes("v9_file_migrates_to_v11_with_backup_and_new_contract"),
-  idempotentV11: store.includes("repeated_v11_open_is_idempotent"),
+  v8Fixture: store.includes("v8_seed_shape_migrates_directly_to_v12"),
+  v9Fixture: store.includes("v9_file_migrates_to_v12_with_backup_and_new_contract"),
+  idempotentV12: store.includes("repeated_v12_open_is_idempotent"),
 };
 const manifestPath = new URL("../release-assets/default-library/default-library-manifest.json", import.meta.url);
 if (existsSync(manifestPath)) {
