@@ -10,6 +10,7 @@ const checks = {
   onlineBackup: store.includes("Backup::new"),
   v8Fixture: store.includes("v8_seed_shape_migrates_directly_to_v12"),
   v9Fixture: store.includes("v9_file_migrates_to_v12_with_backup_and_new_contract"),
+  v10AndV11Fixture: store.includes("v10_and_v11_files_migrate_to_v12_without_losing_v20_or_agent_state"),
   idempotentV12: store.includes("repeated_v12_open_is_idempotent"),
 };
 const manifestPath = new URL("../release-assets/default-library/default-library-manifest.json", import.meta.url);
@@ -22,6 +23,16 @@ if (existsSync(manifestPath)) {
     const runtimeRows = database.prepare("SELECT SUM(count) AS count FROM (SELECT COUNT(*) count FROM agent_runs UNION ALL SELECT COUNT(*) FROM agent_artifacts UNION ALL SELECT COUNT(*) FROM agent_operations UNION ALL SELECT COUNT(*) FROM agent_model_calls)").get().count;
     database.close();
     checks.releaseDatabaseSchema11 = version === 11;
+    checks.releaseHasNoAgentHistory = runtimeRows === 0;
+  } else if (manifest.appVersion === "0.22.0-beta.2") {
+    checks.releaseManifestSchema12 = manifest.manifestSchemaVersion === 4 && manifest.databaseSchemaVersion === 12;
+    checks.releaseSemanticEmbeddings = manifest.embeddingCount === manifest.paperCount
+      && manifest.algorithmVersion === "v20-semantic-e5-small-1";
+    const database = new DatabaseSync(new URL(`../release-assets/default-library/${manifest.databaseFile}`, import.meta.url), { readOnly: true });
+    const version = database.prepare("PRAGMA user_version").get().user_version;
+    const runtimeRows = database.prepare("SELECT SUM(count) AS count FROM (SELECT COUNT(*) count FROM agent_runs UNION ALL SELECT COUNT(*) FROM agent_artifacts UNION ALL SELECT COUNT(*) FROM agent_operations UNION ALL SELECT COUNT(*) FROM agent_model_calls)").get().count;
+    database.close();
+    checks.releaseDatabaseSchema12 = version === 12;
     checks.releaseHasNoAgentHistory = runtimeRows === 0;
   }
 }

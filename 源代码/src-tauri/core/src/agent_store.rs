@@ -457,6 +457,9 @@ pub fn migrate_library_file(
                 .map_err(|e| format!("AGENT_MIGRATION_BACKUP_HASH_FAILED:{e}"))?;
             fs::rename(&partial_path, &backup_path)
                 .map_err(|e| format!("AGENT_MIGRATION_BACKUP_ACTIVATE_FAILED:{e}"))?;
+            // Read-only validation may create WAL/SHM sidecars for the staging name.
+            // The database itself has moved, so remove only those obsolete staging artifacts.
+            cleanup_migration_backup_artifacts(&partial_path);
             Ok((backup_path, hash))
         })();
         if backup_result.is_err() {
@@ -4011,6 +4014,99 @@ mod tests {
     }
 
     #[test]
+    fn v10_and_v11_files_migrate_to_v12_without_losing_v20_or_agent_state() {
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("agent-schema-tests");
+        fs::create_dir_all(&directory).unwrap();
+
+        for source_version in [10_i64, 11_i64] {
+            let database = directory.join(format!(
+                "v{source_version}-{}-{}.sqlite",
+                std::process::id(),
+                std::thread::current()
+                    .name()
+                    .unwrap_or("test")
+                    .replace(':', "-")
+            ));
+            cleanup_test_file(&database);
+            create_complete_v9_migration_fixture(&database);
+            {
+                let mut connection = Connection::open(&database).unwrap();
+                connection
+                    .pragma_update(None, "foreign_keys", "OFF")
+                    .unwrap();
+                let transaction = connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .unwrap();
+                migrate_v9_agent_schema(&transaction).unwrap();
+                if source_version >= 11 {
+                    migrate_v11_agent_schema(&transaction).unwrap();
+                }
+                transaction
+                    .pragma_update(None, "user_version", source_version)
+                    .unwrap();
+                transaction.commit().unwrap();
+            }
+
+            let before_state =
+                crate::validate_library_candidate_file(&database, "project-default").unwrap();
+            let migration = migrate_library_file(
+                &database,
+                "project-default",
+                1_200 + source_version,
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                (migration.previous_version, migration.current_version),
+                (source_version, 12)
+            );
+            let backup = migration.backup_path.unwrap();
+            assert_eq!(
+                crate::validate_library_candidate_file(&backup, "project-default").unwrap(),
+                before_state
+            );
+
+            let connection = Connection::open(&database).unwrap();
+            assert_same_v20_state(
+                &crate::validate_library_candidate_connection(
+                    &connection,
+                    "project-default",
+                )
+                .unwrap(),
+                &before_state,
+            );
+            assert_eq!(
+                connection
+                    .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                12
+            );
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                0
+            );
+            drop(connection);
+            cleanup_test_file(&database);
+            cleanup_test_file(&backup);
+        }
+    }
+
+    #[test]
     fn v8_seed_shape_migrates_directly_to_v12() {
         let directory = std::env::current_dir()
             .unwrap()
@@ -4075,6 +4171,9 @@ mod tests {
         assert_eq!((first.previous_version, first.current_version), (8, 12));
         assert_eq!(first.backup_path.as_deref(), Some(first_backup.as_path()));
         assert!(!first_partial.exists());
+        assert!(!PathBuf::from(format!("{}-wal", first_partial.to_string_lossy())).exists());
+        assert!(!PathBuf::from(format!("{}-shm", first_partial.to_string_lossy())).exists());
+        assert!(!PathBuf::from(format!("{}-journal", first_partial.to_string_lossy())).exists());
         let first_state =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
 
