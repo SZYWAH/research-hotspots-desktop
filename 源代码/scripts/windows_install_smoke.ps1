@@ -1,21 +1,28 @@
 [CmdletBinding()]
 param(
   [string]$ReleaseRoot = (Join-Path $PSScriptRoot '..\release\windows'),
-  [string]$WorkRoot = (Join-Path $PSScriptRoot '..\..\验收安装\windows-install-smoke'),
-  [string]$ExternalDatabase = (Join-Path $PSScriptRoot '..\data\library\research-hotspots-v7.sqlite'),
-  [string]$FinalInstallDir = 'D:\wenjian\Desktop\Research Hotspots Desktop'
+  [string]$WorkRoot = (Join-Path $PSScriptRoot '..\src-tauri\target\windows-install-smoke'),
+  [string]$ExternalDatabase = '',
+  [string]$FinalInstallDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $ProductName = 'Research Hotspots Desktop'
-$Beta1 = '0.21.0-beta.1'
-$Beta2 = '0.21.0-beta.2'
-$FullBeta1 = Join-Path $ReleaseRoot "$Beta1\Research-Hotspots-Desktop_${Beta1}_x64-full-setup.exe"
-$FullBeta2 = Join-Path $ReleaseRoot "$Beta2\Research-Hotspots-Desktop_${Beta2}_x64-full-setup.exe"
-$LiteBeta2 = Join-Path $ReleaseRoot "$Beta2\Research-Hotspots-Desktop_${Beta2}_x64-lite-setup.exe"
+$PreviousVersion = '0.21.0-beta.2'
+$CurrentVersion = '0.22.0-beta.1'
+$PreviousFullInstaller = Join-Path $ReleaseRoot "$PreviousVersion\Research-Hotspots-Desktop_${PreviousVersion}_x64-full-setup.exe"
+$CurrentFullInstaller = Join-Path $ReleaseRoot "$CurrentVersion\Research-Hotspots-Desktop_${CurrentVersion}_x64-full-setup.exe"
+$CurrentLiteInstaller = Join-Path $ReleaseRoot "$CurrentVersion\Research-Hotspots-Desktop_${CurrentVersion}_x64-lite-setup.exe"
 $IsolatedInstallDir = Join-Path $WorkRoot 'isolated-install'
+$SeedDatabase = Join-Path $PSScriptRoot '..\release-assets\default-library\research-hotspots-v7.sqlite'
+if ([string]::IsNullOrWhiteSpace($ExternalDatabase)) {
+  $ExternalDatabase = Join-Path $WorkRoot 'external-library\research-hotspots-v7.sqlite'
+}
+if ([string]::IsNullOrWhiteSpace($FinalInstallDir)) {
+  $FinalInstallDir = Join-Path $WorkRoot 'final-install'
+}
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
@@ -95,7 +102,10 @@ function Assert-FullResources([string]$InstallDir) {
   Assert-True (Test-Path -LiteralPath $seed -PathType Leaf) "Full seed missing: $seed"
   Assert-True (Test-Path -LiteralPath $manifest -PathType Leaf) "Full manifest missing: $manifest"
   $data = Get-Content -LiteralPath $manifest -Raw -Encoding utf8 | ConvertFrom-Json
-  Assert-True ($data.databaseSchemaVersion -eq 8) 'Full manifest schema is not 8.'
+  Assert-True ($data.manifestSchemaVersion -eq 3) 'Full manifest schema is not 3.'
+  Assert-True ($data.databaseSchemaVersion -eq 11) 'Full manifest schema is not 11.'
+  Assert-True ($data.appVersion -eq $CurrentVersion) "Full manifest app version is not $CurrentVersion."
+  Assert-True ($null -ne $data.PSObject.Properties['libraryRevision'] -and [int64]$data.libraryRevision -ge 0) 'Full manifest library revision is invalid.'
   Assert-True ($data.paperCount -eq 25463 -and $data.hotspotCount -eq 160 -and $data.membershipCount -eq 25463) 'Full manifest V20 counts are invalid.'
   Assert-True ((Get-FileHash -LiteralPath $seed -Algorithm SHA256).Hash.ToLowerInvariant() -eq ([string]$data.sha256).ToLowerInvariant()) 'Installed Full seed SHA-256 mismatch.'
 }
@@ -110,33 +120,45 @@ Assert-True ($null -eq $running) 'Research Hotspots Desktop is running; close it
 
 $resolvedWorkspace = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $resolvedWorkRoot = [IO.Path]::GetFullPath($WorkRoot)
-Assert-True ($resolvedWorkRoot.StartsWith([IO.Path]::GetFullPath((Join-Path $resolvedWorkspace '..')), [StringComparison]::OrdinalIgnoreCase)) 'WorkRoot must stay under the approved D-drive workspace tree.'
-$staleAuditEntries = @(Get-UninstallEntries | Where-Object { (Get-EntryInstallDirectory $_).StartsWith($resolvedWorkRoot, [StringComparison]::OrdinalIgnoreCase) })
+$approvedWorkRoot = [IO.Path]::GetFullPath((Join-Path $resolvedWorkspace 'src-tauri\target\windows-install-smoke')).TrimEnd('\')
+Assert-True ($resolvedWorkRoot.TrimEnd('\').Equals($approvedWorkRoot, [StringComparison]::OrdinalIgnoreCase)) 'WorkRoot must be the dedicated src-tauri\target\windows-install-smoke directory.'
+$resolvedExternalDatabase = [IO.Path]::GetFullPath($ExternalDatabase)
+$resolvedFinalInstallDir = [IO.Path]::GetFullPath($FinalInstallDir)
+$resolvedWorkPrefix = $resolvedWorkRoot.TrimEnd('\') + '\'
+Assert-True ($resolvedExternalDatabase.StartsWith($resolvedWorkPrefix, [StringComparison]::OrdinalIgnoreCase)) 'ExternalDatabase must stay inside WorkRoot.'
+Assert-True (($resolvedFinalInstallDir.TrimEnd('\') + '\').StartsWith($resolvedWorkPrefix, [StringComparison]::OrdinalIgnoreCase)) 'FinalInstallDir must stay inside WorkRoot.'
+$staleAuditEntries = @(Get-UninstallEntries | Where-Object { ((Get-EntryInstallDirectory $_).TrimEnd('\') + '\').StartsWith($resolvedWorkPrefix, [StringComparison]::OrdinalIgnoreCase) })
 foreach ($entry in $staleAuditEntries) { Invoke-Uninstaller $entry }
+$externalProductEntries = @(Get-UninstallEntries | Where-Object { -not ((Get-EntryInstallDirectory $_).TrimEnd('\') + '\').StartsWith($resolvedWorkPrefix, [StringComparison]::OrdinalIgnoreCase) })
+Assert-True ($externalProductEntries.Count -eq 0) 'A Research Hotspots installation exists outside the isolated WorkRoot; refusing to modify a user installation.'
 if (Test-Path -LiteralPath $WorkRoot) { Remove-Item -LiteralPath $WorkRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
 
+Assert-True (Test-Path -LiteralPath $SeedDatabase -PathType Leaf) "Release seed missing: $SeedDatabase"
+New-Item -ItemType Directory -Path (Split-Path -Parent $ExternalDatabase) -Force | Out-Null
+Copy-Item -LiteralPath $SeedDatabase -Destination $ExternalDatabase
+Assert-True (Test-Path -LiteralPath $ExternalDatabase -PathType Leaf) "Isolated external database missing: $ExternalDatabase"
 $databaseHashBefore = if (Test-Path -LiteralPath $ExternalDatabase -PathType Leaf) { (Get-FileHash -LiteralPath $ExternalDatabase -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
 $credentialDigestBefore = Get-CredentialTargetDigest
 $registryWasMissingBefore = @((Get-UninstallEntries)).Count -eq 0
 
-Invoke-Installer $FullBeta1 $IsolatedInstallDir
-$beta1Entry = Wait-For-UninstallEntry $Beta1
-$beta1RegisteredDir = Get-EntryInstallDirectory $beta1Entry
+Invoke-Installer $PreviousFullInstaller $IsolatedInstallDir
+$previousEntry = Wait-For-UninstallEntry $PreviousVersion
+$previousRegisteredDir = Get-EntryInstallDirectory $previousEntry
 $expectedIsolatedDir = [IO.Path]::GetFullPath($IsolatedInstallDir).TrimEnd('\')
-Assert-True ($beta1RegisteredDir -eq $expectedIsolatedDir) "beta.1 registry install directory mismatch: actual=$beta1RegisteredDir expected=$expectedIsolatedDir"
+Assert-True ($previousRegisteredDir -eq $expectedIsolatedDir) "Previous-version registry install directory mismatch: actual=$previousRegisteredDir expected=$expectedIsolatedDir"
 
-Invoke-Installer $FullBeta2 $IsolatedInstallDir
-$beta2Entry = Wait-For-UninstallEntry $Beta2
-Assert-True ((Get-EntryInstallDirectory $beta2Entry) -eq [IO.Path]::GetFullPath($IsolatedInstallDir).TrimEnd('\')) 'beta.2 registry install directory mismatch.'
+Invoke-Installer $CurrentFullInstaller $IsolatedInstallDir
+$currentEntry = Wait-For-UninstallEntry $CurrentVersion
+Assert-True ((Get-EntryInstallDirectory $currentEntry) -eq [IO.Path]::GetFullPath($IsolatedInstallDir).TrimEnd('\')) 'Current-version registry install directory mismatch.'
 Assert-FullResources $IsolatedInstallDir
-Invoke-Uninstaller $beta2Entry
+Invoke-Uninstaller $currentEntry
 Start-Sleep -Milliseconds 500
 Assert-True (@((Get-UninstallEntries)).Count -eq 0) 'Uninstall registry entry remains after Full uninstall.'
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $IsolatedInstallDir 'research-hotspots-desktop.exe'))) 'Application executable remains after Full uninstall.'
 
-Invoke-Installer $LiteBeta2 $IsolatedInstallDir
-$liteEntry = Wait-For-UninstallEntry $Beta2
+Invoke-Installer $CurrentLiteInstaller $IsolatedInstallDir
+$liteEntry = Wait-For-UninstallEntry $CurrentVersion
 Assert-LiteResourcesAbsent $IsolatedInstallDir
 Invoke-Uninstaller $liteEntry
 Start-Sleep -Milliseconds 500
@@ -148,8 +170,8 @@ if ($null -ne $databaseHashBefore) {
 }
 Assert-True ((Get-CredentialTargetDigest) -eq $credentialDigestBefore) 'Credential Manager target set changed during install/upgrade/uninstall.'
 
-Invoke-Installer $FullBeta2 $FinalInstallDir
-$finalEntry = Wait-For-UninstallEntry $Beta2
+Invoke-Installer $CurrentFullInstaller $FinalInstallDir
+$finalEntry = Wait-For-UninstallEntry $CurrentVersion
 Assert-FullResources $FinalInstallDir
 
 [ordered]@{

@@ -4,6 +4,7 @@ export type TrendStatus = "Surging" | "Stable" | "Declining" | "Unknown";
 
 export type ActiveView =
   | "dashboard"
+  | "agent"
   | "search"
   | "galaxy"
   | "hotspots"
@@ -154,6 +155,8 @@ export type PipelineStage =
 export type PipelineJob = {
   id: string;
   projectId?: string;
+  databaseKey?: string;
+  executionSessionId?: string;
   stage: PipelineStage;
   title: string;
   status: "planned" | "queued" | "running" | "done" | "failed";
@@ -436,6 +439,8 @@ export type V20AnalysisState = {
   hotspotCount: number;
   membershipCount: number;
   generatedAt: string;
+  libraryRevision?: number;
+  currentLibraryRevision?: number;
 };
 
 export type V20HotspotSnapshot = V20AnalysisState & {

@@ -1,4 +1,4 @@
-﻿@tailwind base;
+@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -4125,4 +4125,523 @@ button:focus-visible {
   }
 }
 
+@layer components {
+  .agent-page {
+    @apply flex h-full min-h-0 flex-col gap-4 overflow-hidden px-6 py-5;
+  }
 
+  .agent-page-header {
+    @apply flex shrink-0 items-start justify-between gap-6;
+  }
+
+  .agent-page-header h1 {
+    @apply mt-1 text-[30px] font-semibold tracking-[-0.035em] text-ink;
+  }
+
+  .agent-page-header p {
+    @apply mt-1 text-sm text-ink/45;
+  }
+
+  .agent-page-header .eyebrow {
+    @apply inline-flex items-center gap-2;
+  }
+
+  .agent-header-actions {
+    @apply flex shrink-0 items-center gap-3;
+  }
+
+  .agent-snapshot-badge {
+    @apply flex min-w-[235px] items-center gap-3 border px-3 py-2;
+    border-radius: var(--radius-md);
+  }
+
+  .agent-snapshot-badge.ready {
+    border-color: rgb(var(--color-cyan) / 0.24);
+    background: rgb(var(--color-cyan) / 0.055);
+  }
+
+  .agent-snapshot-badge.blocked {
+    border-color: rgb(var(--color-amber) / 0.25);
+    background: rgb(var(--color-amber) / 0.05);
+  }
+
+  .agent-snapshot-badge svg {
+    @apply shrink-0 text-cyan/80;
+  }
+
+  .agent-snapshot-badge div {
+    @apply min-w-0;
+  }
+
+  .agent-snapshot-badge strong,
+  .agent-snapshot-badge span {
+    @apply block truncate;
+  }
+
+  .agent-snapshot-badge strong {
+    @apply text-xs font-semibold text-ink/85;
+  }
+
+  .agent-snapshot-badge span {
+    @apply mt-0.5 text-[11px] text-ink/40;
+  }
+
+  .agent-blocker-banner,
+  .agent-error-banner {
+    @apply flex shrink-0 items-center gap-3 border px-4 py-3 text-sm;
+    border-radius: var(--radius-md);
+  }
+
+  .agent-blocker-banner {
+    border-color: rgb(var(--color-amber) / 0.25);
+    background: rgb(var(--color-amber) / 0.055);
+  }
+
+  .agent-blocker-banner > div {
+    @apply min-w-0 flex-1;
+  }
+
+  .agent-blocker-banner strong,
+  .agent-blocker-banner span {
+    @apply block;
+  }
+
+  .agent-blocker-banner strong {
+    @apply text-ink/85;
+  }
+
+  .agent-blocker-banner span {
+    @apply mt-0.5 text-xs text-ink/45;
+  }
+
+  .agent-error-banner {
+    border-color: rgb(var(--color-danger) / 0.28);
+    background: rgb(var(--color-danger) / 0.07);
+    color: rgb(var(--color-danger) / 0.88);
+  }
+
+  .agent-error-banner span {
+    @apply flex-1;
+  }
+
+  .agent-error-banner button {
+    @apply grid h-7 w-7 place-items-center border-0 bg-transparent text-inherit;
+  }
+
+  .agent-workbench {
+    @apply grid min-h-0 flex-1 overflow-hidden border;
+    grid-template-columns: minmax(250px, 286px) minmax(520px, 1fr) minmax(300px, 360px);
+    border-color: rgb(var(--color-line) / 0.45);
+    border-radius: var(--radius-lg);
+    background: rgba(8, 8, 9, 0.62);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .agent-run-rail,
+  .agent-inspector,
+  .agent-main-panel {
+    @apply min-h-0 min-w-0;
+  }
+
+  .agent-run-rail {
+    @apply flex flex-col border-r;
+    border-color: rgb(var(--color-line) / 0.4);
+    background: rgba(255,255,255,0.018);
+  }
+
+  .agent-rail-header {
+    @apply flex h-14 shrink-0 items-center justify-between border-b px-4;
+    border-color: rgb(var(--color-line) / 0.35);
+  }
+
+  .agent-rail-header > div {
+    @apply flex items-center gap-2 text-sm font-semibold text-ink/85;
+  }
+
+  .agent-rail-header small,
+  .agent-tabs span {
+    @apply rounded-full px-1.5 py-0.5 text-[10px] font-medium text-ink/40;
+    background: rgba(255,255,255,0.055);
+  }
+
+  .agent-icon-button {
+    @apply grid h-8 w-8 shrink-0 place-items-center border bg-transparent text-ink/45 transition;
+    border-color: rgb(var(--color-line) / 0.42);
+    border-radius: var(--radius-sm);
+  }
+
+  .agent-icon-button:hover {
+    @apply text-ink/85;
+    border-color: rgb(var(--color-cyan) / 0.35);
+  }
+
+  .agent-filter-row {
+    @apply grid shrink-0 grid-cols-3 gap-1 border-b p-2;
+    border-color: rgb(var(--color-line) / 0.28);
+  }
+
+  .agent-filter-row button {
+    @apply h-8 border-0 bg-transparent text-xs text-ink/40 transition;
+    border-radius: var(--radius-sm);
+  }
+
+  .agent-filter-row button.active {
+    @apply text-ink/85;
+    background: rgba(255,255,255,0.055);
+  }
+
+  .agent-run-list {
+    @apply min-h-0 flex-1 overflow-y-auto p-2;
+  }
+
+  .agent-run-item {
+    @apply mb-1.5 block w-full border px-3 py-3 text-left transition;
+    border-color: transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+  }
+
+  .agent-run-item:hover {
+    background: rgba(255,255,255,0.03);
+  }
+
+  .agent-run-item.active {
+    border-color: rgb(var(--color-cyan) / 0.28);
+    background: rgb(var(--color-cyan) / 0.07);
+    box-shadow: inset 2px 0 0 rgb(var(--color-cyan) / 0.82);
+  }
+
+  .agent-run-item-top {
+    @apply flex items-center justify-between gap-2;
+  }
+
+  .agent-run-item-top time {
+    @apply text-[10px] text-ink/25;
+  }
+
+  .agent-status-dot,
+  .agent-status-chip {
+    @apply inline-flex items-center gap-1.5 font-medium;
+  }
+
+  .agent-status-dot {
+    @apply text-[10px];
+  }
+
+  .agent-status-chip {
+    @apply w-fit border px-2 py-1 text-xs;
+    border-radius: 999px;
+  }
+
+  .tone-cyan { color: rgb(var(--color-cyan) / 0.9); }
+  .tone-amber { color: rgb(var(--color-amber) / 0.9); }
+  .tone-danger { color: rgb(var(--color-danger) / 0.9); }
+  .tone-success { color: rgba(113, 215, 164, 0.9); }
+  .tone-neutral { color: rgb(var(--color-ink) / 0.48); }
+  .agent-status-chip.tone-cyan { border-color: rgb(var(--color-cyan) / 0.25); background: rgb(var(--color-cyan) / 0.06); }
+  .agent-status-chip.tone-amber { border-color: rgb(var(--color-amber) / 0.25); background: rgb(var(--color-amber) / 0.06); }
+  .agent-status-chip.tone-danger { border-color: rgb(var(--color-danger) / 0.25); background: rgb(var(--color-danger) / 0.06); }
+  .agent-status-chip.tone-success { border-color: rgba(113,215,164,0.25); background: rgba(113,215,164,0.06); }
+  .agent-status-chip.tone-neutral { border-color: rgb(var(--color-line) / 0.5); background: rgba(255,255,255,0.025); }
+
+  .agent-run-item > strong {
+    @apply mt-2 line-clamp-2 block text-[13px] font-medium leading-5 text-ink/80;
+  }
+
+  .agent-run-item > small {
+    @apply mt-1.5 block text-[10px] text-ink/30;
+  }
+
+  .agent-run-item-progress,
+  .agent-budget-track {
+    @apply overflow-hidden;
+    height: 2px;
+    background: rgba(255,255,255,0.055);
+  }
+
+  .agent-run-item-progress { @apply mt-3; }
+  .agent-run-item-progress span,
+  .agent-budget-track span {
+    @apply block h-full;
+    background: rgb(var(--color-cyan) / 0.72);
+  }
+
+  .agent-empty-rail,
+  .agent-empty-main,
+  .agent-content-empty,
+  .agent-inspector-empty {
+    @apply flex flex-col items-center justify-center text-center text-ink/35;
+  }
+
+  .agent-empty-rail { @apply min-h-[220px] gap-2 px-5; }
+  .agent-empty-rail span { @apply text-sm text-ink/55; }
+  .agent-empty-rail small { @apply text-xs leading-5; }
+  .agent-load-more { @apply h-10 shrink-0 border-0 border-t bg-transparent text-xs text-ink/35; border-color: rgb(var(--color-line) / 0.3); }
+
+  .agent-main-panel {
+    @apply flex flex-col overflow-hidden;
+    background: rgba(0,0,0,0.08);
+  }
+
+  .agent-empty-main { @apply h-full gap-3 px-10; }
+  .agent-empty-main h2 { @apply text-lg font-semibold text-ink/80; }
+  .agent-empty-main p { @apply max-w-[470px] text-sm leading-6 text-ink/40; }
+  .agent-empty-symbol { @apply mb-2 grid h-16 w-16 place-items-center border text-cyan/80; border-color: rgb(var(--color-cyan) / 0.22); border-radius: 18px; background: rgb(var(--color-cyan) / 0.05); }
+
+  .agent-run-header {
+    @apply flex shrink-0 items-start justify-between gap-5 border-b px-5 py-4;
+    border-color: rgb(var(--color-line) / 0.35);
+  }
+
+  .agent-run-heading { @apply min-w-0; }
+  .agent-run-heading h2 { @apply mt-2 line-clamp-2 text-lg font-semibold leading-6 text-ink/90; }
+  .agent-run-heading p { @apply mt-1 text-xs text-ink/40; }
+  .agent-run-controls { @apply flex shrink-0 flex-wrap justify-end gap-2; }
+
+  .agent-tabs {
+    @apply flex h-12 shrink-0 items-end gap-1 border-b px-4;
+    border-color: rgb(var(--color-line) / 0.32);
+  }
+
+  .agent-tabs button {
+    @apply flex h-11 items-center gap-2 border-0 border-b-2 border-transparent bg-transparent px-3 text-xs text-ink/40 transition;
+  }
+
+  .agent-tabs button.active { @apply text-ink/90; border-bottom-color: rgb(var(--color-cyan) / 0.8); }
+  .agent-tab-content { @apply min-h-0 flex-1 overflow-auto; }
+
+  .agent-plan-view { @apply p-4; }
+  .agent-plan-summary { @apply grid grid-cols-4 border; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-md); background: rgba(255,255,255,0.018); }
+  .agent-plan-summary > div { @apply border-r px-4 py-3 last:border-r-0; border-color: rgb(var(--color-line) / 0.28); }
+  .agent-plan-summary span,
+  .agent-plan-summary strong { @apply block; }
+  .agent-plan-summary span { @apply text-[10px] uppercase tracking-wider text-ink/30; }
+  .agent-plan-summary strong { @apply mt-1 text-base font-semibold text-ink/80; }
+  .agent-plan-context { @apply mt-3 grid grid-cols-2 gap-3; }
+  .agent-plan-context > div { @apply border p-3; border-color: rgb(var(--color-line) / 0.3); border-radius: var(--radius-md); }
+  .agent-plan-context h3 { @apply mb-2 text-xs font-semibold text-ink/60; }
+  .agent-plan-context p { @apply flex items-start gap-2 py-1 text-xs leading-5 text-ink/40; }
+  .agent-plan-context p svg { @apply mt-1 shrink-0 text-cyan/60; }
+
+  .agent-step-list { @apply mt-3 space-y-1.5; }
+  .agent-step-row { @apply grid items-center gap-3 border px-3 py-3; grid-template-columns: 34px minmax(0,1fr) auto; border-color: rgb(var(--color-line) / 0.3); border-radius: var(--radius-md); background: rgba(255,255,255,0.015); }
+  .agent-step-row.status-running,
+  .agent-step-row.status-waiting_user { border-color: rgb(var(--color-cyan) / 0.28); background: rgb(var(--color-cyan) / 0.035); }
+  .agent-step-ordinal { @apply font-mono text-xs text-ink/25; }
+  .agent-step-body { @apply min-w-0; }
+  .agent-step-body > div { @apply flex items-center gap-2; }
+  .agent-step-body strong { @apply truncate text-[13px] font-medium text-ink/80; }
+  .agent-step-body code { @apply mt-1 block truncate text-[10px] text-ink/30; }
+  .agent-step-body > small { @apply mt-1 block text-[10px] text-danger/70; }
+  .agent-risk { @apply shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase; }
+  .risk-read { color: rgb(var(--color-cyan) / 0.75); background: rgb(var(--color-cyan) / 0.07); }
+  .risk-write { color: rgb(var(--color-amber) / 0.84); background: rgb(var(--color-amber) / 0.07); }
+  .risk-high { color: rgb(var(--color-danger) / 0.84); background: rgb(var(--color-danger) / 0.07); }
+  .agent-step-state { @apply flex items-center gap-1.5 text-[10px] text-ink/30; }
+  .agent-step-row.status-succeeded .agent-step-state { color: rgba(113,215,164,0.72); }
+  .agent-step-row.status-failed .agent-step-state { color: rgb(var(--color-danger) / 0.72); }
+
+  .agent-timeline { @apply mx-auto max-w-[860px] px-6 py-5; }
+  .agent-event { @apply relative grid gap-3 pb-5; grid-template-columns: 14px 1fr; }
+  .agent-event::before { content: ""; @apply absolute bottom-0 left-[6px] top-3 w-px; background: rgb(var(--color-line) / 0.42); }
+  .agent-event:last-child::before { @apply hidden; }
+  .agent-event-marker { @apply z-10 mt-1 h-3 w-3 border; border-color: rgb(var(--color-cyan) / 0.5); border-radius: 50%; background: rgb(var(--color-surface)); box-shadow: 0 0 0 3px rgb(var(--color-cyan) / 0.05); }
+  .agent-event-top { @apply flex items-center justify-between gap-3; }
+  .agent-event-top strong { @apply text-xs font-medium capitalize text-ink/70; }
+  .agent-event-top span,
+  .agent-event small { @apply text-[10px] text-ink/25; }
+  .agent-event p { @apply mt-1 text-xs leading-5 text-ink/40; }
+
+  .agent-artifact-workspace { @apply grid h-full min-h-[360px]; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); }
+  .agent-artifact-list { @apply overflow-y-auto border-r p-2; border-color: rgb(var(--color-line) / 0.3); }
+  .agent-artifact-list > button { @apply mb-1 grid w-full items-center gap-2 border px-2.5 py-2.5 text-left; grid-template-columns: 28px minmax(0,1fr); border-color: transparent; border-radius: var(--radius-sm); background: transparent; }
+  .agent-artifact-list > button.active { border-color: rgb(var(--color-cyan) / 0.24); background: rgb(var(--color-cyan) / 0.06); }
+  .agent-artifact-list > button > svg { @apply text-cyan/60; }
+  .agent-artifact-list strong,
+  .agent-artifact-list span { @apply block truncate; }
+  .agent-artifact-list strong { @apply text-xs font-medium text-ink/70; }
+  .agent-artifact-list span,
+  .agent-artifact-list > button > small { @apply text-[9px] text-ink/30; }
+  .agent-artifact-list > button > small { @apply col-start-2; }
+  .agent-artifact-view { @apply overflow-y-auto p-5; }
+  .agent-content-empty { @apply h-full min-h-[240px] gap-2 text-xs; }
+  .agent-artifact-heading { @apply mb-4 flex items-start justify-between gap-4 border-b pb-4; border-color: rgb(var(--color-line) / 0.32); }
+  .agent-artifact-heading span { @apply text-[10px] uppercase tracking-wider text-cyan/60; }
+  .agent-artifact-heading h3 { @apply mt-1 text-lg font-semibold text-ink/85; }
+  .agent-artifact-heading > div:last-child { @apply text-right; }
+  .agent-artifact-heading code { @apply mt-1 block text-[10px] text-ink/30; }
+  .agent-evidence-stats { @apply mb-3 flex gap-2; }
+  .agent-evidence-stats span { @apply border px-2 py-1 text-[10px] text-ink/40; border-color: rgb(var(--color-line) / 0.4); border-radius: 999px; }
+  .agent-paper-list { @apply space-y-1.5; }
+  .agent-paper-list button { @apply grid w-full gap-3 border px-3 py-3 text-left transition; grid-template-columns: 26px minmax(0,1fr); border-color: rgb(var(--color-line) / 0.28); border-radius: var(--radius-sm); background: rgba(255,255,255,0.012); }
+  .agent-paper-list button:hover { border-color: rgb(var(--color-cyan) / 0.28); background: rgb(var(--color-cyan) / 0.035); }
+  .agent-paper-list button > span { @apply font-mono text-[10px] text-cyan/50; }
+  .agent-paper-list strong { @apply block text-xs font-medium text-ink/75; }
+  .agent-paper-list small { @apply mt-1 block text-[10px] text-ink/30; }
+  .agent-markdown { @apply mx-auto max-w-[780px] pb-10 text-[13px] leading-7 text-ink/60; }
+  .agent-markdown h2 { @apply mb-5 mt-1 text-2xl font-semibold tracking-[-0.025em] text-ink/90; }
+  .agent-markdown h3 { @apply mb-2 mt-7 border-b pb-2 text-base font-semibold text-ink/80; border-color: rgb(var(--color-line) / 0.32); }
+  .agent-markdown h4 { @apply mb-2 mt-5 text-sm font-semibold text-ink/75; }
+  .agent-markdown p { @apply mb-3 whitespace-pre-line; }
+  .agent-markdown ul { @apply mb-3 list-disc space-y-1 pl-5; }
+  .agent-inline-link { @apply inline border-0 bg-transparent p-0 text-cyan/80 underline underline-offset-2; }
+  .agent-audit-risk { @apply flex items-start gap-3 border p-4; border-radius: var(--radius-md); }
+  .agent-audit-risk.risk-high { border-color: rgb(var(--color-danger) / 0.25); }
+  .agent-audit-risk.risk-medium { border-color: rgb(var(--color-amber) / 0.25); }
+  .agent-audit-risk.risk-low { border-color: rgba(113,215,164,0.25); }
+  .agent-audit-risk strong,
+  .agent-audit-risk span { @apply block; }
+  .agent-audit-risk strong { @apply text-sm text-ink/80; }
+  .agent-audit-risk span { @apply mt-1 text-xs leading-5 text-ink/40; }
+  .agent-audit-grid { @apply mt-3 grid grid-cols-4 gap-2; }
+  .agent-metric { @apply border p-3; border-color: rgb(var(--color-line) / 0.3); border-radius: var(--radius-sm); }
+  .agent-metric span,
+  .agent-metric strong { @apply block; }
+  .agent-metric span { @apply text-[10px] text-ink/30; }
+  .agent-metric strong { @apply mt-1 text-lg font-semibold text-ink/80; }
+  .agent-audit-list { @apply mt-3 border p-3; border-color: rgb(var(--color-line) / 0.3); border-radius: var(--radius-sm); }
+  .agent-audit-list h4 { @apply mb-2 text-xs font-semibold text-ink/60; }
+  .agent-audit-list p { @apply flex items-start gap-2 py-1 text-xs leading-5 text-ink/40; }
+  .agent-audit-list svg { @apply mt-1 shrink-0 text-amber/70; }
+  .agent-json-view,
+  .agent-json-details pre { @apply overflow-auto whitespace-pre-wrap break-all border p-3 font-mono text-[10px] leading-5 text-ink/45; border-color: rgb(var(--color-line) / 0.3); border-radius: var(--radius-sm); background: rgba(0,0,0,0.22); }
+
+  .agent-inspector { @apply overflow-y-auto border-l; border-color: rgb(var(--color-line) / 0.4); background: rgba(255,255,255,0.015); }
+  .agent-inspector-close { @apply absolute right-3 top-3 z-10 hidden h-8 w-8 place-items-center border text-ink/40 transition-colors hover:text-ink/80; border-color: rgb(var(--color-line) / 0.45); border-radius: var(--radius-sm); background: rgb(var(--color-panel)); }
+  .agent-inspector-toggle { @apply hidden; }
+  .agent-rail-close,
+  .agent-rail-toggle { @apply hidden; }
+  .agent-inspector-attention { box-shadow: inset 2px 0 0 rgb(var(--color-amber) / 0.52); }
+  .agent-inspector-content { @apply p-4; }
+  .agent-inspector-title { @apply flex items-start gap-3 border-b pb-4; border-color: rgb(var(--color-line) / 0.32); }
+  .agent-inspector-title > span { @apply grid h-8 w-8 shrink-0 place-items-center border text-cyan/70; border-color: rgb(var(--color-cyan) / 0.2); border-radius: var(--radius-sm); background: rgb(var(--color-cyan) / 0.045); }
+  .agent-inspector-title h3 { @apply text-sm font-semibold text-ink/80; }
+  .agent-inspector-title p { @apply mt-1 text-[10px] text-ink/30; }
+  .agent-inspector-note { @apply my-3 border p-3 text-xs leading-5 text-ink/40; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-sm); background: rgba(255,255,255,0.018); }
+  .agent-inspector-note.warning { border-color: rgb(var(--color-amber) / 0.22); background: rgb(var(--color-amber) / 0.045); color: rgb(var(--color-amber) / 0.68); }
+  .agent-inspector-list { @apply space-y-1; }
+  .agent-inspector-list > div { @apply flex items-center justify-between gap-3 border-b py-2 text-xs; border-color: rgb(var(--color-line) / 0.23); }
+  .agent-inspector-list span { @apply min-w-0 truncate text-ink/55; }
+  .agent-inspector-list small { @apply shrink-0 rounded px-1.5 py-0.5 text-[9px]; }
+  .agent-inspector-actions { @apply mt-4 grid gap-2; }
+  .agent-inspector-details { @apply my-3; }
+  .agent-inspector-details > div { @apply flex items-start justify-between gap-4 border-b py-2 text-xs; border-color: rgb(var(--color-line) / 0.24); }
+  .agent-inspector-details dt { @apply text-ink/30; }
+  .agent-inspector-details dd { @apply max-w-[70%] text-right text-ink/60; }
+  .agent-risk-banner { @apply my-3 border px-3 py-2 text-xs; border-radius: var(--radius-sm); }
+  .agent-json-details { @apply my-3 text-xs text-ink/40; }
+  .agent-json-details summary { @apply mb-2 cursor-pointer; }
+  .agent-question-prompt { @apply my-4 text-sm leading-6 text-ink/70; }
+  .agent-choice-list { @apply mb-4 space-y-2; }
+  .agent-choice-list label { @apply flex cursor-pointer items-center gap-2 border p-3 text-xs text-ink/55; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-sm); }
+  .agent-confirm-options { @apply mb-4 grid grid-cols-2 gap-2; }
+  .agent-confirm-options button { @apply h-10 border bg-transparent text-xs text-ink/45; border-color: rgb(var(--color-line) / 0.4); border-radius: var(--radius-sm); }
+  .agent-confirm-options button.active { border-color: rgb(var(--color-cyan) / 0.4); background: rgb(var(--color-cyan) / 0.07); color: rgb(var(--color-ink) / 0.85); }
+  .agent-budget-panel { @apply mt-4 space-y-3; }
+  .agent-budget-panel > div > div:first-child { @apply mb-1 flex items-center justify-between text-[10px]; }
+  .agent-budget-panel span { @apply text-ink/30; }
+  .agent-budget-panel strong { @apply font-medium text-ink/60; }
+  .agent-inspector-empty { @apply h-full gap-2 px-7 text-xs leading-5; }
+  .agent-inspector-empty strong { @apply text-sm text-ink/55; }
+
+  .agent-dialog {
+    @apply w-[520px] max-w-[calc(100vw-40px)] border p-0 text-ink;
+    border-color: rgb(var(--color-line) / 0.68);
+    border-radius: 12px;
+    background: rgb(var(--color-panel));
+    box-shadow: var(--shadow-float);
+  }
+
+  .agent-dialog.wide { @apply w-[860px]; }
+  .agent-dialog::backdrop { background: rgba(0,0,0,0.72); backdrop-filter: blur(5px); }
+  .agent-dialog > header { @apply flex h-14 items-center justify-between border-b px-5; border-color: rgb(var(--color-line) / 0.4); }
+  .agent-dialog > header h2 { @apply text-base font-semibold text-ink/90; }
+  .agent-dialog-body { @apply max-h-[calc(100vh-100px)] overflow-y-auto p-5; }
+  .agent-confirm-copy { @apply mb-4 flex items-start gap-3 border p-3 text-sm leading-6 text-ink/55; border-color: rgb(var(--color-amber) / 0.24); border-radius: var(--radius-sm); background: rgb(var(--color-amber) / 0.04); }
+  .agent-confirm-copy svg { @apply mt-1 shrink-0 text-amber/70; }
+  .agent-modal-actions { @apply mt-5 flex justify-end gap-2; }
+  .agent-new-run-form { @apply space-y-4; }
+  .agent-mode-grid { @apply grid grid-cols-2 gap-2; }
+  .agent-mode-grid button { @apply grid border p-3 text-left; grid-template-columns: 28px 1fr; border-color: rgb(var(--color-line) / 0.38); border-radius: var(--radius-md); background: rgba(255,255,255,0.012); }
+  .agent-mode-grid button.active { border-color: rgb(var(--color-cyan) / 0.35); background: rgb(var(--color-cyan) / 0.05); }
+  .agent-mode-grid button svg { @apply row-span-2 mt-0.5 text-cyan/70; }
+  .agent-mode-grid strong { @apply text-sm font-medium text-ink/75; }
+  .agent-mode-grid span { @apply mt-1 text-xs leading-5 text-ink/35; }
+  .agent-new-snapshot { @apply flex items-center gap-3 border p-3; border-radius: var(--radius-md); }
+  .agent-new-snapshot.ready { border-color: rgba(113,215,164,0.2); background: rgba(113,215,164,0.035); }
+  .agent-new-snapshot.blocked { border-color: rgb(var(--color-amber) / 0.22); background: rgb(var(--color-amber) / 0.04); }
+  .agent-new-snapshot > div { @apply flex-1; }
+  .agent-new-snapshot strong,
+  .agent-new-snapshot span { @apply block; }
+  .agent-new-snapshot strong { @apply text-xs text-ink/70; }
+  .agent-new-snapshot span { @apply mt-1 text-[10px] text-ink/30; }
+  .agent-new-snapshot button { @apply border-0 bg-transparent text-xs text-cyan/70; }
+  .agent-advanced-toggle { @apply flex w-full items-center justify-between border px-3 py-2.5 text-left; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-md); background: rgba(255,255,255,0.012); }
+  .agent-advanced-toggle span { @apply flex items-center gap-2 text-xs font-medium text-ink/60; }
+  .agent-advanced-toggle svg { @apply transition-transform; }
+  .agent-advanced-toggle small { @apply text-[10px] text-ink/30; }
+  .agent-advanced-panel { @apply space-y-3 border p-3; border-color: rgb(var(--color-line) / 0.32); border-radius: var(--radius-md); background: rgba(0,0,0,0.12); }
+  .agent-model-editor { @apply border p-3; border-color: rgb(var(--color-line) / 0.32); border-radius: var(--radius-sm); }
+  .agent-model-editor > header { @apply mb-3 flex items-center justify-between gap-3; }
+  .agent-model-editor > header strong,
+  .agent-model-editor > header span { @apply block; }
+  .agent-model-editor > header strong { @apply text-xs text-ink/70; }
+  .agent-model-editor > header span { @apply mt-0.5 text-[10px] text-ink/30; }
+  .agent-model-fields { @apply grid grid-cols-2 gap-3; }
+  .agent-model-url { @apply col-span-2; }
+  .agent-model-options,
+  .agent-same-model { @apply flex items-center gap-4 text-xs text-ink/45; }
+  .agent-model-options { @apply mt-3; }
+  .agent-model-options label,
+  .agent-same-model { @apply flex items-center gap-2; }
+  .agent-model-test-result { @apply border px-3 py-2 text-xs text-cyan/70; border-color: rgb(var(--color-cyan) / 0.2); border-radius: var(--radius-sm); background: rgb(var(--color-cyan) / 0.035); }
+  .agent-budget-editor { @apply grid grid-cols-4 gap-2; }
+  .agent-budget-editor label { @apply border p-2; border-color: rgb(var(--color-line) / 0.3); border-radius: var(--radius-sm); }
+  .agent-budget-editor span,
+  .agent-budget-editor small { @apply block text-[9px] text-ink/30; }
+  .agent-budget-editor input { @apply my-1 h-8 w-full border bg-transparent px-2 text-sm text-ink/70; border-color: rgb(var(--color-line) / 0.4); border-radius: 5px; }
+  .agent-new-run-footer { @apply flex items-center justify-between gap-4 border-t pt-4; border-color: rgb(var(--color-line) / 0.32); }
+  .agent-new-run-footer > div { @apply flex max-w-[540px] items-start gap-2 text-[10px] leading-5 text-ink/30; }
+  .agent-new-run-footer svg { @apply mt-0.5 shrink-0 text-cyan/55; }
+  .agent-task-kind-grid { @apply mt-2 grid grid-cols-3 gap-2; }
+  .agent-task-kind-grid button { @apply flex min-h-[68px] flex-col items-start border px-3 py-2 text-left; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-sm); background: rgb(var(--color-panel-soft) / 0.22); }
+  .agent-task-kind-grid button:hover { border-color: rgb(var(--color-cyan) / 0.3); }
+  .agent-task-kind-grid button.active { border-color: rgb(var(--color-cyan) / 0.58); background: rgb(var(--color-cyan) / 0.07); box-shadow: inset 2px 0 0 rgb(var(--color-cyan) / 0.8); }
+  .agent-task-kind-grid strong { @apply text-xs text-ink/80; }
+  .agent-task-kind-grid span { @apply mt-1 text-[10px] leading-4 text-ink/35; }
+  .agent-resource-picker { @apply flex items-center justify-between gap-3 border p-3; border-color: rgb(var(--color-line) / 0.35); border-radius: var(--radius-sm); background: rgb(var(--color-panel-soft) / 0.24); }
+  .agent-resource-picker > div { @apply min-w-0; }
+  .agent-resource-picker strong { @apply block text-xs text-ink/70; }
+  .agent-resource-picker span { @apply mt-1 block truncate text-[10px] text-ink/35; }
+  .agent-export-fields { @apply space-y-3; }
+  .agent-operation-inline { @apply mt-3 grid max-w-[520px] grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 text-[10px] text-ink/40; }
+  .agent-operation-inline strong { @apply font-mono text-cyan/65; }
+  .agent-operation-inline progress { @apply col-span-2 h-1.5 w-full overflow-hidden; accent-color: rgb(var(--color-cyan)); }
+
+  @media (max-width: 1599px) {
+    .agent-workbench { grid-template-columns: 260px minmax(520px, 1fr); }
+    .agent-plan-context { @apply grid-cols-1; }
+    .agent-inspector { @apply fixed bottom-4 right-4 top-4 z-40 w-[340px] border shadow-2xl; border-color: rgb(var(--color-line) / 0.65); background: rgb(var(--color-panel)); }
+    .agent-inspector:not(.agent-inspector-attention):not(.agent-inspector-open) { @apply hidden; }
+    .agent-inspector-close { @apply grid; }
+    .agent-inspector-toggle { @apply inline-flex; }
+  }
+
+  @media (max-width: 1279px) {
+    .agent-page { @apply px-4; }
+    .agent-workbench { grid-template-columns: minmax(0, 1fr); }
+    .agent-run-rail { @apply fixed bottom-4 left-4 top-4 z-40 hidden w-[300px] border shadow-2xl; border-color: rgb(var(--color-line) / 0.65); background: rgb(var(--color-panel)); }
+    .agent-run-rail.agent-run-rail-open { @apply flex; }
+    .agent-rail-close { @apply absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center border text-ink/40; border-color: rgb(var(--color-line) / 0.45); border-radius: var(--radius-sm); background: rgb(var(--color-panel)); }
+    .agent-rail-toggle { @apply inline-flex; }
+    .agent-header-actions { @apply items-stretch; }
+    .agent-snapshot-badge { @apply hidden; }
+    .agent-audit-grid { @apply grid-cols-2; }
+    .agent-task-kind-grid { @apply grid-cols-2; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .agent-page *,
+    .agent-dialog * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}

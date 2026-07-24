@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "topic": "Quantum Reliability",
+  "keywords": ["quantum", "error"],
+  "papers": [
+    {"id":"p1","title":"Paper One","year":2024,"source":"arxiv","field":"Quantum Physics","url":"https://example.test/p1"},
+    {"id":"p2","title":"Paper Two","year":2023,"source":"arxiv","field":"Quantum Physics","url":"https://example.test/p2"},
+    {"id":"p3","title":"Paper Three","year":2022,"source":"openalex","field":"Quantum Physics","url":"https://example.test/p3"},
+    {"id":"p4","title":"Paper Four","year":2021,"source":"openalex","field":"Quantum Physics","url":"https://example.test/p4"}
+  ],
+  "normalization": {
+    "paperCount": 3,
+    "rawContent": "当然，Quantum reliability synthesis [1].\n\n## 热点概述\nOverview [1].\n\n## 代表论文\nRepresentatives [2].\n\n## 年度趋势\nTrend [3].\n\n## 来源分布\nSources [1].\n\n## 关键词网络\nNetwork [2].\n\n## 未来方向\nFuture [3].\n\n## 参考文献\n[99] stale reference",
+    "expectedNormalized": "# Quantum Reliability 学术综述\n\n## 证据概览\n- 绑定文献：3 篇；年份范围：2022-2024。\n- 来源分布：arxiv 2；openalex 1。\n- 领域分布：Quantum Physics 3。\n- 代表论文证据包：3 篇。\n- 关键词网络：quantum、error。\n\nQuantum reliability synthesis [1].\n\n## 热点概述\nOverview [1].\n\n## 代表论文\nRepresentatives [2].\n\n## 年度趋势\nTrend [3].\n\n## 来源分布\nSources [1].\n\n## 关键词网络\nNetwork [2].\n\n## 未来方向\nFuture [3].\n\n## 参考文献\n[1] Paper One. arxiv, 2024. https://example.test/p1\n[2] Paper Two. arxiv, 2023. https://example.test/p2\n[3] Paper Three. openalex, 2022. https://example.test/p3"
+  },
+  "auditCases": [
+    {
+      "name": "low",
+      "paperCount": 3,
+      "content": "# Low\n\n## 证据概览\nBound evidence.\n\n## 热点概述\nOverview [1].\n\n## 代表论文\nRepresentatives [2].\n\n## 年度趋势\nTrend [3].\n\n## 来源分布\nSources [1].\n\n## 关键词网络\nNetwork [2].\n\n## 未来方向\nFuture [3].",
+      "expected": {"citedIndices":[1,2,3],"invalidCitationCount":0,"uncitedPaperCount":0,"missingRequiredSections":[],"evidenceProfilePresent":true,"riskLevel":"low","metrics":{"citationCoverage":1.0,"citationAccuracy":1.0,"consistencyScore":1.0}}
+    },
+    {
+      "name": "medium",
+      "paperCount": 4,
+      "content": "# Medium\n\n## 证据概览\nBound evidence.\n\n## 热点概述\nOverview [1].\n\n## 代表论文\nRepresentatives.\n\n## 年度趋势\nTrend.\n\n## 来源分布\nSources.\n\n## 关键词网络\nNetwork.\n\n## 未来方向\nFuture.",
+      "expected": {"citedIndices":[1],"invalidCitationCount":0,"uncitedPaperCount":3,"missingRequiredSections":[],"evidenceProfilePresent":true,"riskLevel":"medium","metrics":{"citationCoverage":0.25,"citationAccuracy":1.0,"consistencyScore":0.7395}}
+    },
+    {
+      "name": "no-citations",
+      "paperCount": 3,
+      "content": "# No citations\n\n## 证据概览\nBound evidence.\n\n## 热点概述\nOverview.\n\n## 代表论文\nRepresentatives.\n\n## 年度趋势\nTrend.\n\n## 来源分布\nSources.\n\n## 关键词网络\nNetwork.\n\n## 未来方向\nFuture.",
+      "expected": {"citedIndices":[],"invalidCitationCount":0,"uncitedPaperCount":3,"missingRequiredSections":[],"evidenceProfilePresent":true,"riskLevel":"high","metrics":{"citationCoverage":0.0,"citationAccuracy":0.0,"consistencyScore":0.0}}
+    },
+    {
+      "name": "out-of-range",
+      "paperCount": 3,
+      "content": "# Invalid citation\n\n## 证据概览\nBound evidence.\n\n## 热点概述\nOverview [9].\n\n## 代表论文\nRepresentatives.\n\n## 年度趋势\nTrend.\n\n## 来源分布\nSources.\n\n## 关键词网络\nNetwork.\n\n## 未来方向\nFuture.",
+      "expected": {"citedIndices":[],"invalidCitationCount":1,"uncitedPaperCount":3,"missingRequiredSections":[],"evidenceProfilePresent":true,"riskLevel":"high","metrics":{"citationCoverage":0.0,"citationAccuracy":0.0,"consistencyScore":0.1543}}
+    },
+    {
+      "name": "reference-list-does-not-count",
+      "paperCount": 3,
+      "content": "# Reference-only\n\n## 证据概览\nBound evidence.\n\n## 热点概述\nOverview.\n\n## 代表论文\nRepresentatives.\n\n## 年度趋势\nTrend.\n\n## 来源分布\nSources.\n\n## 关键词网络\nNetwork.\n\n## 未来方向\nFuture.\n\n## 参考文献\n[1] Paper One.\n[2] Paper Two.\n[3] Paper Three.",
+      "expected": {"citedIndices":[],"invalidCitationCount":0,"uncitedPaperCount":3,"missingRequiredSections":[],"evidenceProfilePresent":true,"riskLevel":"high","metrics":{"citationCoverage":0.0,"citationAccuracy":0.0,"consistencyScore":0.0}}
+    }
+  ]
+}

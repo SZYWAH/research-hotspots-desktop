@@ -36,6 +36,11 @@ export type PaperFileImportStart = {
   fileName: string;
 };
 
+export type LibraryMutationStatus = {
+  databaseKey: string;
+  operationKind?: string;
+};
+
 export type PaperFileImportProgress = {
   taskId: string;
   fileName: string;
@@ -148,6 +153,7 @@ export type LibrarySetupState = {
   seedPaperCount?: number;
   seedHotspotCount?: number;
   seedMembershipCount?: number;
+  seedLibraryRevision?: number;
   seedSnapshotId?: string;
   seedDatabaseSchemaVersion?: number;
   seedVersion?: string;
@@ -324,6 +330,13 @@ export async function getPaperLibraryStatus(databaseDir?: string, projectId?: st
     } satisfies PaperLibraryStatus;
   }
   return invoke<PaperLibraryStatus>("paper_library_status", { databaseDir, projectId });
+}
+
+export async function getLibraryMutationStatus(databaseDir?: string) {
+  if (!isDesktopRuntime()) {
+    return { databaseKey: databaseDir ?? "browser-preview" } satisfies LibraryMutationStatus;
+  }
+  return invoke<LibraryMutationStatus>("get_library_mutation_status", { databaseDir });
 }
 
 export async function getLibrarySetupState(databaseDir?: string) {

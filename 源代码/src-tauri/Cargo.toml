@@ -1,6 +1,6 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.21.0-beta.2"
+version = "0.22.0-beta.1"
 description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
 authors = ["Research Hotspots Desktop"]
 edition = "2021"
@@ -50,6 +50,26 @@ name = "audit_windows_first_run"
 path = "src/bin/audit_windows_first_run.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "audit_agent_persistence"
+path = "src/bin/audit_agent_persistence.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "audit_agent_executor"
+path = "src/bin/audit_agent_executor.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "audit_agent_live"
+path = "src/bin/audit_agent_live.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "audit_agent_performance"
+path = "src/bin/audit_agent_performance.rs"
+required-features = ["dev-tools"]
+
 [lib]
 name = "research_hotspots_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -75,4 +95,4 @@ fs2 = "0.4"
 research-hotspots-core = { path = "core" }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["sync", "time", "macros"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt", "net"] }

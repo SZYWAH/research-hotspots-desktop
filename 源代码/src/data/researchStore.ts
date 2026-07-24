@@ -512,12 +512,19 @@ export async function getPipelineJobs() {
 
 export async function updatePipelineJob(stage: PipelineJob["stage"], patch: Partial<Omit<PipelineJob, "id" | "stage" | "createdAt">>) {
   const db = await getDb();
-  const projectId = await ensureProjectState(db);
+  const activeProjectId = await ensureProjectState(db);
+  const projectId = patch.projectId ?? activeProjectId;
   const jobs = filterProject(await db.getAll(JOB_STORE), projectId);
-  const existing = jobs.find((job) => job.stage === stage);
+  const databaseKey = patch.databaseKey ?? "";
+  const executionSessionId = patch.executionSessionId ?? "";
+  const existing = jobs.find((job) => (
+    job.stage === stage
+      && (job.databaseKey ?? "") === databaseKey
+      && (job.executionSessionId ?? "") === executionSessionId
+  ));
   const timestamp = nowIso();
   const saved: PipelineJob = {
-    id: existing?.id ?? scopedId(projectId, `job-${stage}`),
+    id: existing?.id ?? scopedId(projectId, `job-${stage}-${executionSessionId || "legacy"}-${timestamp}`),
     projectId,
     stage,
     title: existing?.title ?? stage,

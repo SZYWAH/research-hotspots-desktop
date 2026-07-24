@@ -2975,7 +2975,7 @@ dependencies = [
 
 [[package]]
 name = "research-hotspots-core"
-version = "0.21.0-beta.2"
+version = "0.22.0-beta.1"
 dependencies = [
  "fs2",
  "rusqlite",
@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "research-hotspots-desktop"
-version = "0.21.0-beta.2"
+version = "0.22.0-beta.1"
 dependencies = [
  "csv",
  "fs2",
