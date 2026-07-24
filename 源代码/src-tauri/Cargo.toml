@@ -1,6 +1,6 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.22.0-beta.1"
+version = "0.22.0-beta.2"
 description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
 authors = ["Research Hotspots Desktop"]
 edition = "2021"
@@ -78,6 +78,11 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "audit_galaxy_semantic_layout"
 path = "src/bin/audit_galaxy_semantic_layout.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "rebuild_semantic_galaxy_snapshot"
+path = "src/bin/rebuild_semantic_galaxy_snapshot.rs"
 required-features = ["dev-tools"]
 
 [lib]

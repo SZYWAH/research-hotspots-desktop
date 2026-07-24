@@ -140,12 +140,15 @@ import {
   chooseSqliteBackupFile,
   confirmDesktopAction,
   controlPaperFileImport,
+  controlSemanticModeling,
   deletePapersFromLibrary,
   getApp17GalaxyPayload,
   getV20GalaxyPayload,
   getV20HotspotSnapshot,
   getLibraryMutationStatus,
   getLibrarySetupState,
+  getSemanticEmbeddingCapabilities,
+  getSemanticModelingStatus,
   getPaperLibraryFacets,
   getPaperLibraryStatus,
   getAppCredentialStatus,
@@ -179,6 +182,8 @@ import {
   type LibraryMutationStatus,
   type InitializeLibraryResult,
   type PaperFileImportProgress,
+  type SemanticEmbeddingCapabilities,
+  type SemanticModelingStatus,
 } from "./lib/desktop";
 import { formatDateTime, nowIso } from "./lib/dates";
 import { analyzePaperImport } from "./lib/importers";
@@ -1027,6 +1032,7 @@ type SelectOption = {
   value: string;
   label: string;
   description?: string;
+  disabled?: boolean;
 };
 
 function SelectControl({
@@ -1059,20 +1065,29 @@ function SelectControl({
 
   function commit(nextIndex: number) {
     const option = options[nextIndex];
-    if (!option) return;
+    if (!option || option.disabled) return;
     onChange(option.value);
     setOpen(false);
+  }
+
+  function selectableIndex(start: number, direction: -1 | 1) {
+    let index = start;
+    while (index >= 0 && index < options.length) {
+      if (!options[index]?.disabled) return index;
+      index += direction;
+    }
+    return Math.max(0, Math.min(options.length - 1, start));
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       if (!open) setOpen(true);
-      setActiveIndex((current) => Math.min(options.length - 1, current + 1));
+      setActiveIndex((current) => selectableIndex(Math.min(options.length - 1, current + 1), 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       if (!open) setOpen(true);
-      setActiveIndex((current) => Math.max(0, current - 1));
+      setActiveIndex((current) => selectableIndex(Math.max(0, current - 1), -1));
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (open) commit(activeIndex);
@@ -1105,7 +1120,9 @@ function SelectControl({
                 type="button"
                 role="option"
                 aria-selected={selectedOption}
-                className={`select-option ${index === activeIndex ? "select-option-active" : ""} ${selectedOption ? "select-option-selected" : ""}`}
+                aria-disabled={option.disabled || undefined}
+                disabled={option.disabled}
+                className={`select-option ${index === activeIndex ? "select-option-active" : ""} ${selectedOption ? "select-option-selected" : ""} disabled:cursor-not-allowed disabled:opacity-45`}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => commit(index)}
               >
@@ -5572,6 +5589,8 @@ function PipelineView({
   onNotice: (value: string) => void;
 }) {
   const [busyStage, setBusyStage] = useState<string>("");
+  const [semanticModeling, setSemanticModeling] = useState<SemanticModelingStatus | null>(null);
+  const semanticModelingRequest = useRef(0);
   const hotspotQuality = useMemo(() => buildHotspotQualitySummary(hotspots), [hotspots]);
   const paperCount = libraryStatus?.paperCount ?? papers.length;
   const modeledHotspotCount = hotspots.filter((hotspot) => (
@@ -5614,6 +5633,75 @@ function PipelineView({
       : currentStepId === "cluster"
         ? clusterState
         : (hasModeledHotspotResult ? "done" : "pending");
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || (clusterState !== "running" && busyStage !== "cluster")) {
+      setSemanticModeling(null);
+      return;
+    }
+    let disposed = false;
+    let timer = 0;
+    const requestId = ++semanticModelingRequest.current;
+    const refresh = async () => {
+      try {
+        const status = await getSemanticModelingStatus(settings.databaseDir, activeProject.id);
+        if (!disposed && requestId === semanticModelingRequest.current) {
+          setSemanticModeling(status ?? null);
+        }
+      } catch {
+        // The cluster command remains the authority for final failures; polling is only progress UI.
+      }
+      if (!disposed) timer = window.setTimeout(() => void refresh(), 650);
+    };
+    void refresh();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeProject.id, busyStage, clusterState, settings.databaseDir]);
+
+  const semanticStageLabel = semanticModeling
+    ? ({
+        preparing: "准备建模",
+        "text-preparation": "准备论文文本",
+        "cache-check": "检查 Embedding 缓存",
+        embedding: semanticModeling.paused ? "Embedding 推理已暂停" : "分批生成 Embedding",
+        projection: "计算语义三维投影",
+        committing: "正在安全提交",
+        complete: "语义快照已完成",
+      } as Record<string, string>)[semanticModeling.stage] ?? semanticModeling.stage
+    : "";
+  const semanticProgress = semanticModeling
+    ? (() => {
+        const ratio = semanticModeling.total > 0
+          ? Math.min(1, semanticModeling.processed / semanticModeling.total)
+          : 0;
+        if (semanticModeling.stage === "preparing") return 3;
+        if (semanticModeling.stage === "text-preparation") return 7;
+        if (semanticModeling.stage === "cache-check") return 10;
+        if (semanticModeling.stage === "embedding") return Math.round(10 + ratio * 78);
+        if (semanticModeling.stage === "projection") return 91;
+        if (semanticModeling.stage === "committing") return 97;
+        if (semanticModeling.stage === "complete") return 100;
+        return Math.round(ratio * 90);
+      })()
+    : currentJob?.progress ?? 0;
+
+  async function controlSemanticTask(action: "pause" | "resume" | "cancel") {
+    try {
+      const status = await controlSemanticModeling(settings.databaseDir, activeProject.id, action);
+      setSemanticModeling(status);
+      onNotice(
+        action === "pause"
+          ? "热点建模将在当前批次边界暂停。"
+          : action === "resume"
+            ? "热点建模已恢复。"
+            : "热点建模将在安全边界取消。",
+      );
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "无法控制当前热点建模任务。");
+    }
+  }
 
   const stepStateLabels: Record<PipelineStepState, string> = {
     pending: "未开始",
@@ -5752,10 +5840,38 @@ function PipelineView({
           {currentState === "running" && currentJob && (
             <div className="pipeline-running-progress">
               <div className="flex items-center justify-between gap-3 text-xs text-ink/45">
-                <span>{currentJob.detail}</span>
-                <span>{currentJob.progress}%</span>
+                <span>{semanticStageLabel || currentJob.detail}</span>
+                <span>{semanticProgress}%</span>
               </div>
-              <div className="progress-track mt-2"><div style={{ width: `${currentJob.progress}%` }} /></div>
+              <div className="progress-track mt-2"><div style={{ width: `${semanticProgress}%` }} /></div>
+              {semanticModeling && (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-ink/45">
+                  <span>
+                    {semanticModeling.processed.toLocaleString()} / {semanticModeling.total.toLocaleString()}
+                    {semanticModeling.cached > 0 ? ` · 缓存 ${semanticModeling.cached.toLocaleString()}` : ""}
+                    {semanticModeling.inferred > 0 ? ` · 推理 ${semanticModeling.inferred.toLocaleString()}` : ""}
+                    {semanticModeling.provider ? ` · ${semanticModeling.provider}` : ""}
+                  </span>
+                  <span className="flex gap-2">
+                    <button
+                      className="secondary-action h-8 gap-1.5"
+                      onClick={() => void controlSemanticTask(semanticModeling.paused ? "resume" : "pause")}
+                      disabled={!semanticModeling.cancellable}
+                    >
+                      {semanticModeling.paused ? <Play size={13} /> : <Pause size={13} />}
+                      {semanticModeling.paused ? "恢复" : "暂停"}
+                    </button>
+                    <button
+                      className="secondary-action h-8 gap-1.5"
+                      onClick={() => void controlSemanticTask("cancel")}
+                      disabled={!semanticModeling.cancellable}
+                    >
+                      <Square size={12} />
+                      取消
+                    </button>
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -6572,9 +6688,29 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [semanticCapabilities, setSemanticCapabilities] = useState<SemanticEmbeddingCapabilities>();
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => {
+    let active = true;
+    void getSemanticEmbeddingCapabilities()
+      .then((value) => {
+        if (!active) return;
+        setSemanticCapabilities(value);
+        if (!value.gpuAvailable) {
+          setDraft((current) => current.semanticEmbeddingDevice === "gpu"
+            ? { ...current, semanticEmbeddingDevice: "cpu" }
+            : current);
+        }
+      })
+      .catch(() => {
+        if (active) setSemanticCapabilities(undefined);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function test() {
     setTesting(true);
@@ -6812,10 +6948,28 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
                   value={draft.semanticEmbeddingDevice}
                   options={[
                     { value: "cpu", label: "CPU（默认稳定）" },
-                    { value: "gpu", label: "GPU（DirectML，失败回退 CPU）" },
+                    {
+                      value: "gpu",
+                      label: semanticCapabilities?.gpuAvailable
+                        ? "GPU（DirectML，失败回退 CPU）"
+                        : "GPU（当前安装不可用）",
+                      description: semanticCapabilities?.gpuAvailable
+                        ? "使用 Full 安装包内置的 DirectML 模型。"
+                        : "Lite 仅内置 CPU 模型；安装 Full 后可启用。",
+                      disabled: !semanticCapabilities?.gpuAvailable,
+                    },
                   ]}
                   onChange={(value) => setDraft({ ...draft, semanticEmbeddingDevice: value === "gpu" ? "gpu" : "cpu" })}
                 />
+                <span className="text-xs leading-5 text-ink/40">
+                  {semanticCapabilities
+                    ? semanticCapabilities.gpuAvailable
+                      ? "当前安装包含 CPU 与 DirectML GPU 模型。"
+                      : semanticCapabilities.cpuAvailable
+                        ? "当前安装为 CPU 模型版本；GPU 建模仅在 Full 安装包中提供。"
+                        : "未检测到语义模型资源，热点建模前请修复安装。"
+                    : "正在检查本地语义模型资源…"}
+                </span>
               </label>
             </div>
           </section>

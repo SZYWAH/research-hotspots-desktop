@@ -204,6 +204,22 @@ struct DefaultLibraryManifest {
     membership_count: i64,
     #[serde(default)]
     library_revision: i64,
+    #[serde(default)]
+    algorithm_version: Option<String>,
+    #[serde(default)]
+    paper_layout_version: Option<String>,
+    #[serde(default)]
+    projection_version: Option<String>,
+    #[serde(default)]
+    embedding_model_id: Option<String>,
+    #[serde(default)]
+    embedding_model_revision: Option<String>,
+    #[serde(default)]
+    embedding_dimensions: Option<usize>,
+    #[serde(default)]
+    embedding_encoding: Option<String>,
+    #[serde(default)]
+    embedding_count: Option<i64>,
     generated_at: String,
 }
 
@@ -403,6 +419,55 @@ struct ClusterTaskRegistry {
 struct ClusterTaskPermit {
     registry: ClusterTaskRegistry,
     key: String,
+}
+
+#[derive(Clone, Default)]
+struct SemanticModelingRegistry {
+    controls: Arc<Mutex<HashMap<String, SemanticModelingTask>>>,
+}
+
+#[derive(Clone)]
+struct SemanticModelingTask {
+    control: semantic_embedding::SemanticEmbeddingControl,
+    progress: Arc<Mutex<SemanticModelingStatus>>,
+}
+
+struct SemanticModelingPermit {
+    registry: SemanticModelingRegistry,
+    key: String,
+    task: SemanticModelingTask,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticModelingStatus {
+    running: bool,
+    stage: String,
+    processed: usize,
+    total: usize,
+    cached: usize,
+    inferred: usize,
+    provider: Option<String>,
+    fallback_reason: Option<String>,
+    paused: bool,
+    cancellable: bool,
+}
+
+impl Default for SemanticModelingStatus {
+    fn default() -> Self {
+        Self {
+            running: true,
+            stage: "preparing".into(),
+            processed: 0,
+            total: 0,
+            cached: 0,
+            inferred: 0,
+            provider: None,
+            fallback_reason: None,
+            paused: false,
+            cancellable: true,
+        }
+    }
 }
 
 const LIBRARY_BUSY: &str = "LIBRARY_BUSY";
@@ -1196,6 +1261,90 @@ struct RepresentativeCandidate {
     terms: Vec<String>,
     evidence_score: f64,
     semantic_document: SemanticPaperDocument,
+}
+
+impl SemanticModelingRegistry {
+    fn try_start(&self, key: String) -> Result<SemanticModelingPermit, String> {
+        let mut controls = self
+            .controls
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling registry.".to_string())?;
+        if controls.contains_key(&key) {
+            return Err(CLUSTER_ALREADY_RUNNING.into());
+        }
+        let task = SemanticModelingTask {
+            control: semantic_embedding::SemanticEmbeddingControl::default(),
+            progress: Arc::new(Mutex::new(SemanticModelingStatus::default())),
+        };
+        controls.insert(key.clone(), task.clone());
+        Ok(SemanticModelingPermit {
+            registry: self.clone(),
+            key,
+            task,
+        })
+    }
+
+    fn status(&self, key: &str) -> Result<Option<SemanticModelingStatus>, String> {
+        let controls = self
+            .controls
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling registry.".to_string())?;
+        controls
+            .get(key)
+            .map(|task| {
+                task.progress
+                    .lock()
+                    .map(|value| value.clone())
+                    .map_err(|_| "Cannot lock semantic modeling status.".to_string())
+            })
+            .transpose()
+    }
+
+    fn control(&self, key: &str, action: &str) -> Result<SemanticModelingStatus, String> {
+        let task = self
+            .controls
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling registry.".to_string())?
+            .get(key)
+            .cloned()
+            .ok_or_else(|| "SEMANTIC_MODELING_NOT_RUNNING".to_string())?;
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        if !progress.cancellable {
+            return Err("SEMANTIC_MODELING_COMMITTING".into());
+        }
+        match action {
+            "pause" => {
+                task.control.pause();
+                progress.paused = true;
+                progress.stage = "paused".into();
+            }
+            "resume" => {
+                task.control.resume();
+                progress.paused = false;
+                progress.stage = "embedding".into();
+            }
+            "cancel" => {
+                task.control.cancel();
+                progress.paused = false;
+                progress.stage = "cancelling".into();
+            }
+            _ => return Err("SEMANTIC_MODELING_CONTROL_INVALID".into()),
+        }
+        Ok(progress.clone())
+    }
+}
+
+impl Drop for SemanticModelingPermit {
+    fn drop(&mut self) {
+        self.registry
+            .controls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
 }
 
 #[tauri::command]
@@ -2377,6 +2526,7 @@ fn clean_library_in_transaction(
 async fn cluster_paper_library(
     app: tauri::AppHandle,
     state: tauri::State<'_, ClusterTaskRegistry>,
+    modeling_state: tauri::State<'_, SemanticModelingRegistry>,
     mutation_state: tauri::State<'_, LibraryMutationRegistry>,
     database_dir: Option<String>,
     project_id: Option<String>,
@@ -2387,15 +2537,61 @@ async fn cluster_paper_library(
     let project_id = project_id.unwrap_or_else(default_project_id);
     let embedding_device =
         semantic_embedding::SemanticEmbeddingDevice::parse(embedding_device.as_deref())?;
-    let permit = state.try_acquire(cluster_task_key(&database_path, &project_id))?;
+    let task_key = cluster_task_key(&database_path, &project_id);
+    let permit = state.try_acquire(task_key.clone())?;
+    let modeling_permit = modeling_state.try_start(task_key)?;
     let mutation_permit = mutation_state.try_acquire(&database_path, "cluster")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
+        let modeling_permit = modeling_permit;
         let _mutation_permit = mutation_permit;
-        cluster_library_from_database_path(database_path, &project_id, embedding_device)
+        cluster_library_from_database_path_controlled(
+            database_path,
+            &project_id,
+            embedding_device,
+            Some(&modeling_permit.task),
+            Some(&app),
+        )
     })
     .await
     .map_err(|error| format!("Hotspot cluster task failed: {error}"))?
+}
+
+#[tauri::command]
+fn get_semantic_modeling_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SemanticModelingRegistry>,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+) -> Result<Option<SemanticModelingStatus>, String> {
+    let database_dir = resolve_database_dir(&app, database_dir)?;
+    let key = cluster_task_key(
+        &database_dir.join("research-hotspots-v7.sqlite"),
+        &project_id.unwrap_or_else(default_project_id),
+    );
+    state.status(&key)
+}
+
+#[tauri::command]
+fn control_semantic_modeling(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SemanticModelingRegistry>,
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    action: String,
+) -> Result<SemanticModelingStatus, String> {
+    let database_dir = resolve_database_dir(&app, database_dir)?;
+    let key = cluster_task_key(
+        &database_dir.join("research-hotspots-v7.sqlite"),
+        &project_id.unwrap_or_else(default_project_id),
+    );
+    state.control(&key, action.trim())
+}
+
+#[tauri::command]
+fn get_semantic_embedding_capabilities(
+) -> semantic_embedding::SemanticEmbeddingCapabilities {
+    semantic_embedding::inspect_semantic_embedding_capabilities()
 }
 
 #[tauri::command]
@@ -2424,10 +2620,27 @@ async fn export_hotspot_evidence(
     .map_err(|error| format!("Hotspot evidence export task failed: {error}"))?
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn cluster_library_from_database_path(
     database_path: PathBuf,
     project_id: &str,
     embedding_device: semantic_embedding::SemanticEmbeddingDevice,
+) -> Result<LibraryClusterResult, String> {
+    cluster_library_from_database_path_controlled(
+        database_path,
+        project_id,
+        embedding_device,
+        None,
+        None,
+    )
+}
+
+fn cluster_library_from_database_path_controlled(
+    database_path: PathBuf,
+    project_id: &str,
+    embedding_device: semantic_embedding::SemanticEmbeddingDevice,
+    modeling_task: Option<&SemanticModelingTask>,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<LibraryClusterResult, String> {
     if let Some(database_dir) = database_path.parent() {
         fs::create_dir_all(database_dir)
@@ -2436,8 +2649,33 @@ fn cluster_library_from_database_path(
     let conn = Connection::open(&database_path)
         .map_err(|error| format!("Cannot open SQLite library {:?}: {error}", database_path))?;
     initialize_library_database(&conn)?;
-    let prepared = prepare_library_cluster_with_device(&conn, project_id, embedding_device)?;
+    let prepared = prepare_library_cluster_with_control(
+        &conn,
+        project_id,
+        embedding_device,
+        modeling_task,
+        app,
+    )?;
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "committing".into();
+        progress.cancellable = false;
+        emit_semantic_modeling_progress(app, &progress);
+    }
     write_snapshot_transaction(&conn, &prepared.snapshot)?;
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "complete".into();
+        progress.running = false;
+        progress.processed = progress.total;
+        emit_semantic_modeling_progress(app, &progress);
+    }
     Ok(prepared.result)
 }
 
@@ -2494,6 +2732,16 @@ fn prepare_library_cluster_with_device(
     conn: &Connection,
     project_id: &str,
     embedding_device: semantic_embedding::SemanticEmbeddingDevice,
+) -> Result<PreparedLibraryCluster, String> {
+    prepare_library_cluster_with_control(conn, project_id, embedding_device, None, None)
+}
+
+fn prepare_library_cluster_with_control(
+    conn: &Connection,
+    project_id: &str,
+    embedding_device: semantic_embedding::SemanticEmbeddingDevice,
+    modeling_task: Option<&SemanticModelingTask>,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<PreparedLibraryCluster, String> {
     let mut stmt = conn
         .prepare("SELECT id, field, title, abstract, year, source, categories, doi, url FROM papers WHERE project_id = ?1")
@@ -2598,14 +2846,54 @@ fn prepare_library_cluster_with_device(
                 .map(|candidate| candidate.semantic_document.clone())
         })
         .collect::<Vec<_>>();
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "text-preparation".into();
+        progress.total = semantic_documents.len();
+        emit_semantic_modeling_progress(app, &progress);
+    }
+    let default_control = semantic_embedding::SemanticEmbeddingControl::default();
+    let control = modeling_task
+        .map(|task| &task.control)
+        .unwrap_or(&default_control);
     let (embedding_records, _embedding_provider, _embedding_fallback_reason) =
-        semantic_embedding::resolve_embedding_records(
+        semantic_embedding::resolve_embedding_records_with_progress(
             conn,
             project_id,
             &semantic_documents,
             embedding_device,
             now_millis().min(i64::MAX as u128) as i64,
+            control,
+            |embedding_progress| {
+                if let Some(task) = modeling_task {
+                    if let Ok(mut progress) = task.progress.lock() {
+                        progress.stage = embedding_progress.stage;
+                        progress.processed = embedding_progress.processed;
+                        progress.total = embedding_progress.total;
+                        progress.cached = embedding_progress.cached;
+                        progress.inferred = embedding_progress.inferred;
+                        progress.provider = embedding_progress.provider;
+                        progress.fallback_reason = embedding_progress.fallback_reason;
+                        progress.paused = task.control.is_paused();
+                        emit_semantic_modeling_progress(app, &progress);
+                    }
+                }
+            },
         )?;
+    if let Some(task) = modeling_task {
+        if task.control.is_cancelled() {
+            return Err("SEMANTIC_MODELING_CANCELLED".into());
+        }
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "projection".into();
+        emit_semantic_modeling_progress(app, &progress);
+    }
     let embedding_by_id = embedding_records
         .into_iter()
         .map(|record| (record.paper_id.clone(), record))
@@ -2642,6 +2930,13 @@ fn prepare_library_cluster_with_device(
     }
     let mut memberships = Vec::with_capacity(before_count as usize);
     for (hotspot_index, candidates) in assigned_candidates.iter().enumerate() {
+        let hotspot = &hotspots[hotspot_index];
+        let representative_ids = hotspot
+            .analysis
+            .evidence_paper_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
         let records = candidates
             .iter()
             .map(|(candidate, _)| {
@@ -2651,8 +2946,20 @@ fn prepare_library_cluster_with_device(
                     .ok_or_else(|| "SEMANTIC_EMBEDDING_CACHE_INCOMPLETE".to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let points = project_semantic_embeddings(&records)?;
-        let hotspot = &hotspots[hotspot_index];
+        // Representative papers use the existing orbital renderer. Project them separately so
+        // removing the top ten cannot skew the ordinary-paper cloud covariance or robust scale.
+        let ordinary_records = records
+            .iter()
+            .filter(|record| !representative_ids.contains(record.paper_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let representative_records = records
+            .iter()
+            .filter(|record| representative_ids.contains(record.paper_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut points = project_semantic_embeddings(&ordinary_records)?;
+        points.extend(project_semantic_embeddings(&representative_records)?);
         for (candidate, group_score) in candidates {
             let point = points
                 .get(&candidate.id)
@@ -2705,6 +3012,15 @@ fn prepare_library_cluster_with_device(
         hotspots,
     };
     Ok(PreparedLibraryCluster { snapshot, result })
+}
+
+fn emit_semantic_modeling_progress(
+    app: Option<&tauri::AppHandle>,
+    progress: &SemanticModelingStatus,
+) {
+    if let Some(app) = app {
+        let _ = app.emit("semantic-modeling-progress", progress.clone());
+    }
 }
 
 fn commit_prepared_library_cluster(
@@ -4091,6 +4407,87 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
     }))
 }
 
+#[cfg(feature = "dev-tools")]
+pub fn rebuild_semantic_galaxy_snapshot(
+    database_dir: &Path,
+    project_id: &str,
+    device: &str,
+) -> Result<serde_json::Value, String> {
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    if !database_path.is_file() {
+        return Err(format!(
+            "isolated semantic source database not found: {}",
+            database_path.display()
+        ));
+    }
+    migrate_library_file(
+        &database_path,
+        project_id,
+        now_millis().min(i64::MAX as u128) as i64,
+        true,
+    )?;
+    let source_before = research_hotspots_core::validate_library_candidate_file(
+        &database_path,
+        project_id,
+    )?;
+    let started = Instant::now();
+    let result = cluster_library_from_database_path(
+        database_path.clone(),
+        project_id,
+        semantic_embedding::SemanticEmbeddingDevice::parse(Some(device))?,
+    )?;
+    let validated = research_hotspots_core::validate_library_candidate_file(
+        &database_path,
+        project_id,
+    )?;
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| error.to_string())?;
+    let embedding_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM paper_semantic_embeddings
+             WHERE project_id=?1 AND model_id=?2 AND model_revision=?3
+               AND dimensions=?4 AND encoding='float16-le'",
+            params![
+                project_id,
+                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID,
+                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION,
+                research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS as i64,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let algorithm_version: String = conn
+        .query_row(
+            "SELECT algorithm_version FROM v20_analysis_snapshots
+             WHERE project_id=?1 AND id=?2",
+            params![project_id, result.snapshot_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if validated.paper_count != source_before.paper_count
+        || validated.hotspot_count != 160
+        || validated.membership_count != validated.paper_count
+        || embedding_count != validated.paper_count
+        || algorithm_version != research_hotspots_core::V20_ALGORITHM_VERSION
+    {
+        return Err("SEMANTIC_RELEASE_SNAPSHOT_VALIDATION_FAILED".into());
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "databasePath": database_path,
+        "schemaVersion": validated.schema_version,
+        "snapshotId": validated.snapshot_id,
+        "algorithmVersion": algorithm_version,
+        "layoutVersion": research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION,
+        "projectionVersion": research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION,
+        "paperCount": validated.paper_count,
+        "hotspotCount": validated.hotspot_count,
+        "membershipCount": validated.membership_count,
+        "embeddingCount": embedding_count,
+        "elapsedMs": started.elapsed().as_millis(),
+    }))
+}
+
 #[tauri::command]
 async fn get_app17_hotspot_evidence(
     app: tauri::AppHandle,
@@ -4549,10 +4946,10 @@ pub fn export_app17_visual_review_snapshot(
                 database_path
             )
         })?;
-    let payload = build_app17_galaxy_payload(&conn, &project_id, "nebula")?;
+    let payload = build_v20_galaxy_payload(&conn, &project_id, "nebula")?;
     if !payload.ready || payload.hotspots.is_empty() {
         return Err(format!(
-            "App17 visual review snapshot is unavailable: {}",
+            "V20 semantic visual review snapshot is unavailable: {}",
             payload.message
         ));
     }
@@ -4594,21 +4991,27 @@ pub fn export_app17_visual_review_snapshot(
     for (stable_index, hotspot_index) in hotspot_indexes.into_iter().enumerate() {
         let hotspot = &payload.hotspots[hotspot_index];
         let file_id = format!("topic-{:04}", stable_index + 1);
-        let mut evidence = query_app17_hotspot_evidence(
+        let hotspot_record = payload
+            .hotspot_records
+            .iter()
+            .find(|record| record.id == hotspot.id)
+            .ok_or_else(|| {
+                format!(
+                    "V20 semantic visual review hotspot record is missing: {}",
+                    hotspot.id
+                )
+            })?;
+        let mut evidence = build_v20_visual_review_evidence(
             &conn,
             &database_path,
             &project_id,
-            &hotspot.field,
-            hotspot.topic_id,
+            hotspot_record,
+            &payload.hotspot_records,
             10,
         )?;
-        evidence.database_path = "snapshot://app17".to_string();
-        let papers = query_app17_visual_review_topic_papers(
-            &conn,
-            &project_id,
-            &hotspot.field,
-            hotspot.topic_id,
-        )?;
+        evidence.database_path = "snapshot://v20-semantic".to_string();
+        let papers =
+            query_v20_visual_review_hotspot_papers(&conn, &project_id, &hotspot.id)?;
         write_visual_review_json(&evidence_dir.join(format!("{file_id}.json")), &evidence)?;
         write_visual_review_json(&papers_dir.join(format!("{file_id}.json")), &papers)?;
         topics.push(App17VisualReviewTopicEntry {
@@ -4664,29 +5067,126 @@ pub fn export_app17_visual_review_snapshot(
     })
 }
 
-fn query_app17_visual_review_topic_papers(
+fn query_v20_visual_review_hotspot_papers(
     conn: &Connection,
     project_id: &str,
-    field: &str,
-    topic_id: i64,
+    hotspot_id: &str,
 ) -> Result<Vec<PaperRecord>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT p.id, p.project_id, p.source, p.title, p.abstract, p.authors, p.categories,
                     p.field, p.published_date, p.year, p.url, p.doi, p.created_at, p.updated_at
-             FROM app17_paper_topics AS t
+             FROM v20_analysis_state AS state
+             JOIN v20_paper_memberships AS membership
+               ON membership.project_id = state.project_id
+              AND membership.snapshot_id = state.active_snapshot_id
              JOIN papers AS p
-               ON p.project_id = t.project_id AND p.id = t.scoped_paper_id
-             WHERE t.project_id = ?1 AND t.field = ?2 AND t.topic_id = ?3
-             ORDER BY p.id ASC",
+               ON p.project_id = membership.project_id
+              AND p.id = membership.paper_id
+             WHERE state.project_id = ?1 AND membership.hotspot_id = ?2
+             ORDER BY CASE WHEN membership.representative_rank IS NULL THEN 1 ELSE 0 END,
+                      membership.representative_rank ASC,
+                      p.id ASC",
         )
         .map_err(|error| error.to_string())?;
     let rows = stmt
-        .query_map(params![project_id, field, topic_id], row_to_paper)
+        .query_map(params![project_id, hotspot_id], row_to_paper)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     Ok(rows)
+}
+
+fn build_v20_visual_review_evidence(
+    conn: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    selected: &HotspotRecord,
+    hotspots: &[HotspotRecord],
+    max_papers: usize,
+) -> Result<HotspotEvidenceExportResult, String> {
+    let mut representative_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for id in &selected.analysis.evidence_paper_ids {
+        if seen.insert(id.clone()) {
+            representative_ids.push(id.clone());
+        }
+    }
+    for evolution in &selected.evolution {
+        for id in &evolution.representative_ids {
+            if seen.insert(id.clone()) {
+                representative_ids.push(id.clone());
+            }
+        }
+    }
+    representative_ids.truncate(max_papers.max(1));
+
+    let representative_papers =
+        query_paper_snapshots_by_ids(conn, project_id, &representative_ids)?;
+    let found_ids = representative_papers
+        .iter()
+        .map(|paper| paper.id.clone())
+        .collect::<HashSet<_>>();
+    let missing_representative_ids = representative_ids
+        .iter()
+        .filter(|id| !found_ids.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let similar_hotspots = selected
+        .similar_hotspots
+        .iter()
+        .filter_map(|relation| {
+            hotspots
+                .iter()
+                .find(|hotspot| hotspot.id == relation.hotspot_id)
+                .map(|hotspot| EvidenceSimilarHotspot {
+                    hotspot_id: relation.hotspot_id.clone(),
+                    title: hotspot.title.clone(),
+                    field: hotspot.field.clone(),
+                    score: relation.score,
+                })
+        })
+        .collect::<Vec<_>>();
+    let year_evolution = selected
+        .evolution
+        .iter()
+        .map(|item| EvidenceYearEvolution {
+            year: item.year,
+            count: item.count,
+            keywords: item.keywords.clone(),
+            representative_ids: item.representative_ids.clone(),
+        })
+        .collect::<Vec<_>>();
+    let source_distribution = selected
+        .source_distribution
+        .iter()
+        .map(|item| EvidenceCountFacet {
+            value: item.value.clone(),
+            count: item.count,
+        })
+        .collect::<Vec<_>>();
+    let evidence_profile_markdown =
+        build_hotspot_evidence_markdown(selected, &representative_papers);
+
+    Ok(HotspotEvidenceExportResult {
+        generated_at: format!("unix-ms:{}", now_millis()),
+        database_path: database_path.to_string_lossy().to_string(),
+        project_id: project_id.to_string(),
+        selected_hotspot_id: selected.id.clone(),
+        selected_hotspot_title: selected.title.clone(),
+        selected_hotspot_field: selected.field.clone(),
+        hotspot_paper_count: selected.paper_count,
+        hotspot_keywords: selected.keywords.clone(),
+        hotspot_trend: selected.trend.clone(),
+        hotspot_confidence: selected.confidence,
+        representative_ids,
+        missing_representative_ids,
+        representative_papers,
+        year_evolution,
+        source_distribution,
+        similar_hotspots,
+        evidence_profile_markdown,
+    })
 }
 
 fn write_visual_review_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -6649,10 +7149,27 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         && manifest.database_schema_version == research_hotspots_core::V20_SCHEMA_VERSION;
     let v022_compatible = manifest.manifest_schema_version == 3
         && manifest.generator_version == "agent-seed-3"
-        // The published v0.22 seed remains schema 11. It is installed into staging and
-        // migrated to the current schema before activation; round two will produce a v12 seed.
+        // The published v0.22.0-beta.1 seed remains schema 11. It is installed into staging
+        // and migrated to the current schema before activation.
         && manifest.database_schema_version == 11;
-    if !beta2_compatible && !v022_compatible {
+    let semantic_v4_compatible = manifest.manifest_schema_version == 4
+        && manifest.generator_version == "semantic-seed-4"
+        && manifest.database_schema_version == research_hotspots_core::LIBRARY_SCHEMA_VERSION
+        && manifest.algorithm_version.as_deref()
+            == Some(research_hotspots_core::V20_ALGORITHM_VERSION)
+        && manifest.paper_layout_version.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION)
+        && manifest.projection_version.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION)
+        && manifest.embedding_model_id.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID)
+        && manifest.embedding_model_revision.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION)
+        && manifest.embedding_dimensions
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS)
+        && manifest.embedding_encoding.as_deref() == Some("float16-le")
+        && manifest.embedding_count == Some(manifest.paper_count);
+    if !beta2_compatible && !v022_compatible && !semantic_v4_compatible {
         return Err("默认论文库清单版本与当前应用不兼容。".to_string());
     }
     if manifest.project_id.trim().is_empty()
@@ -8776,6 +9293,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PaperImportTaskRegistry::default())
         .manage(ClusterTaskRegistry::default())
+        .manage(SemanticModelingRegistry::default())
         .manage(LibraryMutationRegistry::default())
         .manage(AiTaskRegistry::default())
         .manage(agent_runtime::AgentRuntimeState::default())
@@ -8820,6 +9338,9 @@ pub fn run() {
             control_paper_file_import,
             clean_paper_library,
             cluster_paper_library,
+            get_semantic_modeling_status,
+            control_semantic_modeling,
+            get_semantic_embedding_capabilities,
             export_hotspot_evidence,
             run_library_pressure_test,
             search_cnki_papers,

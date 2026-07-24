@@ -668,6 +668,7 @@ const APP17_SYSTEM_MIN_DISTANCE = 1;
 const APP17_SYSTEM_MAX_DISTANCE = 12;
 const APP17_SYSTEM_ELEVATION = THREE.MathUtils.degToRad(24);
 const APP17_SYSTEM_RADIUS = 3.2;
+const APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS = 3.64;
 const APP17_SYSTEM_ORBIT_SEGMENTS = 96;
 const APP17_SYSTEM_CACHE_LIMIT = 4;
 const APP17_SYSTEM_STAR_RADIUS = 0.38;
@@ -5095,7 +5096,21 @@ function buildGalaxySystemResources(
     .map((item) => {
       const paperId = item.paper.scopedPaperId || item.paper.rawPaperId;
       const position = item.vector.clone().multiplyScalar(coordinateScale);
-      if (position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
+      if (semanticLayout) {
+        const radius = position.length();
+        if (radius > 1e-12 && radius < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
+          const normalized = radius / APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS;
+          position.setLength(
+            APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS + 0.18 * smootherStep(normalized),
+          );
+        } else if (radius > APP17_SYSTEM_RADIUS) {
+          const tail = APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS - APP17_SYSTEM_RADIUS;
+          position.setLength(
+            APP17_SYSTEM_RADIUS
+              + tail * (1 - Math.exp(-(radius - APP17_SYSTEM_RADIUS) / tail)),
+          );
+        }
+      } else if (position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
         if (position.lengthSq() < 1e-12) {
           const random = seededRandom(stableHash(`${paperId}:star-exclusion`));
           position.set(random() - 0.5, random() - 0.5, random() - 0.5);

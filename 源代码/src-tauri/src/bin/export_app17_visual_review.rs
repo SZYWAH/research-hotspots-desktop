@@ -27,7 +27,7 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| "Missing --output-dir <dir>.".to_string())?;
     let result = export_app17_visual_review_snapshot(database_path, args.project_id, output_dir)?;
     println!(
-        "App17 visual review snapshot completed: papers={}, hotspots={}, topics={}",
+        "V20 semantic visual review snapshot completed: papers={}, hotspots={}, topics={}",
         result.paper_count, result.hotspot_count, result.topic_count
     );
     println!("Database: {}", result.database_path);

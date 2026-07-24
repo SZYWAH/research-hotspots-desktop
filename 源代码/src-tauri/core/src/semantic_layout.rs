@@ -300,6 +300,64 @@ fn stable_unit(value: &str, axis: u8) -> f64 {
     bits as f64 / u64::MAX as f64
 }
 
+fn decorrelate_and_robust_scale(points: &mut [[f64; 3]]) {
+    if points.is_empty() {
+        return;
+    }
+    let mut means = [0.0; 3];
+    for point in points.iter() {
+        for axis in 0..3 {
+            means[axis] += point[axis];
+        }
+    }
+    for mean in &mut means {
+        *mean /= points.len() as f64;
+    }
+    for point in points.iter_mut() {
+        for axis in 0..3 {
+            point[axis] -= means[axis];
+        }
+    }
+
+    // A nonlinear radial envelope can reintroduce covariance after PCA. Remove it with a
+    // deterministic residual whitening pass. The sequential residuals are equivalent to a
+    // three-axis Gram-Schmidt operation in sample space and preserve the semantic neighbourhood.
+    for axis in 1..3 {
+        for previous in 0..axis {
+            let variance = points
+                .iter()
+                .map(|point| point[previous] * point[previous])
+                .sum::<f64>();
+            if variance <= 1e-12 {
+                continue;
+            }
+            let covariance = points
+                .iter()
+                .map(|point| point[axis] * point[previous])
+                .sum::<f64>();
+            let coefficient = covariance / variance;
+            for point in points.iter_mut() {
+                point[axis] -= coefficient * point[previous];
+            }
+        }
+    }
+
+    let scales = [0, 1, 2].map(|axis| {
+        percentile_abs(
+            &points
+                .iter()
+                .map(|point| point[axis])
+                .collect::<Vec<_>>(),
+            0.90,
+        )
+    });
+    for point in points.iter_mut() {
+        for axis in 0..3 {
+            point[axis] /= scales[axis];
+        }
+    }
+}
+
 pub fn project_semantic_embeddings(
     records: &[SemanticEmbeddingRecord],
 ) -> Result<HashMap<String, SemanticPoint3>, String> {
@@ -353,7 +411,7 @@ pub fn project_semantic_embeddings(
         percentile_abs(&axes[1], 0.90),
         percentile_abs(&axes[2], 0.90),
     ];
-    let mut points = HashMap::with_capacity(records.len());
+    let mut coordinates = Vec::with_capacity(records.len());
     for (index, record) in records.iter().enumerate() {
         let mut coordinate = [
             (axes[0][index] / scales[0]).tanh(),
@@ -377,6 +435,12 @@ pub fn project_semantic_embeddings(
         for value in &mut coordinate {
             *value = (*value / radius) * mapped_radius;
         }
+        coordinates.push(coordinate);
+    }
+    decorrelate_and_robust_scale(&mut coordinates);
+
+    let mut points = HashMap::with_capacity(records.len());
+    for (record, coordinate) in records.iter().zip(coordinates) {
         points.insert(
             record.paper_id.clone(),
             SemanticPoint3 {

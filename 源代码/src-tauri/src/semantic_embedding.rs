@@ -1,21 +1,29 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
+use std::time::Duration;
 
 use fastembed::{
     InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
 };
 #[cfg(windows)]
 use ort::ep::DirectML;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use research_hotspots_core::semantic_layout::{
     decode_float16_le, encode_float16_le, normalize_semantic_document, read_cached_embeddings,
-    semantic_content_sha256, write_cached_embeddings_autocommit, SemanticEmbeddingRecord,
-    SemanticPaperDocument, SEMANTIC_EMBEDDING_DIMENSIONS, SEMANTIC_MODEL_ID,
-    SEMANTIC_MODEL_REVISION,
+    semantic_content_sha256, write_cached_embeddings, write_cached_embeddings_autocommit,
+    SemanticEmbeddingRecord, SemanticPaperDocument, SEMANTIC_EMBEDDING_DIMENSIONS,
+    SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION,
 };
 use rusqlite::Connection;
+
+pub const SEMANTIC_EMBEDDING_CHUNK_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SemanticEmbeddingDevice {
@@ -67,6 +75,70 @@ pub struct SemanticEmbeddingRuntime {
     model: TextEmbedding,
     provider: &'static str,
     fallback_reason: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct SemanticEmbeddingControl {
+    paused: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl SemanticEmbeddingControl {
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn wait_for_permission(&self) -> Result<(), String> {
+        while self.is_paused() {
+            if self.is_cancelled() {
+                return Err("SEMANTIC_MODELING_CANCELLED".into());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        if self.is_cancelled() {
+            return Err("SEMANTIC_MODELING_CANCELLED".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticEmbeddingProgress {
+    pub stage: String,
+    pub processed: usize,
+    pub total: usize,
+    pub cached: usize,
+    pub inferred: usize,
+    pub provider: Option<String>,
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticEmbeddingCapabilities {
+    pub model_id: String,
+    pub model_revision: String,
+    pub model_root: Option<String>,
+    pub cpu_available: bool,
+    pub gpu_available: bool,
 }
 
 impl SemanticEmbeddingRuntime {
@@ -183,30 +255,78 @@ pub fn resolve_embedding_records(
     device: SemanticEmbeddingDevice,
     now_ms: i64,
 ) -> Result<(Vec<SemanticEmbeddingRecord>, String, Option<String>), String> {
+    resolve_embedding_records_with_progress(
+        conn,
+        project_id,
+        documents,
+        device,
+        now_ms,
+        &SemanticEmbeddingControl::default(),
+        |_| {},
+    )
+}
+
+pub fn resolve_embedding_records_with_progress(
+    conn: &Connection,
+    project_id: &str,
+    documents: &[SemanticPaperDocument],
+    device: SemanticEmbeddingDevice,
+    now_ms: i64,
+    control: &SemanticEmbeddingControl,
+    mut on_progress: impl FnMut(SemanticEmbeddingProgress),
+) -> Result<(Vec<SemanticEmbeddingRecord>, String, Option<String>), String> {
+    control.wait_for_permission()?;
     let mut cached = read_cached_embeddings(conn, project_id, documents)?;
     let missing = documents
         .iter()
         .filter(|document| !cached.contains_key(&document.paper_id))
         .cloned()
         .collect::<Vec<_>>();
+    let cached_count = documents.len().saturating_sub(missing.len());
+    on_progress(SemanticEmbeddingProgress {
+        stage: "cache-check".into(),
+        processed: cached_count,
+        total: documents.len(),
+        cached: cached_count,
+        inferred: 0,
+        provider: missing.is_empty().then(|| "cache".into()),
+        fallback_reason: None,
+    });
     let (provider, fallback_reason) = if missing.is_empty() {
         ("cache".to_string(), None)
     } else {
         match SemanticEmbeddingRuntime::load(device) {
             Ok(mut runtime) => {
-                let records = runtime
-                    .embed(&missing)?
-                    .into_iter()
-                    .map(canonicalize_cached_record)
-                    .collect::<Result<Vec<_>, _>>()?;
-                write_cached_embeddings_autocommit(conn, project_id, &records, now_ms)?;
-                for record in records {
-                    cached.insert(record.paper_id.clone(), record);
+                let provider = runtime.provider().to_string();
+                let fallback_reason = runtime.fallback_reason().map(str::to_string);
+                let mut inferred = 0;
+                for chunk in missing.chunks(SEMANTIC_EMBEDDING_CHUNK_SIZE) {
+                    control.wait_for_permission()?;
+                    let records = runtime
+                        .embed(chunk)?
+                        .into_iter()
+                        .map(canonicalize_cached_record)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let tx = conn
+                        .unchecked_transaction()
+                        .map_err(|error| error.to_string())?;
+                    write_cached_embeddings(&tx, project_id, &records, now_ms)?;
+                    tx.commit().map_err(|error| error.to_string())?;
+                    inferred += records.len();
+                    for record in records {
+                        cached.insert(record.paper_id.clone(), record);
+                    }
+                    on_progress(SemanticEmbeddingProgress {
+                        stage: "embedding".into(),
+                        processed: cached_count + inferred,
+                        total: documents.len(),
+                        cached: cached_count,
+                        inferred,
+                        provider: Some(provider.clone()),
+                        fallback_reason: fallback_reason.clone(),
+                    });
                 }
-                (
-                    runtime.provider().to_string(),
-                    runtime.fallback_reason().map(str::to_string),
-                )
+                (provider, fallback_reason)
             }
             Err(error) if test_fixture_allowed(conn) => {
                 let records = fixture_embeddings(&missing)
@@ -217,6 +337,15 @@ pub fn resolve_embedding_records(
                 for record in records {
                     cached.insert(record.paper_id.clone(), record);
                 }
+                on_progress(SemanticEmbeddingProgress {
+                    stage: "embedding".into(),
+                    processed: documents.len(),
+                    total: documents.len(),
+                    cached: cached_count,
+                    inferred: missing.len(),
+                    provider: Some("test-fixture".into()),
+                    fallback_reason: Some(error.clone()),
+                });
                 ("test-fixture".into(), Some(error))
             }
             Err(error) => return Err(error),
@@ -231,6 +360,30 @@ pub fn resolve_embedding_records(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok((records, provider, fallback_reason))
+}
+
+pub fn inspect_semantic_embedding_capabilities() -> SemanticEmbeddingCapabilities {
+    let root = discover_model_root().ok();
+    let manifest = root.as_deref().and_then(|path| load_manifest(path).ok());
+    let cpu_available = root
+        .as_deref()
+        .zip(manifest.as_ref())
+        .is_some_and(|(path, value)| {
+            path.join(&value.files.cpu_portable.target).is_file()
+                || path.join(&value.files.cpu.target).is_file()
+        });
+    let gpu_available = cfg!(windows)
+        && root
+            .as_deref()
+            .zip(manifest.as_ref())
+            .is_some_and(|(path, value)| path.join(&value.files.gpu.target).is_file());
+    SemanticEmbeddingCapabilities {
+        model_id: SEMANTIC_MODEL_ID.into(),
+        model_revision: SEMANTIC_MODEL_REVISION.into(),
+        model_root: root.map(|path| path.to_string_lossy().into_owned()),
+        cpu_available,
+        gpu_available,
+    }
 }
 
 fn canonicalize_cached_record(
