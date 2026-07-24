@@ -5,6 +5,7 @@ pub mod agent_protocol;
 pub mod agent_report;
 pub mod agent_store;
 pub mod agent_tools;
+pub mod semantic_layout;
 
 use std::collections::HashSet;
 use std::fs;
@@ -17,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const V20_SCHEMA_VERSION: i64 = 8;
-pub const LIBRARY_SCHEMA_VERSION: i64 = 11;
+pub const LIBRARY_SCHEMA_VERSION: i64 = 12;
 pub const MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION: i64 = 8;
-pub const V20_ALGORITHM_VERSION: &str = "v20-unified-1";
+pub const V20_ALGORITHM_VERSION: &str = "v20-semantic-e5-small-1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

@@ -21,6 +21,20 @@ CREATE TABLE IF NOT EXISTS v20_paper_memberships (
 );
 CREATE INDEX IF NOT EXISTS idx_v20_memberships_hotspot ON v20_paper_memberships(project_id, snapshot_id, hotspot_id, representative_rank);
 CREATE INDEX IF NOT EXISTS idx_v20_memberships_paper ON v20_paper_memberships(project_id, paper_id, snapshot_id);
+CREATE TABLE IF NOT EXISTS paper_semantic_embeddings (
+  project_id TEXT NOT NULL,
+  paper_id TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  model_revision TEXT NOT NULL,
+  dimensions INTEGER NOT NULL CHECK(dimensions > 0),
+  encoding TEXT NOT NULL CHECK(encoding = 'float16-le'),
+  vector_blob BLOB NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  PRIMARY KEY(project_id, paper_id, model_id, model_revision, content_sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_paper_semantic_embeddings_current
+  ON paper_semantic_embeddings(project_id, paper_id, model_id, model_revision, created_at_ms DESC);
 CREATE TABLE IF NOT EXISTS v20_analysis_state (
   project_id TEXT PRIMARY KEY, active_snapshot_id TEXT NOT NULL, updated_at TEXT NOT NULL,
   FOREIGN KEY(active_snapshot_id) REFERENCES v20_analysis_snapshots(id)

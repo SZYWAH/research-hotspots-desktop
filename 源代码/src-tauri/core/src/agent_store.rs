@@ -397,6 +397,7 @@ pub fn migrate_library_file(
         return Err("LIBRARY_SCHEMA_TOO_OLD".into());
     }
     if previous == LIBRARY_SCHEMA_VERSION {
+        crate::ensure_v20_schema(&conn)?;
         ensure_agent_schema(&conn)?;
         return Ok(AgentMigrationResult {
             previous_version: previous,
@@ -418,7 +419,7 @@ pub fn migrate_library_file(
             .file_stem()
             .and_then(|v| v.to_str())
             .ok_or("AGENT_MIGRATION_FILE_NAME_INVALID")?;
-        let backup_path = parent.join(format!("{stem}.pre-schema-v11.{now_ms}.sqlite"));
+        let backup_path = parent.join(format!("{stem}.pre-schema-v12.{now_ms}.sqlite"));
         if backup_path.exists() {
             return Err("AGENT_MIGRATION_BACKUP_EXISTS".into());
         }
@@ -490,6 +491,7 @@ pub fn migrate_library_file(
                 .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         }
         migrate_v11_agent_schema(&tx)?;
+        migrate_v12_semantic_schema(&tx)?;
         let foreign_key_errors: i64 = tx
             .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
                 row.get(0)
@@ -617,6 +619,11 @@ fn migrate_v11_agent_schema(tx: &Transaction<'_>) -> Result<(), String> {
     ).map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
     tx.execute_batch(include_str!("agent_schema.sql"))
         .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))
+}
+
+fn migrate_v12_semantic_schema(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(include_str!("schema.sql"))
+        .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))
 }
 
 fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -3899,7 +3906,7 @@ mod tests {
     }
 
     #[test]
-    fn v9_file_migrates_to_v11_with_backup_and_new_contract() {
+    fn v9_file_migrates_to_v12_with_backup_and_new_contract() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -3915,7 +3922,7 @@ mod tests {
         ));
         cleanup_test_file(&database);
         let expected_backup = database.with_file_name(format!(
-            "{}.pre-schema-v11.123.sqlite",
+            "{}.pre-schema-v12.123.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&expected_backup);
@@ -3924,7 +3931,7 @@ mod tests {
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
         let migration = migrate_library_file(&database, "project-default", 123, true).unwrap();
         assert_eq!(migration.previous_version, 9);
-        assert_eq!(migration.current_version, 11);
+        assert_eq!(migration.current_version, 12);
         let backup = migration.backup_path.unwrap();
         let backup_hash = crate::sha256_file(&backup).unwrap();
         assert_eq!(
@@ -3935,7 +3942,7 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .contains("pre-schema-v11"));
+            .contains("pre-schema-v12"));
         assert_eq!(
             crate::validate_library_candidate_file(&backup, "project-default").unwrap(),
             before_state
@@ -3948,7 +3955,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         assert_same_v20_state(
             &crate::validate_library_candidate_connection(&connection, "project-default").unwrap(),
@@ -4004,7 +4011,7 @@ mod tests {
     }
 
     #[test]
-    fn v8_seed_shape_migrates_directly_to_v11() {
+    fn v8_seed_shape_migrates_directly_to_v12() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4018,7 +4025,7 @@ mod tests {
         let migration = migrate_library_file(&database, "project-default", 456, false).unwrap();
         assert_eq!(
             (migration.previous_version, migration.current_version),
-            (8, 11)
+            (8, 12)
         );
         assert!(migration.backup_path.is_none());
         let connection = Connection::open(&database).unwrap();
@@ -4032,14 +4039,14 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         drop(connection);
         cleanup_test_file(&database);
     }
 
     #[test]
-    fn repeated_v11_open_is_idempotent_and_does_not_create_another_backup() {
+    fn repeated_v12_open_is_idempotent_and_does_not_create_another_backup() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4047,11 +4054,11 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v11-idempotent-{}.sqlite", std::process::id()));
         let first_backup = database.with_file_name(format!(
-            "{}.pre-schema-v11.1003.sqlite",
+            "{}.pre-schema-v12.1003.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let second_backup = database.with_file_name(format!(
-            "{}.pre-schema-v11.1004.sqlite",
+            "{}.pre-schema-v12.1004.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let first_partial = first_backup.with_file_name(format!(
@@ -4065,14 +4072,14 @@ mod tests {
         fs::write(&first_partial, b"stale-partial").unwrap();
 
         let first = migrate_library_file(&database, "project-default", 1003, true).unwrap();
-        assert_eq!((first.previous_version, first.current_version), (8, 11));
+        assert_eq!((first.previous_version, first.current_version), (8, 12));
         assert_eq!(first.backup_path.as_deref(), Some(first_backup.as_path()));
         assert!(!first_partial.exists());
         let first_state =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
 
         let second = migrate_library_file(&database, "project-default", 1004, true).unwrap();
-        assert_eq!((second.previous_version, second.current_version), (11, 11));
+        assert_eq!((second.previous_version, second.current_version), (12, 12));
         assert!(second.backup_path.is_none());
         assert!(!second_backup.exists());
         assert_eq!(
@@ -4095,11 +4102,11 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v11-concurrent-{}.sqlite", std::process::id()));
         let backup_one = database.with_file_name(format!(
-            "{}.pre-schema-v11.2001.sqlite",
+            "{}.pre-schema-v12.2001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let backup_two = database.with_file_name(format!(
-            "{}.pre-schema-v11.2002.sqlite",
+            "{}.pre-schema-v12.2002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         for path in [&database, &backup_one, &backup_two] {
@@ -4131,7 +4138,7 @@ mod tests {
         assert_eq!(
             results
                 .iter()
-                .filter(|result| result.previous_version == 11 && result.backup_path.is_none())
+                .filter(|result| result.previous_version == 12 && result.backup_path.is_none())
                 .count(),
             1
         );
@@ -4144,7 +4151,7 @@ mod tests {
         );
         let migrated =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
-        assert_eq!(migrated.schema_version, 11);
+        assert_eq!(migrated.schema_version, 12);
         assert_eq!(
             (
                 migrated.paper_count,
@@ -4168,7 +4175,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v0-existing-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v11.3001.sqlite",
+            "{}.pre-schema-v12.3001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4210,7 +4217,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v8-backup-exists-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v11.1001.sqlite",
+            "{}.pre-schema-v12.1001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4257,7 +4264,7 @@ mod tests {
             std::process::id()
         ));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v11.1002.sqlite",
+            "{}.pre-schema-v12.1002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
