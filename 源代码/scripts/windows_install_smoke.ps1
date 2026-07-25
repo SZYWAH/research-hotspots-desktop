@@ -102,12 +102,18 @@ function Assert-FullResources([string]$InstallDir) {
   Assert-True (Test-Path -LiteralPath $seed -PathType Leaf) "Full seed missing: $seed"
   Assert-True (Test-Path -LiteralPath $manifest -PathType Leaf) "Full manifest missing: $manifest"
   $data = Get-Content -LiteralPath $manifest -Raw -Encoding utf8 | ConvertFrom-Json
-  Assert-True ($data.manifestSchemaVersion -eq 4) 'Full manifest schema is not 4.'
-  Assert-True ($data.databaseSchemaVersion -eq 12) 'Full manifest schema is not 12.'
+  Assert-True ($data.manifestSchemaVersion -eq 5) 'Full manifest schema is not 5.'
+  Assert-True ($data.databaseSchemaVersion -eq 13) 'Full manifest schema is not 13.'
   Assert-True ($data.appVersion -eq $CurrentVersion) "Full manifest app version is not $CurrentVersion."
   Assert-True ($null -ne $data.PSObject.Properties['libraryRevision'] -and [int64]$data.libraryRevision -ge 0) 'Full manifest library revision is invalid.'
   Assert-True ($data.paperCount -eq 25463 -and $data.hotspotCount -eq 160 -and $data.membershipCount -eq 25463) 'Full manifest V20 counts are invalid.'
-  Assert-True ($data.embeddingCount -eq 25463 -and $data.algorithmVersion -eq 'v20-semantic-e5-small-1') 'Full semantic manifest fields are invalid.'
+  Assert-True (
+    $data.embeddingCount -eq 25463 `
+      -and $data.algorithmVersion -eq 'v20-semantic-e5-small-2' `
+      -and $data.paperLayoutVersion -eq 'semantic-hierarchical-pca3-v2' `
+      -and $data.projectionVersion -eq 'centroid-pca3-robust-whiten-v2' `
+      -and $data.hotspotIdentityVersion -eq 'stable-field-key-sha256-v2'
+  ) 'Full semantic manifest fields are invalid.'
   Assert-True ((Get-FileHash -LiteralPath $seed -Algorithm SHA256).Hash.ToLowerInvariant() -eq ([string]$data.sha256).ToLowerInvariant()) 'Installed Full seed SHA-256 mismatch.'
   Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\model.cpu-portable.onnx') -PathType Leaf) 'Full portable CPU semantic model is missing.'
   Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'semantic-model\model.gpu.onnx') -PathType Leaf) 'Full DirectML semantic model is missing.'

@@ -44,8 +44,8 @@ assert(!Object.values(liteResources).includes("semantic-model/model.gpu.onnx"), 
 assert(!Object.keys(liteResources).some((value) => /default-library|research-hotspots-v7\.sqlite/.test(value)), "Lite config must not contain a default library");
 assert(/\$PreviousVersion\s*=\s*'0\.22\.0-beta\.1'/.test(installSmoke), "install smoke previous version mismatch");
 assert(/\$CurrentVersion\s*=\s*'0\.22\.0-beta\.2'/.test(installSmoke), "install smoke current version mismatch");
-assert(/databaseSchemaVersion\s+-eq\s+12/.test(installSmoke), "install smoke must require schema 12");
-assert(!/0\.21\.0-beta\.1|\$(?:Beta1|Beta2|FullBeta1|FullBeta2|LiteBeta2)\b|databaseSchemaVersion\s+-eq\s+(?:8|11)/.test(installSmoke), "legacy beta variables, versions, or schema assertions remain in install smoke");
+assert(/databaseSchemaVersion\s+-eq\s+13/.test(installSmoke), "install smoke must require schema 13");
+assert(!/0\.21\.0-beta\.1|\$(?:Beta1|Beta2|FullBeta1|FullBeta2|LiteBeta2)\b|databaseSchemaVersion\s+-eq\s+(?:8|11|12)/.test(installSmoke), "legacy beta variables, versions, or schema assertions remain in install smoke");
 assert(/src-tauri\\target\\windows-install-smoke/.test(installSmoke), "install smoke work root must stay under src-tauri target");
 assert(!/验收安装|data\\library/.test(installSmoke), "install smoke must not reference user acceptance directories or the active library");
 assert(/ExternalDatabase must stay inside WorkRoot/.test(installSmoke), "install smoke must fence its isolated database to WorkRoot");
@@ -58,17 +58,18 @@ assert(/Invoke-Installer\s+\$CurrentFullInstaller\s+\$FinalInstallDir/.test(inst
 
 assert(existsSync(seedPath) && existsSync(manifestPath), "V20 default seed and manifest must be generated before audit");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-assert(manifest.manifestSchemaVersion === 4, "manifest schema must be v4");
-assert(manifest.generatorVersion === "semantic-seed-4", "manifest generator version mismatch");
-assert(manifest.databaseSchemaVersion === 12, "seed database schema must be 12");
+assert(manifest.manifestSchemaVersion === 5, "manifest schema must be v5");
+assert(manifest.generatorVersion === "semantic-seed-5", "manifest generator version mismatch");
+assert(manifest.databaseSchemaVersion === 13, "seed database schema must be 13");
 assert(Number.isInteger(manifest.libraryRevision) && manifest.libraryRevision >= 0, "seed library revision is missing");
 assert(manifest.appVersion === version, "seed app version mismatch");
 assert(manifest.databaseFile === "research-hotspots-v7.sqlite", "compatible seed filename changed");
 assert(manifest.projectId === "project-default" && typeof manifest.snapshotId === "string" && manifest.snapshotId.length > 0, "manifest V20 identity is missing");
 assert(manifest.paperCount === expected.papers && manifest.hotspotCount === expected.hotspots && manifest.membershipCount === expected.memberships, "manifest V20 counts mismatch");
-assert(manifest.algorithmVersion === "v20-semantic-e5-small-1", "semantic algorithm mismatch");
-assert(manifest.paperLayoutVersion === "semantic-e5-pca3-v1", "semantic layout mismatch");
-assert(manifest.projectionVersion === "robust-pca-whiten-v1", "semantic projection mismatch");
+assert(manifest.algorithmVersion === "v20-semantic-e5-small-2", "semantic algorithm mismatch");
+assert(manifest.paperLayoutVersion === "semantic-hierarchical-pca3-v2", "semantic layout mismatch");
+assert(manifest.projectionVersion === "centroid-pca3-robust-whiten-v2", "semantic projection mismatch");
+assert(manifest.hotspotIdentityVersion === "stable-field-key-sha256-v2", "hotspot identity version mismatch");
 assert(manifest.embeddingModelId === "intfloat/multilingual-e5-small" && typeof manifest.embeddingModelRevision === "string", "semantic model identity mismatch");
 assert(manifest.embeddingDimensions === 384 && manifest.embeddingEncoding === "float16-le", "semantic embedding format mismatch");
 assert(manifest.embeddingCount === expected.papers, "semantic embedding count mismatch");
@@ -77,7 +78,7 @@ assert(sha256(seedPath) === manifest.sha256, "seed SHA-256 does not match manife
 
 const db = new DatabaseSync(seedPath, { readOnly: true });
 const scalar = (sql, ...params) => Object.values(db.prepare(sql).get(...params))[0];
-assert(scalar("PRAGMA user_version") === 12, "seed PRAGMA user_version is not 12");
+assert(scalar("PRAGMA user_version") === 13, "seed PRAGMA user_version is not 13");
 assert(String(scalar("PRAGMA integrity_check")).toLowerCase() === "ok", "seed integrity_check failed");
 assert(!db.prepare("PRAGMA foreign_key_check").get(), "seed foreign_key_check failed");
 const active = db.prepare("SELECT active_snapshot_id AS snapshotId FROM v20_analysis_state WHERE project_id = ?").get(manifest.projectId);
@@ -130,7 +131,7 @@ if (existsSync(fullInstaller) || existsSync(liteInstaller)) {
     assert(sums.includes(`${sha256(file)}  ${name}`), `checksum entry missing for ${name}`);
   }
   const metadata = JSON.parse(readFileSync(join(outputDir, "BUILD_METADATA.json"), "utf8"));
-  assert(metadata.appVersion === version && metadata.defaultLibrarySchema === 12, "build metadata version/schema mismatch");
+  assert(metadata.appVersion === version && metadata.defaultLibrarySchema === 13, "build metadata version/schema mismatch");
   assert(metadata.defaultSnapshotId === manifest.snapshotId, "build metadata snapshot mismatch");
   assert(metadata.semanticModelId === manifest.embeddingModelId && metadata.semanticModelRevision === manifest.embeddingModelRevision, "build metadata semantic model mismatch");
 }

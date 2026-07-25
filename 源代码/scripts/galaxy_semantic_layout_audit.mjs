@@ -13,10 +13,15 @@ assert(!desktop.includes('format!("{}::x", candidate.id)'), "legacy paperId::x c
 assert(!desktop.includes('format!("{}::y", candidate.id)'), "legacy paperId::y coordinate hash remains");
 assert(!desktop.includes('format!("{}::z", candidate.id)'), "legacy paperId::z coordinate hash remains");
 assert(schema.includes("paper_semantic_embeddings"), "semantic cache table is missing");
+assert(schema.includes("v20_hotspot_lineage"), "hotspot lineage table is missing");
 assert(core.includes("deterministic_component"), "deterministic PCA component solver is missing");
 assert(core.includes("percentile_abs"), "robust whitening is missing");
+assert(core.includes("project_semantic_hotspot_centroids"), "global hotspot centroid PCA is missing");
+assert(core.includes("stable_semantic_hotspot_id"), "stable hotspot identity is missing");
 assert(core.includes("mapped_radius"), "continuous central exclusion mapping is missing");
-assert(canvas.includes("(semanticLayout ? 1 : 0.62)"), "semantic layouts must not receive legacy Z compression");
+assert(canvas.includes('payload.paperLayoutVersion?.startsWith("semantic-")'), "semantic layout detection must include hierarchical v2");
+assert(canvas.includes("(semanticLayout ? 1 : 0.62)"), "semantic layouts must not receive legacy system Z compression");
+assert(canvas.includes("zScale: 1"), "the theory overview must not compress the global Z axis");
 assert(
   canvas.includes("APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS + 0.18 * smootherStep(normalized)")
     && canvas.includes("APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS"),
@@ -42,9 +47,10 @@ assert(!review.includes("cluster_paper_library"), "browser review must not trigg
 
 console.log(JSON.stringify({
   pass: true,
-  coordinateSource: "multilingual-e5-small + deterministic PCA3",
+  coordinateSource: "member semantic centroid + global deterministic PCA3 + local semantic PCA3",
   legacyCoordinateHashes: 0,
   semanticZScale: 1,
+  stableHotspotIdentity: "stable-field-key-sha256-v2",
   embeddingTransactionBatch: 256,
   safeCommitControlFence: true,
   browserReviewSource: "active-v20-semantic-snapshot",

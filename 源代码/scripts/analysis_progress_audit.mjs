@@ -7,7 +7,12 @@ const snapshot = {
   activeSnapshotId: "snapshot-1",
   snapshotId: "snapshot-1",
   databaseKey: "D:/library",
-  algorithmVersion: "v20-semantic-e5-small-1",
+  algorithmVersion: "v20-semantic-e5-small-2",
+  layoutVersion: "semantic-hierarchical-pca3-v2",
+  projectionVersion: "centroid-pca3-robust-whiten-v2",
+  embeddingModelId: "intfloat/multilingual-e5-small",
+  embeddingModelRevision: "4ef78ef5a0b387a4b7b5a356e4c746a5b1451c1d",
+  hotspotIdentityVersion: "stable-field-key-sha256-v2",
   paperCount: 25_463,
   hotspotCount: 160,
   membershipCount: 25_463,
@@ -78,6 +83,11 @@ assert.equal(derive({ snapshot: { ...snapshot, currentLibraryRevision: 8 } }).cl
 assert.equal(derive({ snapshot: { ...snapshot, snapshotId: "snapshot-cache-old" } }).snapshotCurrent, false, "cache snapshot id must match SQLite active snapshot id");
 assert.equal(derive({ paperCount: 25_464 }).snapshotStale, true, "paper count mismatch must stale snapshot");
 assert.equal(derive({ hotspotCount: 159 }).clusterState, "pending", "hotspot count mismatch must require modeling");
+assert.equal(
+  derive({ snapshot: { ...snapshot, layoutVersion: "semantic-e5-pca3-v1" } }).requiresModeling,
+  true,
+  "an old hotspot layout must require explicit remodeling",
+);
 assert.equal(derive({ snapshot: null }).requiresModeling, true, "missing snapshot must show explicit modeling guidance");
 assert.deepEqual(
   { clean: derive({ paperCount: 0, hotspotCount: 0, snapshot: null }).cleanState, cluster: derive({ paperCount: 0, hotspotCount: 0, snapshot: null }).clusterState },
@@ -85,4 +95,4 @@ assert.deepEqual(
   "empty library must remain pending without sample data",
 );
 
-console.log(JSON.stringify({ ok: true, cases: 14, snapshotId: snapshot.snapshotId }));
+console.log(JSON.stringify({ ok: true, cases: 15, snapshotId: snapshot.snapshotId }));
