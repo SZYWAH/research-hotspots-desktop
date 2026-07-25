@@ -6,17 +6,18 @@ const schema = await readFile("src-tauri/core/src/schema.sql", "utf8");
 const desktop = await readFile("src-tauri/src/lib.rs", "utf8");
 const store = await readFile("src-tauri/core/src/agent_store.rs", "utf8");
 
-assert(core.includes('SEMANTIC_LAYOUT_VERSION: &str = "semantic-hierarchical-pca3-v2"'));
-assert(core.includes('SEMANTIC_PROJECTION_VERSION: &str = "centroid-pca3-robust-whiten-v2"'));
+assert(core.includes('SEMANTIC_LAYOUT_VERSION: &str = "semantic-hierarchical-natural-pca3-v3"'));
+assert(core.includes('SEMANTIC_PROJECTION_VERSION: &str = "global-centroid-pca3-local-raw-pca3-v3"'));
 assert(core.includes("SEMANTIC_HOTSPOT_P95_RADIUS: f64 = 92.0"));
 assert(core.includes("semantic_centroid_record"), "equal-weight semantic centroid is missing");
 assert(core.includes("project_semantic_hotspot_centroids"), "global hotspot PCA3 is missing");
 assert(core.includes("stable_semantic_hotspot_id"), "stable hotspot identity is missing");
 assert(core.includes('"{project_id}:sqlite-cluster:v2:{}"'), "hotspot ID format changed");
 assert(desktop.includes("semantic_hotspot_identity_key(&group.field, &group.keyword)"));
-assert(desktop.includes("hotspot.coordinates.x as f64 + point.x * 9.6"), "hierarchical X composition is missing");
-assert(desktop.includes("hotspot.coordinates.y as f64 + point.y * 9.6"), "hierarchical Y composition is missing");
-assert(desktop.includes("hotspot.coordinates.z as f64 + point.z * 9.6"), "hierarchical Z composition is missing");
+assert(desktop.includes("hotspot.coordinates.x as f64 + point.x"), "hierarchical X composition is missing");
+assert(desktop.includes("hotspot.coordinates.y as f64 + point.y"), "hierarchical Y composition is missing");
+assert(desktop.includes("hotspot.coordinates.z as f64 + point.z"), "hierarchical Z composition is missing");
+assert(desktop.includes("scale_semantic_local_point_sets(&mut local_point_sets)"), "shared local scale is missing");
 assert(desktop.includes('progress.stage = "hotspot-centroids"'));
 assert(desktop.includes('progress.stage = "hotspot-pca3"'));
 assert(desktop.includes('progress.stage = "hotspot-lineage"'));
@@ -29,11 +30,11 @@ assert(!desktop.includes('format!("{project_id}:sqlite-cluster:{index}:'), "rank
 
 console.log(JSON.stringify({
   pass: true,
-  algorithmVersion: "v20-semantic-e5-small-2",
-  layoutVersion: "semantic-hierarchical-pca3-v2",
-  projectionVersion: "centroid-pca3-robust-whiten-v2",
+  algorithmVersion: "v20-semantic-e5-small-3",
+  layoutVersion: "semantic-hierarchical-natural-pca3-v3",
+  projectionVersion: "global-centroid-pca3-local-raw-pca3-v3",
   identityVersion: "stable-field-key-sha256-v2",
   globalHotspotP95Radius: 92,
-  localPaperScale: 9.6,
+  localPaperScale: "pooled-p95-to-10.5",
   lineage: "transactional",
 }, null, 2));

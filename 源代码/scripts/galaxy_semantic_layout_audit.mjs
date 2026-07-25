@@ -15,18 +15,19 @@ assert(!desktop.includes('format!("{}::z", candidate.id)'), "legacy paperId::z c
 assert(schema.includes("paper_semantic_embeddings"), "semantic cache table is missing");
 assert(schema.includes("v20_hotspot_lineage"), "hotspot lineage table is missing");
 assert(core.includes("deterministic_component"), "deterministic PCA component solver is missing");
-assert(core.includes("percentile_abs"), "robust whitening is missing");
+assert(core.includes("project_raw_pca3"), "raw deterministic PCA3 is missing");
 assert(core.includes("project_semantic_hotspot_centroids"), "global hotspot centroid PCA is missing");
 assert(core.includes("stable_semantic_hotspot_id"), "stable hotspot identity is missing");
-assert(core.includes("mapped_radius"), "continuous central exclusion mapping is missing");
-assert(canvas.includes('payload.paperLayoutVersion?.startsWith("semantic-")'), "semantic layout detection must include hierarchical v2");
+assert(core.includes("scale_semantic_local_point_sets"), "shared local semantic scale is missing");
+assert(!core.includes("mapped_radius"), "semantic paper coordinates must not use a radial shell mapping");
+assert(!core.includes("decorrelate_and_robust_scale"), "semantic coordinates must not be whitened into spheres");
+assert(canvas.includes('payload.paperLayoutVersion?.startsWith("semantic-")'), "semantic layout detection is missing");
+assert(canvas.includes('payload.paperLayoutVersion === APP17_NATURAL_LAYOUT_VERSION'), "natural v3 layout detection is missing");
 assert(canvas.includes("(semanticLayout ? 1 : 0.62)"), "semantic layouts must not receive legacy system Z compression");
 assert(canvas.includes("zScale: 1"), "the theory overview must not compress the global Z axis");
-assert(
-  canvas.includes("APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS + 0.18 * smootherStep(normalized)")
-    && canvas.includes("APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS"),
-  "semantic layouts must use continuous central exclusion and outlier compression",
-);
+assert(!canvas.includes("APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS"), "semantic clouds must not be compressed per hotspot");
+assert(!canvas.includes("APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS + 0.18 * smootherStep(normalized)"), "semantic clouds must not be pushed away from the star");
+assert(canvas.includes("payload.paperLayoutLocalP95Radius ?? 10.5"), "shared semantic system scale is missing");
 assert(desktop.includes("程序不会自动建模或展示旧螺旋布局"), "legacy snapshot guidance is missing");
 assert(runtime.includes("SEMANTIC_EMBEDDING_CHUNK_SIZE: usize = 256"), "256-paper cache transaction batches are missing");
 assert(runtime.includes("wait_for_permission"), "semantic pause/cancel boundary is missing");
@@ -47,7 +48,7 @@ assert(!review.includes("cluster_paper_library"), "browser review must not trigg
 
 console.log(JSON.stringify({
   pass: true,
-  coordinateSource: "member semantic centroid + global deterministic PCA3 + local semantic PCA3",
+  coordinateSource: "member semantic centroid + global raw PCA3 + local raw PCA3 + shared isotropic scale",
   legacyCoordinateHashes: 0,
   semanticZScale: 1,
   stableHotspotIdentity: "stable-field-key-sha256-v2",
