@@ -328,6 +328,14 @@ type App17CameraPreset = {
   zScale: number;
   autoRotate: boolean;
   autoRotateAzimuthStep: number;
+  theoryFraming?: App17TheoryFraming;
+};
+
+type App17TheoryFraming = {
+  p95Radius: number;
+  maxRadius: number;
+  boundsMin: THREE.Vector3;
+  boundsMax: THREE.Vector3;
 };
 
 type App17ViewMode = "overview" | "system" | "top";
@@ -1115,6 +1123,17 @@ export function App17GalaxyCanvas({
     onBloomAvailabilityChangeRef.current?.(bloomAvailable, bloomUnavailableReason || undefined);
     const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reduceMotion = reducedMotionMedia.matches;
+    const cameraPreset: App17CameraPreset = {
+      ...sceneData.camera,
+      center: sceneData.camera.center.clone(),
+      theoryFraming: sceneData.camera.theoryFraming
+        ? {
+          ...sceneData.camera.theoryFraming,
+          boundsMin: sceneData.camera.theoryFraming.boundsMin.clone(),
+          boundsMax: sceneData.camera.theoryFraming.boundsMax.clone(),
+        }
+        : undefined,
+    };
 
     const environmentStarLayer = createEnvironmentStarLayer(currentPixelRatio);
     scene.add(environmentStarLayer.object);
@@ -1123,7 +1142,7 @@ export function App17GalaxyCanvas({
     scene.add(overviewRoot);
     const root = new THREE.Group();
     root.rotation.set(0, 0, 0);
-    root.scale.set(1, 1, sceneData.camera.zScale);
+    root.scale.set(1, 1, cameraPreset.zScale);
     overviewRoot.add(root);
 
     const paperLayer = createPaperLayer(sceneData.papers, currentPixelRatio, sceneData.kind);
@@ -1161,6 +1180,8 @@ export function App17GalaxyCanvas({
     const overviewPointPickThreshold = sceneData.kind === "app14" ? 0.22 : 0.16;
     raycaster.params.Points = { threshold: overviewPointPickThreshold };
     const pointer = new THREE.Vector2();
+    const hotspotPickWorldPosition = new THREE.Vector3();
+    const hotspotPickProjectedPosition = new THREE.Vector3();
     const systemPickWorldPosition = new THREE.Vector3();
     const systemPickViewPosition = new THREE.Vector3();
     const systemPickProjectedPosition = new THREE.Vector3();
@@ -1179,11 +1200,11 @@ export function App17GalaxyCanvas({
     let pressedTargetKind: "hotspot" | "paper" | "inspection" = "hotspot";
     const commandNonceRef = { current: commandRef.current.nonce };
     const orbit: App17OrbitState = {
-      center: sceneData.camera.center.clone(),
-      distance: sceneData.camera.distance,
-      targetDistance: sceneData.camera.distance,
-      azimuth: sceneData.camera.azimuth,
-      elevation: sceneData.camera.elevation,
+      center: cameraPreset.center.clone(),
+      distance: cameraPreset.distance,
+      targetDistance: cameraPreset.distance,
+      azimuth: cameraPreset.azimuth,
+      elevation: cameraPreset.elevation,
       transition: null,
       pointerPressed: false,
       dragging: false,
@@ -1194,6 +1215,7 @@ export function App17GalaxyCanvas({
       pauseUntil: 0,
       viewMode: "overview",
     };
+    let overviewFramingMode: "initial" | "fit" | "manual" = "initial";
     const exploration: GalaxyExplorationRuntime = {
       state: "overview",
       blend: 0,
@@ -1422,7 +1444,7 @@ export function App17GalaxyCanvas({
         sceneData.kind === "app14"
         && exploration.state === "overview"
         && orbit.viewMode === "overview"
-        && sceneData.camera.autoRotate
+        && cameraPreset.autoRotate
       ) return 30;
       return sceneData.kind === "app14" ? 20 : 12;
     }
@@ -1919,6 +1941,48 @@ export function App17GalaxyCanvas({
 
     invalidateRef.current = () => invalidate(true);
 
+    const updateTheoryCameraFraming = (nextAspect: number) => {
+      const framing = cameraPreset.theoryFraming;
+      if (sceneData.kind !== "app15" || !framing) return;
+      const previousDistance = cameraPreset.distance;
+      const previousTargetDistance = orbit.targetDistance;
+      const nextPreset = resolveTheoryCameraPreset({
+        center: cameraPreset.center,
+        framing,
+        aspect: nextAspect,
+      });
+      Object.assign(cameraPreset, nextPreset);
+      cameraPreset.center.copy(nextPreset.center);
+      if (
+        exploration.state === "overview"
+        && !orbit.transition
+        && paperJourney.getState() === "idle"
+      ) {
+        let nextDistance = cameraPreset.distance;
+        if (orbit.viewMode === "top") {
+          nextDistance = cameraPreset.topDistance;
+        } else if (overviewFramingMode === "fit") {
+          nextDistance = cameraPreset.fitDistance;
+        } else if (overviewFramingMode === "manual") {
+          const relativeZoom = previousTargetDistance / Math.max(0.001, previousDistance);
+          nextDistance = cameraPreset.distance * relativeZoom;
+        }
+        nextDistance = THREE.MathUtils.clamp(
+          nextDistance,
+          cameraPreset.minDistance,
+          cameraPreset.maxDistance,
+        );
+        orbit.distance = nextDistance;
+        orbit.targetDistance = nextDistance;
+        orbit.center.copy(cameraPreset.center);
+      }
+      camera.near = Math.max(0.001, Math.min(0.02, cameraPreset.minDistance * 0.04));
+      camera.far = Math.max(
+        240,
+        cameraPreset.maxDistance + framing.maxRadius * 4,
+      );
+    };
+
     const resize = () => {
       if (!runtimeActive) return;
       const rect = hostElement.getBoundingClientRect();
@@ -1932,6 +1996,7 @@ export function App17GalaxyCanvas({
       renderer.setSize(width, height, false);
       bloomBufferPixelRatio = bloomPipeline?.setSize(width, height, currentPixelRatio) ?? 0;
       camera.aspect = width / height;
+      updateTheoryCameraFraming(camera.aspect);
       camera.updateProjectionMatrix();
       if (paperJourney.getState() === "reading") {
         paperJourney.reprojectReading({
@@ -1993,7 +2058,7 @@ export function App17GalaxyCanvas({
       lastMeasuredRenderTime = 0;
       lastAmbientRenderTime = 0;
       resize();
-      if (orbit.viewMode === "overview" && sceneData.camera.autoRotate && orbit.pauseUntil > resumeRequestedAt) {
+      if (orbit.viewMode === "overview" && cameraPreset.autoRotate && orbit.pauseUntil > resumeRequestedAt) {
         autoResumeTimer = window.setTimeout(() => {
           autoResumeTimer = 0;
           invalidate(true);
@@ -2090,7 +2155,7 @@ export function App17GalaxyCanvas({
         .map((paper) => Math.hypot(
           paper.x - renderHotspot.position.x,
           paper.y - renderHotspot.position.y,
-          (paper.z - renderHotspot.position.z) * sceneData.camera.zScale,
+          (paper.z - renderHotspot.position.z) * cameraPreset.zScale,
         ))
         .sort((a, b) => a - b);
       const radiusIndex = Math.min(radii.length - 1, Math.max(0, Math.floor(radii.length * 0.95)));
@@ -2442,6 +2507,25 @@ export function App17GalaxyCanvas({
       );
     };
 
+    function overviewTheoryFarBlend() {
+      if (
+        sceneData.kind !== "app15"
+        || exploration.state !== "overview"
+        || cameraPreset.maxDistance <= cameraPreset.distance
+      ) return 0;
+      return smoothStepRange(
+        cameraPreset.distance,
+        cameraPreset.maxDistance,
+        orbit.distance,
+      );
+    }
+
+    const applyOverviewDistanceLod = () => {
+      const farBlend = overviewTheoryFarBlend();
+      paperLayer.setOverviewFarBlend(farBlend);
+      hotspotLayer.setOverviewFarBlend(farBlend);
+    };
+
     const applyExplorationBlend = (blend: number) => {
       exploration.blend = THREE.MathUtils.clamp(blend, 0, 1);
       const retreatProgress = smoothStepRange(0, 0.78, exploration.blend);
@@ -2508,10 +2592,10 @@ export function App17GalaxyCanvas({
         return;
       }
       const saved = exploration.savedOverviewPose ?? {
-        center: sceneData.camera.center.clone(),
-        distance: sceneData.camera.distance,
-        azimuth: sceneData.camera.azimuth,
-        elevation: sceneData.camera.elevation,
+        center: cameraPreset.center.clone(),
+        distance: cameraPreset.distance,
+        azimuth: cameraPreset.azimuth,
+        elevation: cameraPreset.elevation,
       };
       exploration.fromBlend = exploration.blend;
       exploration.toBlend = 0;
@@ -2688,7 +2772,15 @@ export function App17GalaxyCanvas({
       paperComposition.lastReturnDirection = 0;
       onPaperInspectionModeChangeRef.current?.("none", "");
       onPaperPanelStateChangeRef.current?.("hidden", "");
-      camera.near = 0.1;
+      camera.near = sceneData.kind === "app15"
+        ? Math.max(0.001, Math.min(0.02, cameraPreset.minDistance * 0.04))
+        : 0.1;
+      if (sceneData.kind === "app15" && cameraPreset.theoryFraming) {
+        camera.far = Math.max(
+          240,
+          cameraPreset.maxDistance + cameraPreset.theoryFraming.maxRadius * 4,
+        );
+      }
       camera.updateProjectionMatrix();
       savedSystemPose = null;
       paperFocusTargetDistance = 0;
@@ -3322,11 +3414,52 @@ export function App17GalaxyCanvas({
     };
 
     const pickHotspot = () => {
-      raycaster.params.Points.threshold = overviewPointPickThreshold;
-      raycaster.setFromCamera(pointer, camera);
-      const intersections = raycaster.intersectObject(hotspotLayer.object, false);
-      const index = intersections.length > 0 ? intersections[0].index ?? -1 : -1;
-      return index >= 0 ? hotspotByIndex[index]?.id ?? "" : "";
+      if (sceneData.kind !== "app15") {
+        raycaster.params.Points.threshold = overviewPointPickThreshold;
+        raycaster.setFromCamera(pointer, camera);
+        const intersections = raycaster.intersectObject(hotspotLayer.object, false);
+        const index = intersections.length > 0 ? intersections[0].index ?? -1 : -1;
+        return index >= 0 ? hotspotByIndex[index]?.id ?? "" : "";
+      }
+      root.updateMatrixWorld(true);
+      const pointerX = (pointer.x * 0.5 + 0.5) * width;
+      const pointerY = (-pointer.y * 0.5 + 0.5) * height;
+      const farBlend = overviewTheoryFarBlend();
+      let bestId = "";
+      let bestDistanceSquared = Number.POSITIVE_INFINITY;
+      let bestDepth = Number.POSITIVE_INFINITY;
+      for (const hotspot of hotspotByIndex) {
+        hotspotPickWorldPosition.copy(hotspot.position).applyMatrix4(root.matrixWorld);
+        hotspotPickProjectedPosition.copy(hotspotPickWorldPosition).project(camera);
+        if (
+          hotspotPickProjectedPosition.z < -1
+          || hotspotPickProjectedPosition.z > 1
+          || Math.abs(hotspotPickProjectedPosition.x) > 1
+          || Math.abs(hotspotPickProjectedPosition.y) > 1
+        ) continue;
+        const x = (hotspotPickProjectedPosition.x * 0.5 + 0.5) * width;
+        const y = (-hotspotPickProjectedPosition.y * 0.5 + 0.5) * height;
+        const deltaX = x - pointerX;
+        const deltaY = y - pointerY;
+        const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        const displayRadius = Math.max(
+          10,
+          hotspot.displaySize * THREE.MathUtils.lerp(1, 0.68, farBlend) * 0.5,
+        );
+        if (distanceSquared > displayRadius * displayRadius) continue;
+        if (
+          distanceSquared < bestDistanceSquared - 0.01
+          || (
+            Math.abs(distanceSquared - bestDistanceSquared) <= 0.01
+            && hotspotPickProjectedPosition.z < bestDepth
+          )
+        ) {
+          bestId = hotspot.id;
+          bestDistanceSquared = distanceSquared;
+          bestDepth = hotspotPickProjectedPosition.z;
+        }
+      }
+      return bestId;
     };
 
     const pickSystemPaper = (force = false) => {
@@ -3483,7 +3616,7 @@ export function App17GalaxyCanvas({
     };
 
     const scheduleAutoRotateResume = (now = performance.now()) => {
-      if (exploration.state !== "overview" || orbit.viewMode !== "overview" || !sceneData.camera.autoRotate) return;
+      if (exploration.state !== "overview" || orbit.viewMode !== "overview" || !cameraPreset.autoRotate) return;
       clearAutoResumeTimer();
       orbit.pauseUntil = now + APP17_INTERACTION_PAUSE_MS;
       autoResumeTimer = window.setTimeout(() => {
@@ -3546,16 +3679,16 @@ export function App17GalaxyCanvas({
           const azimuth = readingOrbit.azimuth - dx * 0.0045;
           const elevation = THREE.MathUtils.clamp(
             readingOrbit.elevation + dy * 0.0022,
-            sceneData.camera.minElevation,
-            sceneData.camera.maxElevation,
+            cameraPreset.minElevation,
+            cameraPreset.maxElevation,
           );
           paperJourney.setReadingOrbit({ azimuth, elevation });
         } else {
           orbit.azimuth -= dx * 0.0045;
           orbit.elevation = THREE.MathUtils.clamp(
             orbit.elevation + dy * 0.0022,
-            sceneData.camera.minElevation,
-            sceneData.camera.maxElevation,
+            cameraPreset.minElevation,
+            cameraPreset.maxElevation,
           );
         }
         invalidate(true);
@@ -3711,10 +3844,10 @@ export function App17GalaxyCanvas({
       }
       const minDistance = exploration.state === "system"
         ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE : APP17_SYSTEM_MIN_DISTANCE
-        : sceneData.camera.minDistance;
+        : cameraPreset.minDistance;
       const maxDistance = exploration.state === "system"
         ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE : APP17_SYSTEM_MAX_DISTANCE
-        : sceneData.camera.maxDistance;
+        : cameraPreset.maxDistance;
       const previousTargetDistance = orbit.targetDistance;
       const nextTargetDistance = THREE.MathUtils.clamp(
         previousTargetDistance * Math.exp(normalizedDelta * APP17_WHEEL_SENSITIVITY),
@@ -3722,6 +3855,7 @@ export function App17GalaxyCanvas({
         maxDistance,
       );
       orbit.targetDistance = nextTargetDistance;
+      if (exploration.state === "overview") overviewFramingMode = "manual";
       lastNormalizedWheelDelta = normalizedDelta;
       lastWheelDistanceRatio = previousTargetDistance > 0
         ? nextTargetDistance / previousTargetDistance - 1
@@ -3796,34 +3930,36 @@ export function App17GalaxyCanvas({
           startOrbitTransition(
             orbit,
             "top",
-            sceneData.camera.center,
-            sceneData.camera.topDistance,
-            sceneData.camera.topAzimuth,
-            sceneData.camera.topElevation,
+            cameraPreset.center,
+            cameraPreset.topDistance,
+            cameraPreset.topAzimuth,
+            cameraPreset.topElevation,
             now,
           );
         } else if (commandRef.current.kind === "fit") {
           orbit.viewMode = "overview";
+          overviewFramingMode = "fit";
           orbit.pauseUntil = 0;
           startOrbitTransition(
             orbit,
             "fit",
-            sceneData.camera.center,
-            sceneData.camera.fitDistance,
-            sceneData.camera.fitAzimuth,
-            sceneData.camera.fitElevation,
+            cameraPreset.center,
+            cameraPreset.fitDistance,
+            cameraPreset.fitAzimuth,
+            cameraPreset.fitElevation,
             now,
           );
         } else {
           orbit.viewMode = "overview";
+          overviewFramingMode = "initial";
           orbit.pauseUntil = 0;
           startOrbitTransition(
             orbit,
             "reset",
-            sceneData.camera.center,
-            sceneData.camera.distance,
-            sceneData.camera.azimuth,
-            sceneData.camera.elevation,
+            cameraPreset.center,
+            cameraPreset.distance,
+            cameraPreset.azimuth,
+            cameraPreset.elevation,
             now,
           );
         }
@@ -3847,7 +3983,7 @@ export function App17GalaxyCanvas({
         && !orbit.dragging
         && !transitioningBefore
         && !zoomingBefore
-        && sceneData.camera.autoRotate
+        && cameraPreset.autoRotate
         && now >= orbit.pauseUntil;
       const frameInterval = orbit.dragging || transitioningBefore || zoomingBefore || fullscreenTransitioningBefore || inspectionTransitioningBefore
         ? APP17_INTERACTION_FRAME_INTERVAL
@@ -3993,7 +4129,7 @@ export function App17GalaxyCanvas({
           applyExplorationBlend(0);
           orbit.viewMode = exploration.savedOverviewViewMode;
           orbit.pauseUntil = exploration.savedOverviewPauseUntil;
-          if (orbit.viewMode === "overview" && sceneData.camera.autoRotate && orbit.pauseUntil > now) {
+          if (orbit.viewMode === "overview" && cameraPreset.autoRotate && orbit.pauseUntil > now) {
             clearAutoResumeTimer();
             autoResumeTimer = window.setTimeout(() => {
               autoResumeTimer = 0;
@@ -4016,7 +4152,7 @@ export function App17GalaxyCanvas({
         orbitChanged = true;
       }
       if (autoRotateActive) {
-        orbit.azimuth += sceneData.camera.autoRotateAzimuthStep * (elapsedMs / 50);
+        orbit.azimuth += cameraPreset.autoRotateAzimuthStep * (elapsedMs / 50);
         orbit.targetDistance = orbit.distance;
         orbitChanged = true;
       }
@@ -4031,6 +4167,7 @@ export function App17GalaxyCanvas({
 
       if (webglRenderNeeded) {
         applyRuntimeCamera();
+        applyOverviewDistanceLod();
         lastPaperQuaternionDeltaDegrees = paperJourneyFrame.state !== "idle"
           ? THREE.MathUtils.radToDeg(lastRenderedPaperCameraQuaternion.angleTo(camera.quaternion))
           : 0;
@@ -5020,30 +5157,102 @@ function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
     year: paper.year,
     ...paperVisualVariation(paper.scopedPaperId || paper.rawPaperId),
   }));
+  const theoryFraming = resolveTheorySceneFraming(hotspots, papers);
+  const camera = resolveTheoryCameraPreset({
+    center: theoryFraming.center,
+    framing: theoryFraming.framing,
+    aspect: 16 / 9,
+  });
 
   return {
     kind: "app15",
     papers,
     hotspots,
     orbitPositions: null,
-    camera: {
-      center: new THREE.Vector3(0, 0, 0),
-      distance: Math.hypot(8.7, 3.92),
-      minDistance: 1.7,
-      maxDistance: 14.8,
-      azimuth: Math.PI / 4,
-      elevation: Math.atan2(3.92, 8.7),
-      minElevation: THREE.MathUtils.degToRad(-80),
-      maxElevation: THREE.MathUtils.degToRad(88),
-      fitDistance: Math.hypot(10.2, 4.1),
-      fitAzimuth: Math.PI / 4,
-      fitElevation: Math.atan2(4.1, 10.2),
-      topDistance: Math.hypot(0.5, 11.4),
-      topAzimuth: Math.PI / 2,
-      topElevation: Math.atan2(11.4, 0.5),
-      zScale: 0.42,
-      autoRotate: false,
-      autoRotateAzimuthStep: 0,
+    camera,
+  };
+}
+
+function resolveTheorySceneFraming(
+  hotspots: App17RenderPoint[],
+  papers: App17ParticlePoint[],
+) {
+  const hotspotXs = hotspots.map((hotspot) => hotspot.position.x).sort((a, b) => a - b);
+  const hotspotYs = hotspots.map((hotspot) => hotspot.position.y).sort((a, b) => a - b);
+  const hotspotZs = hotspots.map((hotspot) => hotspot.position.z).sort((a, b) => a - b);
+  const center = new THREE.Vector3(
+    percentileNumber(hotspotXs, 0.5),
+    percentileNumber(hotspotYs, 0.5),
+    percentileNumber(hotspotZs, 0.5),
+  );
+  const boundsMin = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+  const boundsMax = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+  const radii: number[] = [];
+  const include = (point: THREE.Vector3) => {
+    boundsMin.min(point);
+    boundsMax.max(point);
+    radii.push(point.distanceTo(center));
+  };
+  hotspots.forEach((hotspot) => include(hotspot.position));
+  papers.forEach((paper) => include(new THREE.Vector3(paper.x, paper.y, paper.z)));
+  radii.sort((a, b) => a - b);
+  const fallbackRadius = 0.5;
+  const maxRadius = Math.max(fallbackRadius, radii.at(-1) ?? fallbackRadius);
+  const p95Radius = Math.max(maxRadius * 0.1, percentileNumber(radii, 0.95));
+  return {
+    center,
+    framing: {
+      p95Radius,
+      maxRadius,
+      boundsMin,
+      boundsMax,
+    } satisfies App17TheoryFraming,
+  };
+}
+
+function resolveTheoryCameraPreset({
+  center,
+  framing,
+  aspect,
+}: {
+  center: THREE.Vector3;
+  framing: App17TheoryFraming;
+  aspect: number;
+}): App17CameraPreset {
+  const verticalHalfFov = THREE.MathUtils.degToRad(APP17_CAMERA_FOV) * 0.5;
+  const verticalTangent = Math.tan(verticalHalfFov);
+  const horizontalTangent = verticalTangent * Math.max(0.1, aspect);
+  const limitingTangent = Math.max(0.01, Math.min(verticalTangent, horizontalTangent));
+  const distanceForCoverage = (coverage: number) => (
+    framing.maxRadius / Math.max(0.01, coverage * limitingTangent)
+  );
+  const distance = distanceForCoverage(0.72);
+  const fitDistance = distanceForCoverage(0.86);
+  const maxDistance = distanceForCoverage(0.45);
+  const minDistance = Math.max(0.01, framing.p95Radius * 0.2);
+  return {
+    center: center.clone(),
+    distance,
+    minDistance,
+    maxDistance,
+    azimuth: THREE.MathUtils.degToRad(45),
+    elevation: THREE.MathUtils.degToRad(26),
+    minElevation: THREE.MathUtils.degToRad(-80),
+    maxElevation: THREE.MathUtils.degToRad(88),
+    fitDistance,
+    fitAzimuth: THREE.MathUtils.degToRad(45),
+    fitElevation: THREE.MathUtils.degToRad(26),
+    topDistance: fitDistance,
+    topAzimuth: THREE.MathUtils.degToRad(90),
+    topElevation: THREE.MathUtils.degToRad(87.5),
+    zScale: 1,
+    autoRotate: false,
+    autoRotateAzimuthStep: 0,
+    theoryFraming: {
+      p95Radius: framing.p95Radius,
+      maxRadius: framing.maxRadius,
+      boundsMin: framing.boundsMin.clone(),
+      boundsMax: framing.boundsMax.clone(),
     },
   };
 }
@@ -5068,7 +5277,7 @@ function buildGalaxySystemResources(
     topicPaperByCanonicalId.set(canonicalId, paper);
   });
   const topicPapers = [...topicPaperByCanonicalId.values()];
-  const semanticLayout = payload.paperLayoutVersion === "semantic-e5-pca3-v1";
+  const semanticLayout = payload.paperLayoutVersion?.startsWith("semantic-") ?? false;
   const relativePoints = topicPapers.map((paper) => ({
     paper,
     vector: new THREE.Vector3(
@@ -8105,6 +8314,9 @@ function createPaperLayer(
     setFarRotation: (rotationAngle: number) => {
       material.uniforms.uFarRotationAngle.value = rotationAngle;
     },
+    setOverviewFarBlend: (blend: number) => {
+      material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
+    },
     setSystemDepthCue: (centerViewDepth: number, depthRange: number, strength: number) => {
       material.uniforms.uSystemCenterViewDepth.value = centerViewDepth;
       material.uniforms.uSystemDepthRange.value = Math.max(0.001, depthRange);
@@ -8212,6 +8424,9 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
       material.uniforms.uAmbientTime.value = timeSeconds;
       material.uniforms.uFarRotationAngle.value = rotationAngle;
       material.uniforms.uAmbientStrength.value = strength;
+    },
+    setOverviewFarBlend: (blend: number) => {
+      material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
     },
     dispose: () => {
       geometry.dispose();
@@ -8625,6 +8840,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       uSelectedTopicOpacity: { value: 1 },
       uFocusPosition: { value: new THREE.Vector3() },
       uFarRotationAngle: { value: 0 },
+      uOverviewFarBlend: { value: 0 },
       uSystemCenterViewDepth: { value: 0 },
       uSystemDepthRange: { value: APP17_SYSTEM_RADIUS },
       uSystemDepthStrength: { value: 0 },
@@ -8647,6 +8863,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       uniform float uSelectedTopicOpacity;
       uniform vec3 uFocusPosition;
       uniform float uFarRotationAngle;
+      uniform float uOverviewFarBlend;
       uniform float uSystemCenterViewDepth;
       uniform float uSystemDepthRange;
       uniform float uSystemDepthStrength;
@@ -8672,10 +8889,16 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
         float relativeDepth = ((-mvPosition.z) - uSystemCenterViewDepth) / max(0.001, uSystemDepthRange);
         float deepPosition = clamp(max(relativeDepth, 0.0), 0.0, 1.0);
         float depthVisibility = mix(1.0, mix(1.0, 0.72, deepPosition), uSystemDepthStrength);
-        vAlpha = pointAlpha * uSceneOpacity * visibility * depthVisibility;
+        float overviewOpacity = mix(1.0, 0.78, uOverviewFarBlend);
+        vAlpha = pointAlpha * uSceneOpacity * visibility * depthVisibility * overviewOpacity;
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.78, 1.2);
         float displayScale = mix(1.0, distanceScale, uDistanceAttenuation);
-        gl_PointSize = max(pointSize * pointScale, uMinimumCssSize * pointScale) * uPixelRatio * displayScale;
+        float overviewPointScale = mix(1.0, 0.62, uOverviewFarBlend);
+        float overviewMinimumCssSize = mix(uMinimumCssSize, 1.15, uOverviewFarBlend);
+        gl_PointSize = max(
+          pointSize * pointScale * overviewPointScale,
+          overviewMinimumCssSize * pointScale
+        ) * uPixelRatio * displayScale;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -8711,6 +8934,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uFarRotationAngle: { value: 0 },
       uAmbientTime: { value: 0 },
       uAmbientStrength: { value: 1 },
+      uOverviewFarBlend: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -8734,6 +8958,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uniform float uFarRotationAngle;
       uniform float uAmbientTime;
       uniform float uAmbientStrength;
+      uniform float uOverviewFarBlend;
       varying vec3 vColor;
       varying float vPointIntensity;
       varying float vHaloStrength;
@@ -8763,19 +8988,25 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
         float breath = sin(uAmbientTime * breathSpeed + breathPhase) * ambientMask;
         float baseCoreVisibility = mix(distantCoreVisibility, selectedVisibility, selectedMask);
         float baseHaloVisibility = mix(distantHaloVisibility, selectedVisibility, selectedMask);
-        vCoreVisibility = uSceneOpacity * ${kind === "app14"
+        vCoreVisibility = uSceneOpacity * mix(1.0, 0.82, uOverviewFarBlend) * ${kind === "app14"
           ? "baseCoreVisibility * (1.0 + breath * 0.04)"
           : "clamp(baseCoreVisibility + breath * 0.06, 0.0, 1.0)"};
-        vHaloVisibility = uSceneOpacity * ${kind === "app14"
+        vHaloVisibility = uSceneOpacity * mix(1.0, 0.45, uOverviewFarBlend) * ${kind === "app14"
           ? "baseHaloVisibility * (1.0 + breath * 0.08)"
           : "clamp(baseHaloVisibility + breath * 0.12, 0.0, 1.0)"};
-        vRayVisibility = uSceneOpacity * mix(distantRayVisibility, selectedVisibility, selectedMask);
+        vRayVisibility = uSceneOpacity
+          * mix(1.0, 0.45, uOverviewFarBlend)
+          * mix(distantRayVisibility, selectedVisibility, selectedMask);
         float distantPointScale = mix(1.0, ${APP17_FAR_HOTSPOT_SIZE.toFixed(2)}, uExplorationProgress);
         float pointScale = mix(distantPointScale, 1.0, selectedMask);
         vec4 mvPosition = modelViewMatrix * vec4(transformedPosition, 1.0);
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.74, 1.22);
         float displayScale = mix(1.0, distanceScale, uDepthAttenuation);
-        gl_PointSize = pointSize * pointScale * displayScale * uPixelRatio;
+        gl_PointSize = pointSize
+          * pointScale
+          * mix(1.0, 0.68, uOverviewFarBlend)
+          * displayScale
+          * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
