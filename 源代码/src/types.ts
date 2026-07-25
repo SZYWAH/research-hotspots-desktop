@@ -430,6 +430,8 @@ export type App17GalaxyPayload = {
   hotspots: App17GalaxyHotspotPoint[];
   snapshotId?: string;
   paperLayoutVersion?: string;
+  paperLayoutLocalP95Radius?: number;
+  paperLayoutSharedScale?: number;
   embeddingModelId?: string;
   embeddingModelRevision?: string;
   projectionVersion?: string;

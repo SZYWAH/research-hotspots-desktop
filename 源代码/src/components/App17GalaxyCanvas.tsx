@@ -487,6 +487,10 @@ type GalaxySystemResources = {
   activeTimeSeconds: number;
   entryScale: number;
   starEntryScale: number;
+  frameRadius: number;
+  initialDistance: number;
+  minDistance: number;
+  maxDistance: number;
   updateAnimation: (elapsedSeconds: number, motionEnabled: boolean, frozenPaperIds: Set<string>) => boolean;
   dispose: () => void;
 };
@@ -676,7 +680,7 @@ const APP17_SYSTEM_MIN_DISTANCE = 1;
 const APP17_SYSTEM_MAX_DISTANCE = 12;
 const APP17_SYSTEM_ELEVATION = THREE.MathUtils.degToRad(24);
 const APP17_SYSTEM_RADIUS = 3.2;
-const APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS = 3.64;
+const APP17_NATURAL_LAYOUT_VERSION = "semantic-hierarchical-natural-pca3-v3";
 const APP17_SYSTEM_ORBIT_SEGMENTS = 96;
 const APP17_SYSTEM_CACHE_LIMIT = 4;
 const APP17_SYSTEM_STAR_RADIUS = 0.38;
@@ -2174,9 +2178,9 @@ export function App17GalaxyCanvas({
       const initialVisualScale = Math.max(resources.entryScale, resources.starEntryScale);
       const growthLimitedDistance = (focusDistance / Math.max(initialVisualScale, 0.001)) * 0.96;
       exploration.systemDistance = THREE.MathUtils.clamp(
-        Math.min(APP17_SYSTEM_DISTANCE, growthLimitedDistance),
-        APP17_SYSTEM_MIN_DISTANCE * 1.4,
-        APP17_SYSTEM_DISTANCE,
+        Math.min(resources.initialDistance, growthLimitedDistance),
+        resources.minDistance * 1.4,
+        resources.initialDistance,
       );
     };
 
@@ -3843,10 +3847,14 @@ export function App17GalaxyCanvas({
         return Math.abs(nextDistance - previousDistance) > 0.0001;
       }
       const minDistance = exploration.state === "system"
-        ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE : APP17_SYSTEM_MIN_DISTANCE
+        ? systemViewMode === "paper-focus"
+          ? APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE
+          : systemResources?.minDistance ?? APP17_SYSTEM_MIN_DISTANCE
         : cameraPreset.minDistance;
       const maxDistance = exploration.state === "system"
-        ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE : APP17_SYSTEM_MAX_DISTANCE
+        ? systemViewMode === "paper-focus"
+          ? APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE
+          : systemResources?.maxDistance ?? APP17_SYSTEM_MAX_DISTANCE
         : cameraPreset.maxDistance;
       const previousTargetDistance = orbit.targetDistance;
       const nextTargetDistance = THREE.MathUtils.clamp(
@@ -4367,7 +4375,7 @@ export function App17GalaxyCanvas({
             .applyMatrix4(camera.matrixWorldInverse);
           systemResources.root.getWorldScale(systemWorldScale);
           const systemDepthStrength = smoothStepRange(0.62, 1, exploration.blend);
-          const systemDepthRange = APP17_SYSTEM_RADIUS * Math.max(
+          const systemDepthRange = systemResources.frameRadius * Math.max(
             systemWorldScale.x,
             systemWorldScale.y,
             systemWorldScale.z,
@@ -5278,6 +5286,7 @@ function buildGalaxySystemResources(
   });
   const topicPapers = [...topicPaperByCanonicalId.values()];
   const semanticLayout = payload.paperLayoutVersion?.startsWith("semantic-") ?? false;
+  const naturalSemanticLayout = payload.paperLayoutVersion === APP17_NATURAL_LAYOUT_VERSION;
   const relativePoints = topicPapers.map((paper) => ({
     paper,
     vector: new THREE.Vector3(
@@ -5289,7 +5298,27 @@ function buildGalaxySystemResources(
   const radii = relativePoints.map((item) => item.vector.length()).sort((a, b) => a - b);
   const percentileIndex = Math.min(radii.length - 1, Math.max(0, Math.floor(radii.length * 0.95)));
   const percentileRadius = radii[percentileIndex] || 1;
-  const coordinateScale = APP17_SYSTEM_RADIUS / Math.max(0.0001, percentileRadius);
+  const naturalLayoutUnitScale = naturalSemanticLayout
+    ? Math.max(0.0001, payload.paperLayoutSharedScale ?? 1)
+    : 1;
+  const coordinateScale = naturalSemanticLayout
+    ? APP17_SYSTEM_RADIUS /
+      Math.max(
+        0.0001,
+        (payload.paperLayoutLocalP95Radius ?? 10.5) * naturalLayoutUnitScale,
+      )
+    : APP17_SYSTEM_RADIUS / Math.max(0.0001, percentileRadius);
+  const scaledRadii = radii.map((radius) => radius * coordinateScale);
+  const p99Index = Math.min(
+    scaledRadii.length - 1,
+    Math.max(0, Math.floor(scaledRadii.length * 0.99)),
+  );
+  const ordinaryCloudP99Radius = scaledRadii[p99Index] || APP17_SYSTEM_RADIUS;
+  const frameRadius = Math.max(APP17_SYSTEM_RADIUS, ordinaryCloudP99Radius);
+  const limitingTangent = Math.max(0.01, Math.tan(THREE.MathUtils.degToRad(APP17_CAMERA_FOV) * 0.5));
+  const initialDistance = frameRadius / (0.72 * limitingTangent);
+  const minDistance = Math.max(APP17_SYSTEM_STAR_RADIUS * 1.35, frameRadius * 0.2);
+  const maxDistance = frameRadius / (0.45 * limitingTangent);
   const canonicalPaperIdById = new Map<string, string>();
   relativePoints.forEach((item) => {
     const canonicalId = item.paper.scopedPaperId || item.paper.rawPaperId;
@@ -5305,21 +5334,7 @@ function buildGalaxySystemResources(
     .map((item) => {
       const paperId = item.paper.scopedPaperId || item.paper.rawPaperId;
       const position = item.vector.clone().multiplyScalar(coordinateScale);
-      if (semanticLayout) {
-        const radius = position.length();
-        if (radius > 1e-12 && radius < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
-          const normalized = radius / APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS;
-          position.setLength(
-            APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS + 0.18 * smootherStep(normalized),
-          );
-        } else if (radius > APP17_SYSTEM_RADIUS) {
-          const tail = APP17_SYSTEM_SEMANTIC_OUTLIER_RADIUS - APP17_SYSTEM_RADIUS;
-          position.setLength(
-            APP17_SYSTEM_RADIUS
-              + tail * (1 - Math.exp(-(radius - APP17_SYSTEM_RADIUS) / tail)),
-          );
-        }
-      } else if (position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
+      if (!semanticLayout && position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
         if (position.lengthSq() < 1e-12) {
           const random = seededRandom(stableHash(`${paperId}:star-exclusion`));
           position.set(random() - 0.5, random() - 0.5, random() - 0.5);
@@ -5366,6 +5381,10 @@ function buildGalaxySystemResources(
     activeTimeSeconds: 0,
     entryScale: 1,
     starEntryScale: 1,
+    frameRadius,
+    initialDistance,
+    minDistance,
+    maxDistance,
     updateAnimation: (elapsedSeconds, motionEnabled, frozenPaperIds) => {
       const elapsed = THREE.MathUtils.clamp(elapsedSeconds, 0, 0.12);
       let positionsChanged = false;
