@@ -26,16 +26,21 @@ use research_hotspots_core::agent_store::{
     AgentRunSnapshot, NewAgentRun,
 };
 use research_hotspots_core::semantic_layout::{
-    project_semantic_embeddings, SemanticPaperDocument, SemanticPoint3,
+    multiply_matrix_vector_3d, orthogonal_procrustes_3d, project_semantic_embeddings,
+    project_semantic_hotspot_centroids, semantic_centroid_record, semantic_hotspot_identity_key,
+    semantic_hotspot_identity_sha256, stable_semantic_hotspot_id, SemanticPaperDocument,
+    SemanticPoint3, SEMANTIC_LAYOUT_VERSION, SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION,
+    SEMANTIC_PROJECTION_VERSION,
 };
 use research_hotspots_core::{
     atomic_replace_file_with_rollback, create_empty_library_atomically, current_library_revision,
     install_seed_library_atomically, read_analysis_state, read_unified_galaxy_rows,
     read_unified_hotspot_rows, validate_active_snapshot, validate_library_candidate_connection,
     validate_library_candidate_file, write_snapshot_in_transaction, write_snapshot_transaction,
-    AnalysisState, FirstRunMode, SeedExpectation, SnapshotHotspot, SnapshotMembership,
-    SnapshotWriteInput,
-    ValidatedLibraryCandidate, V20_ALGORITHM_VERSION,
+    AnalysisState, FirstRunMode, SeedExpectation, SnapshotHotspot, SnapshotHotspotLineage,
+    SnapshotMembership, SnapshotWriteInput,
+    UnifiedGalaxyRows, ValidatedLibraryCandidate, HOTSPOT_IDENTITY_VERSION,
+    V20_ALGORITHM_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -220,6 +225,8 @@ struct DefaultLibraryManifest {
     embedding_encoding: Option<String>,
     #[serde(default)]
     embedding_count: Option<i64>,
+    #[serde(default)]
+    hotspot_identity_version: Option<String>,
     generated_at: String,
 }
 
@@ -825,6 +832,7 @@ struct V20GalaxyPayload {
     embedding_model_id: Option<String>,
     embedding_model_revision: Option<String>,
     projection_version: Option<String>,
+    hotspot_identity_version: Option<String>,
     paper_count: usize,
     hotspot_count: usize,
     topic_count: usize,
@@ -842,6 +850,11 @@ struct V20HotspotSnapshot {
     active_snapshot_id: String,
     snapshot_id: Option<String>,
     algorithm_version: String,
+    layout_version: String,
+    projection_version: String,
+    embedding_model_id: String,
+    embedding_model_revision: String,
+    hotspot_identity_version: String,
     paper_count: i64,
     hotspot_count: i64,
     membership_count: i64,
@@ -986,9 +999,9 @@ pub struct StarMapEvidenceProfile {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapCoordinateSpread {
-    pub x: i64,
-    pub y: i64,
-    pub z: i64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
 }
 
 #[derive(Serialize)]
@@ -1156,9 +1169,9 @@ struct SimilarHotspotRelation {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HotspotCoordinates {
-    x: i64,
-    y: i64,
-    z: i64,
+    x: f64,
+    y: f64,
+    z: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -2743,6 +2756,7 @@ fn prepare_library_cluster_with_control(
     modeling_task: Option<&SemanticModelingTask>,
     app: Option<&tauri::AppHandle>,
 ) -> Result<PreparedLibraryCluster, String> {
+    let previous_snapshot = read_unified_galaxy_rows(conn, project_id)?;
     let mut stmt = conn
         .prepare("SELECT id, field, title, abstract, year, source, categories, doi, url FROM papers WHERE project_id = ?1")
         .map_err(|error| error.to_string())?;
@@ -2824,6 +2838,14 @@ fn prepare_library_cluster_with_control(
 
     let timestamp = now_millis_string();
     let retained_groups = sorted_groups.iter().take(160).cloned().collect::<Vec<_>>();
+    let hotspot_identity_keys = retained_groups
+        .iter()
+        .map(|group| semantic_hotspot_identity_key(&group.field, &group.keyword))
+        .collect::<Vec<_>>();
+    let hotspot_identity_hashes = hotspot_identity_keys
+        .iter()
+        .map(|key| semantic_hotspot_identity_sha256(key))
+        .collect::<Vec<_>>();
     let mut hotspots = retained_groups
         .iter()
         .cloned()
@@ -2928,6 +2950,58 @@ fn prepare_library_cluster_with_control(
             assigned_candidates[target_index].push((candidate.clone(), group_score));
         }
     }
+
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "hotspot-centroids".into();
+        emit_semantic_modeling_progress(app, &progress);
+    }
+    let centroid_records = assigned_candidates
+        .iter()
+        .enumerate()
+        .map(|(hotspot_index, candidates)| {
+            let records = candidates
+                .iter()
+                .map(|(candidate, _)| {
+                    embedding_by_id
+                        .get(&candidate.id)
+                        .cloned()
+                        .ok_or_else(|| "SEMANTIC_EMBEDDING_CACHE_INCOMPLETE".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            semantic_centroid_record(&hotspots[hotspot_index].id, &records)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "hotspot-pca3".into();
+        emit_semantic_modeling_progress(app, &progress);
+    }
+    let mut hotspot_points = project_semantic_hotspot_centroids(&centroid_records)?;
+    if let Some(previous) = previous_snapshot.as_ref().filter(|previous| {
+        previous.state.layout_version == SEMANTIC_LAYOUT_VERSION
+            && previous.state.projection_version == SEMANTIC_PROJECTION_VERSION
+    }) {
+        align_hotspot_projection_to_previous(&mut hotspot_points, previous);
+    }
+    for hotspot in &mut hotspots {
+        let point = hotspot_points
+            .get(&hotspot.id)
+            .copied()
+            .ok_or_else(|| "SEMANTIC_HOTSPOT_POINT_MISSING".to_string())?;
+        hotspot.coordinates = HotspotCoordinates {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+        };
+    }
+
     let mut memberships = Vec::with_capacity(before_count as usize);
     for (hotspot_index, candidates) in assigned_candidates.iter().enumerate() {
         let hotspot = &hotspots[hotspot_index];
@@ -2975,12 +3049,32 @@ fn prepare_library_cluster_with_control(
     }
 
     let snapshot_id = format!("{}:v20:{}", project_id, timestamp);
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "hotspot-lineage".into();
+        emit_semantic_modeling_progress(app, &progress);
+    }
+    let lineage = build_hotspot_lineage(
+        previous_snapshot.as_ref(),
+        project_id,
+        &snapshot_id,
+        &hotspots,
+        &hotspot_identity_hashes,
+        &memberships,
+        &timestamp,
+        current_library_revision(conn, project_id)?,
+    )?;
     let snapshot_hotspots = hotspots
         .iter()
-        .map(|hotspot| {
+        .enumerate()
+        .map(|(index, hotspot)| {
             Ok(SnapshotHotspot {
                 hotspot_id: hotspot.id.clone(),
                 payload_json: serde_json::to_string(hotspot).map_err(|error| error.to_string())?,
+                identity_key_sha256: hotspot_identity_hashes[index].clone(),
                 x: hotspot.coordinates.x as f64,
                 y: hotspot.coordinates.y as f64,
                 z: hotspot.coordinates.z as f64,
@@ -2993,10 +3087,16 @@ fn prepare_library_cluster_with_control(
             snapshot_id: snapshot_id.clone(),
             project_id: project_id.to_string(),
             algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+            layout_version: SEMANTIC_LAYOUT_VERSION.to_string(),
+            projection_version: SEMANTIC_PROJECTION_VERSION.to_string(),
+            embedding_model_id: SEMANTIC_MODEL_ID.to_string(),
+            embedding_model_revision: SEMANTIC_MODEL_REVISION.to_string(),
+            hotspot_identity_version: HOTSPOT_IDENTITY_VERSION.to_string(),
             paper_count: before_count,
             created_at: timestamp.clone(),
             hotspots: snapshot_hotspots,
             memberships: memberships.clone(),
+            lineage,
         };
 
     let result = LibraryClusterResult {
@@ -3029,6 +3129,196 @@ fn commit_prepared_library_cluster(
 ) -> Result<LibraryClusterResult, String> {
     write_snapshot_in_transaction(tx, &prepared.snapshot)?;
     Ok(prepared.result.clone())
+}
+
+fn align_hotspot_projection_to_previous(
+    points: &mut HashMap<String, SemanticPoint3>,
+    previous: &UnifiedGalaxyRows,
+) {
+    let previous_by_id = previous
+        .hotspots
+        .iter()
+        .map(|row| {
+            (
+                row.hotspot_id.as_str(),
+                SemanticPoint3 {
+                    x: row.x,
+                    y: row.y,
+                    z: row.z,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let common = points
+        .iter()
+        .filter_map(|(id, point)| previous_by_id.get(id.as_str()).map(|old| (*point, *old)))
+        .collect::<Vec<_>>();
+    if common.len() < 20 {
+        return;
+    }
+    let components = |point: SemanticPoint3| [point.x, point.y, point.z];
+    let source = common
+        .iter()
+        .map(|(current, _)| components(*current))
+        .collect::<Vec<_>>();
+    let target = common
+        .iter()
+        .map(|(_, old)| components(*old))
+        .collect::<Vec<_>>();
+    let Ok(rotation) = orthogonal_procrustes_3d(&source, &target) else {
+        return;
+    };
+    for point in points.values_mut() {
+        let source = components(*point);
+        let aligned = multiply_matrix_vector_3d(&rotation, source);
+        point.x = aligned[0];
+        point.y = aligned[1];
+        point.z = aligned[2];
+    }
+}
+
+fn build_hotspot_lineage(
+    previous: Option<&UnifiedGalaxyRows>,
+    project_id: &str,
+    snapshot_id: &str,
+    hotspots: &[HotspotRecord],
+    identity_hashes: &[String],
+    memberships: &[SnapshotMembership],
+    timestamp: &str,
+    current_library_revision: i64,
+) -> Result<Vec<SnapshotHotspotLineage>, String> {
+    let Some(previous) = previous else {
+        return Ok(Vec::new());
+    };
+    let old_members = previous.memberships.iter().fold(
+        HashMap::<String, HashSet<String>>::new(),
+        |mut values, membership| {
+            values
+                .entry(membership.hotspot_id.clone())
+                .or_default()
+                .insert(membership.paper_id.clone());
+            values
+        },
+    );
+    let new_members = memberships.iter().fold(
+        HashMap::<String, HashSet<String>>::new(),
+        |mut values, membership| {
+            values
+                .entry(membership.hotspot_id.clone())
+                .or_default()
+                .insert(membership.paper_id.clone());
+            values
+        },
+    );
+    let old_fields = previous
+        .hotspots
+        .iter()
+        .map(|row| {
+            let field = serde_json::from_str::<HotspotRecord>(&row.payload_json)
+                .map(|hotspot| hotspot.field)
+                .unwrap_or_default();
+            (row.hotspot_id.clone(), field)
+        })
+        .collect::<HashMap<_, _>>();
+    let new_fields = hotspots
+        .iter()
+        .map(|hotspot| (hotspot.id.clone(), hotspot.field.clone()))
+        .collect::<HashMap<_, _>>();
+    let new_identity = hotspots
+        .iter()
+        .zip(identity_hashes)
+        .map(|(hotspot, identity)| (hotspot.id.clone(), identity.clone()))
+        .collect::<HashMap<_, _>>();
+    let old_identity = previous
+        .hotspots
+        .iter()
+        .map(|hotspot| (hotspot.hotspot_id.clone(), hotspot.identity_key_sha256.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut candidates = Vec::new();
+    for old in &previous.hotspots {
+        let old_set = old_members
+            .get(&old.hotspot_id)
+            .cloned()
+            .unwrap_or_default();
+        for hotspot in hotspots {
+            if old_fields.get(&old.hotspot_id) != new_fields.get(&hotspot.id) {
+                continue;
+            }
+            let new_set = new_members
+                .get(&hotspot.id)
+                .cloned()
+                .unwrap_or_default();
+            let intersection = old_set.intersection(&new_set).count();
+            let union = old_set.union(&new_set).count();
+            let overlap = if union == 0 {
+                0.0
+            } else {
+                intersection as f64 / union as f64
+            };
+            let identity_match = old_identity
+                .get(&old.hotspot_id)
+                .filter(|identity| !identity.is_empty())
+                == new_identity.get(&hotspot.id);
+            if identity_match || overlap > 0.0 {
+                candidates.push((
+                    old.hotspot_id.clone(),
+                    hotspot.id.clone(),
+                    overlap,
+                    identity_match,
+                ));
+            }
+        }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .3
+            .cmp(&left.3)
+            .then_with(|| {
+                right
+                    .2
+                    .partial_cmp(&left.2)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.0.cmp(&right.0))
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let mut used_old = HashSet::new();
+    let mut used_new = HashSet::new();
+    let mut lineage = Vec::new();
+    for (old_id, new_id, overlap, identity_match) in candidates {
+        if used_old.contains(&old_id) || used_new.contains(&new_id) {
+            continue;
+        }
+        used_old.insert(old_id.clone());
+        used_new.insert(new_id.clone());
+        lineage.push(SnapshotHotspotLineage {
+            from_snapshot_id: previous.state.active_snapshot_id.clone(),
+            from_hotspot_id: old_id,
+            to_snapshot_id: snapshot_id.to_string(),
+            to_hotspot_id: new_id,
+            relation_type: if identity_match {
+                "identity".into()
+            } else if overlap >= 1.0 - 1e-12 {
+                "equivalent".into()
+            } else {
+                "continuation".into()
+            },
+            member_overlap: overlap,
+            identity_key_match: identity_match,
+            created_at: timestamp.to_string(),
+        });
+    }
+    let unchanged_library = previous.state.project_id == project_id
+        && previous.state.library_revision == current_library_revision
+        && previous.state.paper_count == memberships.len() as i64
+        && previous.hotspots.len() == hotspots.len();
+    if unchanged_library
+        && (lineage.len() != hotspots.len()
+            || lineage.iter().any(|row| row.member_overlap < 1.0 - 1e-12))
+    {
+        return Err("V20_HOTSPOT_LINEAGE_UNCHANGED_LIBRARY_MISMATCH".into());
+    }
+    Ok(lineage)
 }
 
 fn hotspot_group_overlap(hotspot: &HotspotRecord, group: &ClusterGroup) -> f64 {
@@ -3089,12 +3379,12 @@ pub fn export_star_map_from_database_path(
     let mut hotspots_with_source_distribution = 0usize;
     let mut total_representative_ids = 0usize;
     let mut sample_signal_ids = HashSet::new();
-    let mut min_x = 0i64;
-    let mut max_x = 0i64;
-    let mut min_y = 0i64;
-    let mut max_y = 0i64;
-    let mut min_z = 0i64;
-    let mut max_z = 0i64;
+    let mut min_x = 0.0f64;
+    let mut max_x = 0.0f64;
+    let mut min_y = 0.0f64;
+    let mut max_y = 0.0f64;
+    let mut min_z = 0.0f64;
+    let mut max_z = 0.0f64;
 
     for (index, hotspot) in hotspots.iter().enumerate() {
         if index == 0 {
@@ -4049,6 +4339,11 @@ fn get_v20_hotspot_snapshot(
             active_snapshot_id: String::new(),
             snapshot_id: None,
             algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+            layout_version: String::new(),
+            projection_version: String::new(),
+            embedding_model_id: String::new(),
+            embedding_model_revision: String::new(),
+            hotspot_identity_version: String::new(),
             paper_count: 0,
             hotspot_count: 0,
             membership_count: 0,
@@ -4072,6 +4367,11 @@ fn get_v20_hotspot_snapshot(
         active_snapshot_id: rows.state.active_snapshot_id.clone(),
         snapshot_id: Some(rows.state.active_snapshot_id),
         algorithm_version: rows.state.algorithm_version,
+        layout_version: rows.state.layout_version,
+        projection_version: rows.state.projection_version,
+        embedding_model_id: rows.state.embedding_model_id,
+        embedding_model_revision: rows.state.embedding_model_revision,
+        hotspot_identity_version: rows.state.hotspot_identity_version,
         paper_count: rows.state.paper_count,
         hotspot_count: rows.state.hotspot_count,
         membership_count: rows.state.membership_count,
@@ -4110,6 +4410,7 @@ fn build_v20_galaxy_payload(
             embedding_model_id: None,
             embedding_model_revision: None,
             projection_version: None,
+            hotspot_identity_version: None,
             paper_count: 0,
             hotspot_count: 0,
             topic_count: 0,
@@ -4119,7 +4420,13 @@ fn build_v20_galaxy_payload(
             hotspot_records: Vec::new(),
         });
     };
-    if rows.state.algorithm_version != V20_ALGORITHM_VERSION {
+    let snapshot_is_current = rows.state.algorithm_version == V20_ALGORITHM_VERSION
+        && rows.state.layout_version == SEMANTIC_LAYOUT_VERSION
+        && rows.state.projection_version == SEMANTIC_PROJECTION_VERSION
+        && rows.state.embedding_model_id == SEMANTIC_MODEL_ID
+        && rows.state.embedding_model_revision == SEMANTIC_MODEL_REVISION
+        && rows.state.hotspot_identity_version == HOTSPOT_IDENTITY_VERSION;
+    if !snapshot_is_current {
         return Ok(V20GalaxyPayload {
             ready: false,
             message: "当前活动快照仍使用旧版论文坐标。请前往分析流水线显式重新运行热点建模；程序不会自动建模或展示旧螺旋布局。".to_string(),
@@ -4131,6 +4438,7 @@ fn build_v20_galaxy_payload(
             embedding_model_id: None,
             embedding_model_revision: None,
             projection_version: None,
+            hotspot_identity_version: None,
             paper_count: rows.state.paper_count.max(0) as usize,
             hotspot_count: rows.state.hotspot_count.max(0) as usize,
             topic_count: 0,
@@ -4229,18 +4537,11 @@ fn build_v20_galaxy_payload(
         mode: mode.to_string(),
         generated_at: rows.state.generated_at.clone(),
         snapshot_id: Some(rows.state.active_snapshot_id),
-        paper_layout_version: Some(
-            research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION.to_string(),
-        ),
-        embedding_model_id: Some(
-            research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID.to_string(),
-        ),
-        embedding_model_revision: Some(
-            research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION.to_string(),
-        ),
-        projection_version: Some(
-            research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION.to_string(),
-        ),
+        paper_layout_version: Some(rows.state.layout_version),
+        embedding_model_id: Some(rows.state.embedding_model_id),
+        embedding_model_revision: Some(rows.state.embedding_model_revision),
+        projection_version: Some(rows.state.projection_version),
+        hotspot_identity_version: Some(rows.state.hotspot_identity_version),
         paper_count: papers.len(),
         hotspot_count: hotspots.len(),
         topic_count: hotspots.len(),
@@ -4259,26 +4560,39 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
     let conn = Connection::open(&database).map_err(|error| error.to_string())?;
     initialize_library_database(&conn)?;
     let timestamp = now_millis_string();
-    for index in 0..96 {
-        let quantum = "quantum ".repeat((index % 7) + 1);
-        let protein = "protein ".repeat(((index * 3) % 7) + 1);
-        let climate = "climate ".repeat(((index * 5) % 7) + 1);
+    const AUDIT_FIELDS: [(&str, &str); 8] = [
+        ("Quantum Physics", "quantum"),
+        ("Molecular Biology", "protein"),
+        ("Climate Science", "climate"),
+        ("Medical Imaging", "imaging"),
+        ("Robotics", "robotics"),
+        ("Materials Science", "materials"),
+        ("Economics", "economics"),
+        ("Astronomy", "astronomy"),
+    ];
+    for index in 0..512 {
+        let (field, dominant) = AUDIT_FIELDS[index / 64];
+        let axis_a = "representation ".repeat((index % 7) + 1);
+        let axis_b = "evidence ".repeat(((index * 3) % 7) + 1);
+        let axis_c = "forecast ".repeat(((index * 5) % 7) + 1);
+        let dominant = format!("{dominant} ").repeat(12);
         let abstract_text = format!(
-            "Semantic representation benchmark {index}. {quantum}error correction and logical noise. \
-             {protein}folding structure and molecular design. {climate}adaptation forecasting and risk."
+            "Semantic benchmark {index}. {dominant} {axis_a} {axis_b} {axis_c} \
+             deterministic structure, local variation, and interpretable evidence."
         );
         conn.execute(
             "INSERT INTO papers(
                id,project_id,source,title,abstract,authors,categories,field,published_date,year,
                url,doi,created_at,updated_at,search_blob
              ) VALUES(?1,'project-default','audit',?2,?3,'Audit Author',
-               'semantic; representation','Audit Science','2026',2026,NULL,NULL,?4,?4,?5)",
+               'semantic; representation',?4,'2026',2026,NULL,NULL,?5,?5,?6)",
             params![
                 format!("semantic-audit-{index:03}"),
-                format!("Semantic representation study {index:03}"),
+                format!("{field} semantic study {index:03}"),
                 abstract_text,
+                field,
                 timestamp,
-                format!("semantic representation study {index:03} {quantum} {protein} {climate}")
+                format!("{field} semantic study {index:03} {dominant} {axis_a} {axis_b} {axis_c}")
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -4287,6 +4601,23 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
     let state = read_analysis_state(&conn, "project-default")?
         .ok_or_else(|| "SEMANTIC_LAYOUT_AUDIT_SNAPSHOT_MISSING".to_string())?;
     let first_snapshot_id = state.active_snapshot_id.clone();
+    let hotspot_coordinates = conn
+        .prepare(
+            "SELECT hotspot_id,x,y,z FROM v20_hotspots
+             WHERE snapshot_id=?1 ORDER BY hotspot_id",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map(params![first_snapshot_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     let cache_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM paper_semantic_embeddings WHERE project_id='project-default'",
@@ -4367,6 +4698,15 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    let lineage_summary: (i64, f64) = conn
+        .query_row(
+            "SELECT COUNT(*),COALESCE(MIN(member_overlap),0)
+             FROM v20_hotspot_lineage
+             WHERE from_snapshot_id=?1 AND to_snapshot_id=?2",
+            params![first_snapshot_id, repeated_state.active_snapshot_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
     let maximum_repeat_error = first_coordinates
         .iter()
         .zip(&repeated_coordinates)
@@ -4390,7 +4730,55 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
         .map(|(x, y, z)| (*x >= 0.0, *y >= 0.0, *z >= 0.0))
         .collect::<HashSet<_>>()
         .len();
-    if points.len() < 64 || octants < 6 || cache_count != 96 {
+    let global_octants = hotspot_coordinates
+        .iter()
+        .map(|(_, x, y, z)| (*x >= 0.0, *y >= 0.0, *z >= 0.0))
+        .collect::<HashSet<_>>()
+        .len();
+    let global_axes = [
+        hotspot_coordinates.iter().map(|row| row.1).collect::<Vec<_>>(),
+        hotspot_coordinates.iter().map(|row| row.2).collect::<Vec<_>>(),
+        hotspot_coordinates.iter().map(|row| row.3).collect::<Vec<_>>(),
+    ];
+    let correlation = |left: &[f64], right: &[f64]| {
+        let left_mean = left.iter().sum::<f64>() / left.len().max(1) as f64;
+        let right_mean = right.iter().sum::<f64>() / right.len().max(1) as f64;
+        let covariance = left
+            .iter()
+            .zip(right)
+            .map(|(a, b)| (a - left_mean) * (b - right_mean))
+            .sum::<f64>();
+        let left_norm = left
+            .iter()
+            .map(|value| (value - left_mean).powi(2))
+            .sum::<f64>();
+        let right_norm = right
+            .iter()
+            .map(|value| (value - right_mean).powi(2))
+            .sum::<f64>();
+        covariance / (left_norm * right_norm).sqrt().max(1e-12)
+    };
+    let global_correlations = [
+        correlation(&global_axes[0], &global_axes[1]).abs(),
+        correlation(&global_axes[0], &global_axes[2]).abs(),
+        correlation(&global_axes[1], &global_axes[2]).abs(),
+    ];
+    let global_spans = global_axes.clone().map(|axis| {
+        let minimum = axis.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = axis.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        maximum - minimum
+    });
+    let global_span_ratio = global_spans.iter().copied().fold(f64::INFINITY, f64::min)
+        / global_spans.iter().copied().fold(0.0_f64, f64::max).max(1e-12);
+    if points.len() < 64
+        || octants < 6
+        || cache_count != 512
+        || global_octants < 6
+        || global_correlations.iter().any(|value| *value > 0.10)
+        || global_span_ratio < 0.55
+        || lineage_summary.0 != result.cluster_count as i64
+        || lineage_summary.1 < 1.0 - 1e-12
+    {
         return Err("SEMANTIC_LAYOUT_AUDIT_DISTRIBUTION_FAILED".into());
     }
     Ok(serde_json::json!({
@@ -4401,6 +4789,11 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
         "embeddingCacheCount": cache_count,
         "largestHotspotPaperCount": points.len(),
         "occupiedOctants": octants,
+        "globalHotspotOctants": global_octants,
+        "globalHotspotCorrelations": global_correlations,
+        "globalHotspotSpanRatio": global_span_ratio,
+        "lineageCount": lineage_summary.0,
+        "minimumLineageOverlap": lineage_summary.1,
         "maximumRepeatCoordinateError": maximum_repeat_error,
         "algorithmVersion": state.algorithm_version,
         "snapshotId": repeated_state.active_snapshot_id,
@@ -4456,12 +4849,28 @@ pub fn rebuild_semantic_galaxy_snapshot(
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
-    let algorithm_version: String = conn
+    let (
+        algorithm_version,
+        layout_version,
+        projection_version,
+        embedding_model_id,
+        embedding_model_revision,
+        hotspot_identity_version,
+    ): (String, String, String, String, String, String) = conn
         .query_row(
-            "SELECT algorithm_version FROM v20_analysis_snapshots
+            "SELECT algorithm_version,layout_version,projection_version,
+                    embedding_model_id,embedding_model_revision,hotspot_identity_version
+             FROM v20_analysis_snapshots
              WHERE project_id=?1 AND id=?2",
             params![project_id, result.snapshot_id],
-            |row| row.get(0),
+            |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            )),
         )
         .map_err(|error| error.to_string())?;
     if validated.paper_count != source_before.paper_count
@@ -4469,6 +4878,11 @@ pub fn rebuild_semantic_galaxy_snapshot(
         || validated.membership_count != validated.paper_count
         || embedding_count != validated.paper_count
         || algorithm_version != research_hotspots_core::V20_ALGORITHM_VERSION
+        || layout_version != SEMANTIC_LAYOUT_VERSION
+        || projection_version != SEMANTIC_PROJECTION_VERSION
+        || embedding_model_id != SEMANTIC_MODEL_ID
+        || embedding_model_revision != SEMANTIC_MODEL_REVISION
+        || hotspot_identity_version != HOTSPOT_IDENTITY_VERSION
     {
         return Err("SEMANTIC_RELEASE_SNAPSHOT_VALIDATION_FAILED".into());
     }
@@ -4478,8 +4892,9 @@ pub fn rebuild_semantic_galaxy_snapshot(
         "schemaVersion": validated.schema_version,
         "snapshotId": validated.snapshot_id,
         "algorithmVersion": algorithm_version,
-        "layoutVersion": research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION,
-        "projectionVersion": research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION,
+        "layoutVersion": layout_version,
+        "projectionVersion": projection_version,
+        "hotspotIdentityVersion": hotspot_identity_version,
         "paperCount": validated.paper_count,
         "hotspotCount": validated.hotspot_count,
         "membershipCount": validated.membership_count,
@@ -7154,6 +7569,20 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         && manifest.database_schema_version == 11;
     let semantic_v4_compatible = manifest.manifest_schema_version == 4
         && manifest.generator_version == "semantic-seed-4"
+        && manifest.database_schema_version == 12
+        && manifest.algorithm_version.as_deref() == Some("v20-semantic-e5-small-1")
+        && manifest.paper_layout_version.as_deref() == Some("semantic-e5-pca3-v1")
+        && manifest.projection_version.as_deref() == Some("robust-pca-whiten-v1")
+        && manifest.embedding_model_id.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID)
+        && manifest.embedding_model_revision.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION)
+        && manifest.embedding_dimensions
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS)
+        && manifest.embedding_encoding.as_deref() == Some("float16-le")
+        && manifest.embedding_count == Some(manifest.paper_count);
+    let semantic_v5_compatible = manifest.manifest_schema_version == 5
+        && manifest.generator_version == "semantic-seed-5"
         && manifest.database_schema_version == research_hotspots_core::LIBRARY_SCHEMA_VERSION
         && manifest.algorithm_version.as_deref()
             == Some(research_hotspots_core::V20_ALGORITHM_VERSION)
@@ -7168,8 +7597,10 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         && manifest.embedding_dimensions
             == Some(research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS)
         && manifest.embedding_encoding.as_deref() == Some("float16-le")
-        && manifest.embedding_count == Some(manifest.paper_count);
-    if !beta2_compatible && !v022_compatible && !semantic_v4_compatible {
+        && manifest.embedding_count == Some(manifest.paper_count)
+        && manifest.hotspot_identity_version.as_deref()
+            == Some(research_hotspots_core::HOTSPOT_IDENTITY_VERSION);
+    if !beta2_compatible && !v022_compatible && !semantic_v4_compatible && !semantic_v5_compatible {
         return Err("默认论文库清单版本与当前应用不兼容。".to_string());
     }
     if manifest.project_id.trim().is_empty()
@@ -7584,15 +8015,13 @@ fn cluster_group_to_hotspot(
         .map(|keyword| capitalize_ascii(keyword))
         .collect::<Vec<_>>()
         .join(" ");
-    let cluster_key = format!("{}::{}", group.field, group.keyword);
-    let seed = stable_hash(&cluster_key) as f64 / u32::MAX as f64;
-    let angle = seed * std::f64::consts::TAU;
-    let distance = 18.0 + (index as f64).sqrt() * 6.5 + (group.paper_count as f64).ln().min(8.0);
+    let cluster_key = semantic_hotspot_identity_key(&group.field, &group.keyword);
+    // The final coordinates are populated from all assigned member embeddings after the
+    // retained and overflow groups have been assigned. Never fall back to a hash/radial layout.
     let coordinates = HotspotCoordinates {
-        x: (angle.cos() * distance).round() as i64,
-        y: (angle.sin() * distance).round() as i64,
-        z: ((confidence - 0.5) * 34.0 + analysis.recent_momentum * 18.0 + (index % 7) as f64 - 3.0)
-            .round() as i64,
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
     };
     let evolution = years
         .iter()
@@ -7629,7 +8058,7 @@ fn cluster_group_to_hotspot(
     };
 
     HotspotRecord {
-        id: scoped_id(project_id, &format!("sqlite-cluster:{:x}:{}", stable_hash(&cluster_key), index + 1)),
+        id: stable_semantic_hotspot_id(project_id, &cluster_key),
         project_id: project_id.to_string(),
         field: group.field.clone(),
         topic_id: index as i64 + 1,
@@ -8291,8 +8720,12 @@ mod tests {
             cluster_library_connection(&conn, project_id).expect("direct cluster")
         };
 
-        let background_result = cluster_library_from_database_path(database_path, project_id)
-            .expect("background helper cluster");
+        let background_result = cluster_library_from_database_path(
+            database_path,
+            project_id,
+            semantic_embedding::SemanticEmbeddingDevice::Cpu,
+        )
+        .expect("background helper cluster");
         assert_eq!(background_result.before_count, direct_result.before_count);
         assert_eq!(background_result.cluster_count, direct_result.cluster_count);
         assert_eq!(

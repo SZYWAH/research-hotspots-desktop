@@ -419,7 +419,7 @@ pub fn migrate_library_file(
             .file_stem()
             .and_then(|v| v.to_str())
             .ok_or("AGENT_MIGRATION_FILE_NAME_INVALID")?;
-        let backup_path = parent.join(format!("{stem}.pre-schema-v12.{now_ms}.sqlite"));
+        let backup_path = parent.join(format!("{stem}.pre-schema-v13.{now_ms}.sqlite"));
         if backup_path.exists() {
             return Err("AGENT_MIGRATION_BACKUP_EXISTS".into());
         }
@@ -494,7 +494,11 @@ pub fn migrate_library_file(
                 .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         }
         migrate_v11_agent_schema(&tx)?;
-        migrate_v12_semantic_schema(&tx)?;
+        // The current schema creates an index on the v13 hotspot identity column.
+        // Add that column before applying the full schema so v8-v12 databases never
+        // reference a column that does not exist yet. The v13 migration also creates
+        // the v12 semantic embedding table when it is absent.
+        migrate_v13_hotspot_layout_schema(&tx)?;
         let foreign_key_errors: i64 = tx
             .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
                 row.get(0)
@@ -624,7 +628,88 @@ fn migrate_v11_agent_schema(tx: &Transaction<'_>) -> Result<(), String> {
         .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))
 }
 
+#[cfg(test)]
 fn migrate_v12_semantic_schema(tx: &Transaction<'_>) -> Result<(), String> {
+    // This helper is intentionally the historical v12 shape for migration fixtures.
+    // Production migration applies the current schema through migrate_v13 after first
+    // adding columns required by current indexes.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS paper_semantic_embeddings (
+           project_id TEXT NOT NULL,
+           paper_id TEXT NOT NULL,
+           content_sha256 TEXT NOT NULL,
+           model_id TEXT NOT NULL,
+           model_revision TEXT NOT NULL,
+           dimensions INTEGER NOT NULL CHECK(dimensions > 0),
+           encoding TEXT NOT NULL CHECK(encoding = 'float16-le'),
+           vector_blob BLOB NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           PRIMARY KEY(project_id,paper_id,model_id,model_revision,content_sha256)
+         );
+         CREATE INDEX IF NOT EXISTS idx_paper_semantic_embeddings_current
+           ON paper_semantic_embeddings(project_id,paper_id,model_id,model_revision,created_at_ms DESC);",
+    )
+        .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))
+}
+
+fn migrate_v13_hotspot_layout_schema(tx: &Transaction<'_>) -> Result<(), String> {
+    let snapshot_columns = [
+        (
+            "layout_version",
+            "ALTER TABLE v20_analysis_snapshots ADD COLUMN layout_version TEXT NOT NULL DEFAULT 'legacy'",
+        ),
+        (
+            "projection_version",
+            "ALTER TABLE v20_analysis_snapshots ADD COLUMN projection_version TEXT NOT NULL DEFAULT 'legacy'",
+        ),
+        (
+            "embedding_model_id",
+            "ALTER TABLE v20_analysis_snapshots ADD COLUMN embedding_model_id TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "embedding_model_revision",
+            "ALTER TABLE v20_analysis_snapshots ADD COLUMN embedding_model_revision TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "hotspot_identity_version",
+            "ALTER TABLE v20_analysis_snapshots ADD COLUMN hotspot_identity_version TEXT NOT NULL DEFAULT 'ranked-hash-v1'",
+        ),
+    ];
+    for (column, statement) in snapshot_columns {
+        if !table_has_column(tx, "v20_analysis_snapshots", column)? {
+            tx.execute(statement, [])
+                .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))?;
+        }
+    }
+    if !table_has_column(tx, "v20_hotspots", "identity_key_sha256")? {
+        tx.execute(
+            "ALTER TABLE v20_hotspots ADD COLUMN identity_key_sha256 TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))?;
+    }
+    tx.execute(
+        "UPDATE v20_analysis_snapshots
+         SET layout_version=CASE
+               WHEN algorithm_version='v20-semantic-e5-small-1'
+                 THEN 'semantic-local-paper-pca3-v1'
+               ELSE 'legacy'
+             END,
+             projection_version=CASE
+               WHEN algorithm_version='v20-semantic-e5-small-1'
+                 THEN 'robust-pca-whiten-v1'
+               ELSE 'legacy'
+             END,
+             embedding_model_id=CASE
+               WHEN algorithm_version='v20-semantic-e5-small-1'
+                 THEN 'intfloat/multilingual-e5-small'
+               ELSE ''
+             END,
+             hotspot_identity_version='ranked-hash-v1'
+         WHERE layout_version='legacy'",
+        [],
+    )
+    .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))?;
     tx.execute_batch(include_str!("schema.sql"))
         .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))
 }
@@ -3909,7 +3994,7 @@ mod tests {
     }
 
     #[test]
-    fn v9_file_migrates_to_v12_with_backup_and_new_contract() {
+    fn v9_file_migrates_to_v13_with_backup_and_new_contract() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -3925,7 +4010,7 @@ mod tests {
         ));
         cleanup_test_file(&database);
         let expected_backup = database.with_file_name(format!(
-            "{}.pre-schema-v12.123.sqlite",
+            "{}.pre-schema-v13.123.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&expected_backup);
@@ -3934,7 +4019,7 @@ mod tests {
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
         let migration = migrate_library_file(&database, "project-default", 123, true).unwrap();
         assert_eq!(migration.previous_version, 9);
-        assert_eq!(migration.current_version, 12);
+        assert_eq!(migration.current_version, 13);
         let backup = migration.backup_path.unwrap();
         let backup_hash = crate::sha256_file(&backup).unwrap();
         assert_eq!(
@@ -3945,7 +4030,7 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .contains("pre-schema-v12"));
+            .contains("pre-schema-v13"));
         assert_eq!(
             crate::validate_library_candidate_file(&backup, "project-default").unwrap(),
             before_state
@@ -3958,7 +4043,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         assert_same_v20_state(
             &crate::validate_library_candidate_connection(&connection, "project-default").unwrap(),
@@ -4014,14 +4099,14 @@ mod tests {
     }
 
     #[test]
-    fn v10_and_v11_files_migrate_to_v12_without_losing_v20_or_agent_state() {
+    fn v10_v11_and_v12_files_migrate_to_v13_without_losing_v20_or_agent_state() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
             .join("agent-schema-tests");
         fs::create_dir_all(&directory).unwrap();
 
-        for source_version in [10_i64, 11_i64] {
+        for source_version in [10_i64, 11_i64, 12_i64] {
             let database = directory.join(format!(
                 "v{source_version}-{}-{}.sqlite",
                 std::process::id(),
@@ -4044,6 +4129,9 @@ mod tests {
                 if source_version >= 11 {
                     migrate_v11_agent_schema(&transaction).unwrap();
                 }
+                if source_version >= 12 {
+                    migrate_v12_semantic_schema(&transaction).unwrap();
+                }
                 transaction
                     .pragma_update(None, "user_version", source_version)
                     .unwrap();
@@ -4061,7 +4149,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 (migration.previous_version, migration.current_version),
-                (source_version, 12)
+                (source_version, 13)
             );
             let backup = migration.backup_path.unwrap();
             assert_eq!(
@@ -4082,7 +4170,7 @@ mod tests {
                 connection
                     .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                     .unwrap(),
-                12
+                13
             );
             assert_eq!(
                 connection
@@ -4107,7 +4195,7 @@ mod tests {
     }
 
     #[test]
-    fn v8_seed_shape_migrates_directly_to_v12() {
+    fn v8_seed_shape_migrates_directly_to_v13() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4116,12 +4204,21 @@ mod tests {
         let database = directory.join(format!("v8-{}.sqlite", std::process::id()));
         cleanup_test_file(&database);
         create_v20_migration_fixture(&database, 8);
+        Connection::open(&database)
+            .unwrap()
+            .execute(
+                "UPDATE v20_analysis_snapshots
+                 SET algorithm_version='v20-semantic-e5-small-1'
+                 WHERE id='snapshot-1'",
+                [],
+            )
+            .unwrap();
         let before_state =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
         let migration = migrate_library_file(&database, "project-default", 456, false).unwrap();
         assert_eq!(
             (migration.previous_version, migration.current_version),
-            (8, 12)
+            (8, 13)
         );
         assert!(migration.backup_path.is_none());
         let connection = Connection::open(&database).unwrap();
@@ -4131,18 +4228,42 @@ mod tests {
         );
         assert!(table_exists(&connection, "agent_questions").unwrap());
         assert!(table_exists(&connection, "agent_model_profiles").unwrap());
+        assert!(table_exists(&connection, "v20_hotspot_lineage").unwrap());
+        let migrated_metadata = connection
+            .query_row(
+                "SELECT layout_version,projection_version,embedding_model_id,
+                        hotspot_identity_version
+                 FROM v20_analysis_snapshots WHERE id='snapshot-1'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                )),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated_metadata,
+            (
+                "semantic-local-paper-pca3-v1".to_string(),
+                "robust-pca-whiten-v1".to_string(),
+                "intfloat/multilingual-e5-small".to_string(),
+                "ranked-hash-v1".to_string(),
+            )
+        );
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         drop(connection);
         cleanup_test_file(&database);
     }
 
     #[test]
-    fn repeated_v12_open_is_idempotent_and_does_not_create_another_backup() {
+    fn repeated_v13_open_is_idempotent_and_does_not_create_another_backup() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4150,11 +4271,11 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v11-idempotent-{}.sqlite", std::process::id()));
         let first_backup = database.with_file_name(format!(
-            "{}.pre-schema-v12.1003.sqlite",
+            "{}.pre-schema-v13.1003.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let second_backup = database.with_file_name(format!(
-            "{}.pre-schema-v12.1004.sqlite",
+            "{}.pre-schema-v13.1004.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let first_partial = first_backup.with_file_name(format!(
@@ -4168,7 +4289,7 @@ mod tests {
         fs::write(&first_partial, b"stale-partial").unwrap();
 
         let first = migrate_library_file(&database, "project-default", 1003, true).unwrap();
-        assert_eq!((first.previous_version, first.current_version), (8, 12));
+        assert_eq!((first.previous_version, first.current_version), (8, 13));
         assert_eq!(first.backup_path.as_deref(), Some(first_backup.as_path()));
         assert!(!first_partial.exists());
         assert!(!PathBuf::from(format!("{}-wal", first_partial.to_string_lossy())).exists());
@@ -4178,7 +4299,7 @@ mod tests {
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
 
         let second = migrate_library_file(&database, "project-default", 1004, true).unwrap();
-        assert_eq!((second.previous_version, second.current_version), (12, 12));
+        assert_eq!((second.previous_version, second.current_version), (13, 13));
         assert!(second.backup_path.is_none());
         assert!(!second_backup.exists());
         assert_eq!(
@@ -4201,11 +4322,11 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v11-concurrent-{}.sqlite", std::process::id()));
         let backup_one = database.with_file_name(format!(
-            "{}.pre-schema-v12.2001.sqlite",
+            "{}.pre-schema-v13.2001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let backup_two = database.with_file_name(format!(
-            "{}.pre-schema-v12.2002.sqlite",
+            "{}.pre-schema-v13.2002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         for path in [&database, &backup_one, &backup_two] {
@@ -4237,7 +4358,7 @@ mod tests {
         assert_eq!(
             results
                 .iter()
-                .filter(|result| result.previous_version == 12 && result.backup_path.is_none())
+                .filter(|result| result.previous_version == 13 && result.backup_path.is_none())
                 .count(),
             1
         );
@@ -4250,7 +4371,7 @@ mod tests {
         );
         let migrated =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
-        assert_eq!(migrated.schema_version, 12);
+        assert_eq!(migrated.schema_version, 13);
         assert_eq!(
             (
                 migrated.paper_count,
@@ -4274,7 +4395,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v0-existing-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v12.3001.sqlite",
+            "{}.pre-schema-v13.3001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4316,7 +4437,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v8-backup-exists-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v12.1001.sqlite",
+            "{}.pre-schema-v13.1001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4363,7 +4484,7 @@ mod tests {
             std::process::id()
         ));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v12.1002.sqlite",
+            "{}.pre-schema-v13.1002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);

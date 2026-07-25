@@ -226,7 +226,7 @@ fn build_gate(args: &Args, export: &StarMapExportResult) -> StrictGate {
             name: "coordinateSpread".to_string(),
             expected: "non-zero x/y spread".to_string(),
             actual: format!("x={}, y={}, z={}", export.coordinate_spread.x, export.coordinate_spread.y, export.coordinate_spread.z),
-            passed: export.coordinate_spread.x > 0 || export.coordinate_spread.y > 0,
+            passed: export.coordinate_spread.x > 0.0 || export.coordinate_spread.y > 0.0,
         },
         GateCheck {
             name: "evidenceCoverage".to_string(),
