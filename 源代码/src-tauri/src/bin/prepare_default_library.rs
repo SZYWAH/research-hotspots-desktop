@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DATABASE_FILE: &str = "research-hotspots-v7.sqlite";
 const DEFAULT_PROJECT_ID: &str = "project-default";
-const MANIFEST_SCHEMA_VERSION: i64 = 4;
-const GENERATOR_VERSION: &str = "semantic-seed-4";
+const MANIFEST_SCHEMA_VERSION: i64 = 5;
+const GENERATOR_VERSION: &str = "semantic-seed-5";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +39,7 @@ struct DefaultLibraryManifest {
     embedding_dimensions: usize,
     embedding_encoding: String,
     embedding_count: i64,
+    hotspot_identity_version: String,
     generated_at: String,
 }
 
@@ -140,6 +141,8 @@ fn run() -> Result<(), String> {
                 params![project_id, snapshot_id],
             )
             .map_err(|error| error.to_string())?;
+            tx.execute("DELETE FROM v20_hotspot_lineage", [])
+                .map_err(|error| error.to_string())?;
             tx.execute(
                 "DELETE FROM v20_analysis_snapshots WHERE project_id <> ?1 OR id <> ?2",
                 params![project_id, snapshot_id],
@@ -162,17 +165,47 @@ fn run() -> Result<(), String> {
             &snapshot,
             &project_id,
         )?;
-        let algorithm_version: String = snapshot
+        let (
+            algorithm_version,
+            paper_layout_version,
+            projection_version,
+            embedding_model_id,
+            embedding_model_revision,
+            hotspot_identity_version,
+        ): (String, String, String, String, String, String) = snapshot
             .query_row(
-                "SELECT algorithm_version FROM v20_analysis_snapshots WHERE id=?1 AND project_id=?2",
+                "SELECT algorithm_version,layout_version,projection_version,
+                        embedding_model_id,embedding_model_revision,hotspot_identity_version
+                 FROM v20_analysis_snapshots WHERE id=?1 AND project_id=?2",
                 params![snapshot_id, project_id],
-                |row| row.get(0),
+                |row| Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                )),
             )
             .map_err(|error| format!("cannot read active semantic algorithm: {error}"))?;
-        if algorithm_version != research_hotspots_core::V20_ALGORITHM_VERSION {
+        if algorithm_version != research_hotspots_core::V20_ALGORITHM_VERSION
+            || paper_layout_version
+                != research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION
+            || projection_version
+                != research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION
+            || embedding_model_id
+                != research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID
+            || embedding_model_revision
+                != research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION
+            || hotspot_identity_version != research_hotspots_core::HOTSPOT_IDENTITY_VERSION
+        {
             return Err(format!(
-                "active snapshot uses {algorithm_version}, expected {}",
+                "active snapshot metadata is incompatible: {algorithm_version}/{paper_layout_version}/{projection_version}/{hotspot_identity_version}, expected {}/{}/{}/{}",
                 research_hotspots_core::V20_ALGORITHM_VERSION
+                ,
+                research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION,
+                research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION,
+                research_hotspots_core::HOTSPOT_IDENTITY_VERSION,
             ));
         }
         let embedding_count: i64 = snapshot
@@ -239,18 +272,15 @@ fn run() -> Result<(), String> {
             membership_count: verified.membership_count,
             library_revision,
             algorithm_version,
-            paper_layout_version:
-                research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION.to_string(),
-            projection_version:
-                research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION.to_string(),
-            embedding_model_id:
-                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID.to_string(),
-            embedding_model_revision:
-                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION.to_string(),
+            paper_layout_version,
+            projection_version,
+            embedding_model_id,
+            embedding_model_revision,
             embedding_dimensions:
                 research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS,
             embedding_encoding: "float16-le".to_string(),
             embedding_count,
+            hotspot_identity_version,
             generated_at,
         };
         let content = serde_json::to_string_pretty(&manifest)

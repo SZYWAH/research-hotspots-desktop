@@ -433,6 +433,7 @@ export type App17GalaxyPayload = {
   embeddingModelId?: string;
   embeddingModelRevision?: string;
   projectionVersion?: string;
+  hotspotIdentityVersion?: string;
   hotspotRecords?: Hotspot[];
 };
 
@@ -440,6 +441,11 @@ export type V20AnalysisState = {
   projectId: string;
   activeSnapshotId: string;
   algorithmVersion: string;
+  layoutVersion?: string;
+  projectionVersion?: string;
+  embeddingModelId?: string;
+  embeddingModelRevision?: string;
+  hotspotIdentityVersion?: string;
   paperCount: number;
   hotspotCount: number;
   membershipCount: number;
