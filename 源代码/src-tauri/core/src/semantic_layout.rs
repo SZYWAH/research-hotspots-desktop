@@ -6,12 +6,13 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SEMANTIC_LAYOUT_VERSION: &str = "semantic-hierarchical-pca3-v2";
-pub const SEMANTIC_PROJECTION_VERSION: &str = "centroid-pca3-robust-whiten-v2";
+pub const SEMANTIC_LAYOUT_VERSION: &str = "semantic-hierarchical-natural-pca3-v3";
+pub const SEMANTIC_PROJECTION_VERSION: &str = "global-centroid-pca3-local-raw-pca3-v3";
 pub const SEMANTIC_MODEL_ID: &str = "intfloat/multilingual-e5-small";
 pub const SEMANTIC_MODEL_REVISION: &str = "614241f622f53c4eeff9890bdc4f31cfecc418b3";
 pub const SEMANTIC_EMBEDDING_DIMENSIONS: usize = 384;
 pub const SEMANTIC_HOTSPOT_P95_RADIUS: f64 = 92.0;
+pub const SEMANTIC_LOCAL_P95_RADIUS: f64 = 10.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,15 @@ pub struct SemanticPoint3 {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticLocalScaleSummary {
+    pub raw_p95_radius: f64,
+    pub raw_p99_radius: f64,
+    pub shared_scale: f64,
+    pub target_p95_radius: f64,
 }
 
 pub fn orthogonal_procrustes_3d(
@@ -408,12 +418,21 @@ fn deterministic_component(
         }
         vector = next;
     }
-    if let Some((pivot, _)) = vector.iter().enumerate().max_by(|left, right| {
-        left.1
-            .abs()
-            .partial_cmp(&right.1.abs())
-            .unwrap_or(Ordering::Equal)
-    }) {
+    let pivot = vector.iter().enumerate().fold(None, |best, (index, value)| {
+        let magnitude = value.abs();
+        match best {
+            None => Some((index, magnitude)),
+            Some((best_index, best_magnitude))
+                if magnitude > best_magnitude + 1e-15
+                    || ((magnitude - best_magnitude).abs() <= 1e-15
+                        && index < best_index) =>
+            {
+                Some((index, magnitude))
+            }
+            Some(previous) => Some(previous),
+        }
+    });
+    if let Some((pivot, _)) = pivot {
         if vector[pivot] < 0.0 {
             for value in &mut vector {
                 *value = -*value;
@@ -423,81 +442,101 @@ fn deterministic_component(
     vector
 }
 
-fn percentile_abs(values: &[f64], percentile: f64) -> f64 {
-    let mut sorted = values.iter().map(|value| value.abs()).collect::<Vec<_>>();
+fn percentile(values: &[f64], percentile: f64) -> f64 {
+    let mut sorted = values.to_vec();
     sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
     if sorted.is_empty() {
-        return 1.0;
+        return 0.0;
     }
     let index = ((sorted.len() - 1) as f64 * percentile.clamp(0.0, 1.0)).round() as usize;
-    sorted[index].max(1e-9)
+    sorted[index]
 }
 
-fn stable_unit(value: &str, axis: u8) -> f64 {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    hasher.update([axis]);
-    let digest = hasher.finalize();
-    let bits = u64::from_le_bytes(digest[0..8].try_into().unwrap_or([0; 8]));
-    bits as f64 / u64::MAX as f64
+fn point_radius(point: &[f64; 3]) -> f64 {
+    dot(point, point).sqrt()
 }
 
-fn decorrelate_and_robust_scale(points: &mut [[f64; 3]]) {
-    if points.is_empty() {
+fn soft_cap_radius(point: &mut [f64; 3], p99_radius: f64) {
+    let radius = point_radius(point);
+    if radius <= p99_radius || radius <= 1e-12 || p99_radius <= 1e-12 {
         return;
     }
-    let mut means = [0.0; 3];
-    for point in points.iter() {
-        for axis in 0..3 {
-            means[axis] += point[axis];
+    let tail = 0.25 * p99_radius;
+    let capped_radius = p99_radius + tail * ((radius - p99_radius) / tail).tanh();
+    let scale = capped_radius / radius;
+    for value in point {
+        *value *= scale;
+    }
+}
+
+fn normalized_centered_rows(
+    records: &[SemanticEmbeddingRecord],
+    expected_dimensions: Option<usize>,
+) -> Result<Vec<Vec<f64>>, String> {
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dimensions = records[0].vector.len();
+    if dimensions == 0
+        || expected_dimensions.is_some_and(|expected| expected != dimensions)
+        || records.iter().any(|record| record.vector.len() != dimensions)
+    {
+        return Err("SEMANTIC_EMBEDDING_DIMENSIONS_MISMATCH".into());
+    }
+    let mut normalized = Vec::with_capacity(records.len());
+    for record in records {
+        let mut row = record
+            .vector
+            .iter()
+            .map(|value| f64::from(*value))
+            .collect::<Vec<_>>();
+        if normalize(&mut row) <= 1e-12 {
+            return Err("SEMANTIC_HOTSPOT_MEMBER_VECTOR_ZERO".into());
+        }
+        normalized.push(row);
+    }
+    let mut means = vec![0.0; dimensions];
+    for row in &normalized {
+        for (mean, value) in means.iter_mut().zip(row) {
+            *mean += value;
         }
     }
     for mean in &mut means {
-        *mean /= points.len() as f64;
+        *mean /= normalized.len() as f64;
     }
-    for point in points.iter_mut() {
-        for axis in 0..3 {
-            point[axis] -= means[axis];
-        }
-    }
+    Ok(normalized
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .zip(&means)
+                .map(|(value, mean)| value - mean)
+                .collect()
+        })
+        .collect())
+}
 
-    // A nonlinear radial envelope can reintroduce covariance after PCA. Remove it with a
-    // deterministic residual whitening pass. The sequential residuals are equivalent to a
-    // three-axis Gram-Schmidt operation in sample space and preserve the semantic neighbourhood.
-    for axis in 1..3 {
-        for previous in 0..axis {
-            let variance = points
-                .iter()
-                .map(|point| point[previous] * point[previous])
-                .sum::<f64>();
-            if variance <= 1e-12 {
-                continue;
-            }
-            let covariance = points
-                .iter()
-                .map(|point| point[axis] * point[previous])
-                .sum::<f64>();
-            let coefficient = covariance / variance;
-            for point in points.iter_mut() {
-                point[axis] -= coefficient * point[previous];
-            }
-        }
+fn project_raw_pca3(
+    records: &[SemanticEmbeddingRecord],
+    expected_dimensions: Option<usize>,
+) -> Result<Vec<[f64; 3]>, String> {
+    let centered = normalized_centered_rows(records, expected_dimensions)?;
+    if centered.is_empty() {
+        return Ok(Vec::new());
     }
-
-    let scales = [0, 1, 2].map(|axis| {
-        percentile_abs(
-            &points
-                .iter()
-                .map(|point| point[axis])
-                .collect::<Vec<_>>(),
-            0.90,
-        )
-    });
-    for point in points.iter_mut() {
-        for axis in 0..3 {
-            point[axis] /= scales[axis];
-        }
+    let mut basis = Vec::with_capacity(3);
+    for component in 0..3 {
+        basis.push(deterministic_component(&centered, &basis, component));
     }
+    Ok(centered
+        .iter()
+        .map(|row| {
+            [
+                dot(row, &basis[0]),
+                dot(row, &basis[1]),
+                dot(row, &basis[2]),
+            ]
+        })
+        .collect())
 }
 
 pub fn semantic_centroid_record(
@@ -558,76 +597,18 @@ pub fn project_semantic_hotspot_centroids(
     if records.len() < 4 {
         return Err("SEMANTIC_HOTSPOT_PROJECTION_TOO_SMALL".into());
     }
-    let dimensions = records[0].vector.len();
-    if dimensions != SEMANTIC_EMBEDDING_DIMENSIONS
-        || records.iter().any(|record| record.vector.len() != dimensions)
-    {
-        return Err("SEMANTIC_EMBEDDING_DIMENSIONS_MISMATCH".into());
+    let mut coordinates =
+        project_raw_pca3(records, Some(SEMANTIC_EMBEDDING_DIMENSIONS))?;
+    let radii = coordinates.iter().map(point_radius).collect::<Vec<_>>();
+    let p95_radius = percentile(&radii, 0.95);
+    let p99_radius = percentile(&radii, 0.99);
+    if p95_radius <= 1e-12 {
+        return Err("SEMANTIC_HOTSPOT_PROJECTION_RANK_DEFICIENT".into());
     }
-    let mut means = vec![0.0; dimensions];
-    for record in records {
-        for (mean, value) in means.iter_mut().zip(&record.vector) {
-            *mean += f64::from(*value);
-        }
+    for coordinate in &mut coordinates {
+        soft_cap_radius(coordinate, p99_radius);
     }
-    for mean in &mut means {
-        *mean /= records.len() as f64;
-    }
-    let centered = records
-        .iter()
-        .map(|record| {
-            record
-                .vector
-                .iter()
-                .enumerate()
-                .map(|(index, value)| f64::from(*value) - means[index])
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let mut basis = Vec::with_capacity(3);
-    for component in 0..3 {
-        let vector = deterministic_component(&centered, &basis, component);
-        let energy = centered
-            .iter()
-            .map(|row| dot(row, &vector).powi(2))
-            .sum::<f64>();
-        if energy <= 1e-12 {
-            return Err("SEMANTIC_HOTSPOT_PROJECTION_RANK_DEFICIENT".into());
-        }
-        basis.push(vector);
-    }
-    let mut axes = [
-        Vec::with_capacity(records.len()),
-        Vec::with_capacity(records.len()),
-        Vec::with_capacity(records.len()),
-    ];
-    for row in &centered {
-        for axis in 0..3 {
-            axes[axis].push(dot(row, &basis[axis]));
-        }
-    }
-    let scales = [
-        percentile_abs(&axes[0], 0.90),
-        percentile_abs(&axes[1], 0.90),
-        percentile_abs(&axes[2], 0.90),
-    ];
-    let mut coordinates = (0..records.len())
-        .map(|index| {
-            [
-                (axes[0][index] / scales[0]).tanh(),
-                (axes[1][index] / scales[1]).tanh(),
-                (axes[2][index] / scales[2]).tanh(),
-            ]
-        })
-        .collect::<Vec<_>>();
-    decorrelate_and_robust_scale(&mut coordinates);
-    let mut radii = coordinates
-        .iter()
-        .map(|coordinate| dot(coordinate, coordinate).sqrt())
-        .collect::<Vec<_>>();
-    radii.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
-    let p95_index = ((radii.len() - 1) as f64 * 0.95).round() as usize;
-    let scale = SEMANTIC_HOTSPOT_P95_RADIUS / radii[p95_index].max(1e-9);
+    let scale = SEMANTIC_HOTSPOT_P95_RADIUS / p95_radius;
     let mut points = HashMap::with_capacity(records.len());
     for (record, coordinate) in records.iter().zip(coordinates) {
         points.insert(
@@ -648,81 +629,7 @@ pub fn project_semantic_embeddings(
     if records.is_empty() {
         return Ok(HashMap::new());
     }
-    let dimensions = records[0].vector.len();
-    if dimensions == 0
-        || records
-            .iter()
-            .any(|record| record.vector.len() != dimensions)
-    {
-        return Err("SEMANTIC_EMBEDDING_DIMENSIONS_MISMATCH".into());
-    }
-    let mut means = vec![0.0; dimensions];
-    for record in records {
-        for (mean, value) in means.iter_mut().zip(&record.vector) {
-            *mean += f64::from(*value);
-        }
-    }
-    for mean in &mut means {
-        *mean /= records.len() as f64;
-    }
-    let centered = records
-        .iter()
-        .map(|record| {
-            record
-                .vector
-                .iter()
-                .enumerate()
-                .map(|(index, value)| f64::from(*value) - means[index])
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let mut basis = Vec::with_capacity(3);
-    for component in 0..3 {
-        basis.push(deterministic_component(&centered, &basis, component));
-    }
-    let mut axes = [
-        Vec::with_capacity(records.len()),
-        Vec::with_capacity(records.len()),
-        Vec::with_capacity(records.len()),
-    ];
-    for row in &centered {
-        for axis in 0..3 {
-            axes[axis].push(dot(row, &basis[axis]));
-        }
-    }
-    let scales = [
-        percentile_abs(&axes[0], 0.90),
-        percentile_abs(&axes[1], 0.90),
-        percentile_abs(&axes[2], 0.90),
-    ];
-    let mut coordinates = Vec::with_capacity(records.len());
-    for (index, record) in records.iter().enumerate() {
-        let mut coordinate = [
-            (axes[0][index] / scales[0]).tanh(),
-            (axes[1][index] / scales[1]).tanh(),
-            (axes[2][index] / scales[2]).tanh(),
-        ];
-        let jitter = [
-            stable_unit(&record.paper_id, 0) * 2.0 - 1.0,
-            stable_unit(&record.paper_id, 1) * 2.0 - 1.0,
-            stable_unit(&record.paper_id, 2) * 2.0 - 1.0,
-        ];
-        let raw_radius = dot(&coordinate, &coordinate).sqrt();
-        if raw_radius < 0.025 {
-            for axis in 0..3 {
-                coordinate[axis] += jitter[axis] * 0.015;
-            }
-        }
-        let radius = dot(&coordinate, &coordinate).sqrt().max(1e-9);
-        // Continuous soft-core mapping: keep the centre clear without collapsing papers onto a ring.
-        let mapped_radius = 0.22 + 0.78 * (1.0 - (-1.15 * radius).exp());
-        for value in &mut coordinate {
-            *value = (*value / radius) * mapped_radius;
-        }
-        coordinates.push(coordinate);
-    }
-    decorrelate_and_robust_scale(&mut coordinates);
-
+    let coordinates = project_raw_pca3(records, None)?;
     let mut points = HashMap::with_capacity(records.len());
     for (record, coordinate) in records.iter().zip(coordinates) {
         points.insert(
@@ -735,6 +642,38 @@ pub fn project_semantic_embeddings(
         );
     }
     Ok(points)
+}
+
+pub fn scale_semantic_local_point_sets(
+    point_sets: &mut [HashMap<String, SemanticPoint3>],
+) -> Result<SemanticLocalScaleSummary, String> {
+    let radii = point_sets
+        .iter()
+        .flat_map(|points| points.values())
+        .map(|point| (point.x * point.x + point.y * point.y + point.z * point.z).sqrt())
+        .collect::<Vec<_>>();
+    if radii.is_empty() {
+        return Err("SEMANTIC_LOCAL_PROJECTION_EMPTY".into());
+    }
+    let raw_p95_radius = percentile(&radii, 0.95);
+    let raw_p99_radius = percentile(&radii, 0.99);
+    if raw_p95_radius <= 1e-12 || raw_p99_radius <= 1e-12 {
+        return Err("SEMANTIC_LOCAL_PROJECTION_DEGENERATE".into());
+    }
+    let shared_scale = SEMANTIC_LOCAL_P95_RADIUS / raw_p95_radius;
+    for point in point_sets.iter_mut().flat_map(HashMap::values_mut) {
+        let mut coordinate = [point.x, point.y, point.z];
+        soft_cap_radius(&mut coordinate, raw_p99_radius);
+        point.x = coordinate[0] * shared_scale;
+        point.y = coordinate[1] * shared_scale;
+        point.z = coordinate[2] * shared_scale;
+    }
+    Ok(SemanticLocalScaleSummary {
+        raw_p95_radius,
+        raw_p99_radius,
+        shared_scale,
+        target_p95_radius: SEMANTIC_LOCAL_P95_RADIUS,
+    })
 }
 
 #[cfg(test)]
@@ -817,7 +756,55 @@ mod tests {
         });
         let minimum = spans.iter().copied().fold(f64::INFINITY, f64::min);
         let maximum = spans.iter().copied().fold(0.0_f64, f64::max);
-        assert!(minimum / maximum.max(1e-12) >= 0.55);
+        let span_ratio = minimum / maximum.max(1e-12);
+        assert!(span_ratio > 0.01, "the fixture must retain a non-zero third axis");
+        assert!(span_ratio < 0.95, "raw PCA amplitudes must not be whitened into a sphere");
+    }
+
+    #[test]
+    fn shared_local_scale_hits_the_global_target_without_per_hotspot_normalization() {
+        let records = fixture_records(144);
+        let mut point_sets = vec![
+            project_semantic_embeddings(&records[..96]).unwrap(),
+            project_semantic_embeddings(&records[96..]).unwrap(),
+        ];
+        let before_ratio = {
+            let radii = point_sets
+                .iter()
+                .map(|points| {
+                    let mut values = points
+                        .values()
+                        .map(|point| (point.x * point.x + point.y * point.y + point.z * point.z).sqrt())
+                        .collect::<Vec<_>>();
+                    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+                    values[((values.len() - 1) as f64 * 0.90).round() as usize]
+                })
+                .collect::<Vec<_>>();
+            radii[0] / radii[1].max(1e-12)
+        };
+        let summary = scale_semantic_local_point_sets(&mut point_sets).unwrap();
+        let mut radii = point_sets
+            .iter()
+            .flat_map(|points| points.values())
+            .map(|point| (point.x * point.x + point.y * point.y + point.z * point.z).sqrt())
+            .collect::<Vec<_>>();
+        radii.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+        let p95 = radii[((radii.len() - 1) as f64 * 0.95).round() as usize];
+        let after_sets = point_sets
+            .iter()
+            .map(|points| {
+                let mut values = points
+                    .values()
+                    .map(|point| (point.x * point.x + point.y * point.y + point.z * point.z).sqrt())
+                    .collect::<Vec<_>>();
+                values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+                values[((values.len() - 1) as f64 * 0.90).round() as usize]
+            })
+            .collect::<Vec<_>>();
+        let after_ratio = after_sets[0] / after_sets[1].max(1e-12);
+        assert!((p95 - SEMANTIC_LOCAL_P95_RADIUS).abs() <= 1e-6);
+        assert!((before_ratio - after_ratio).abs() <= 1e-10);
+        assert_eq!(summary.target_p95_radius, SEMANTIC_LOCAL_P95_RADIUS);
     }
 
     #[test]

@@ -27,10 +27,10 @@ use research_hotspots_core::agent_store::{
 };
 use research_hotspots_core::semantic_layout::{
     multiply_matrix_vector_3d, orthogonal_procrustes_3d, project_semantic_embeddings,
-    project_semantic_hotspot_centroids, semantic_centroid_record, semantic_hotspot_identity_key,
-    semantic_hotspot_identity_sha256, stable_semantic_hotspot_id, SemanticPaperDocument,
-    SemanticPoint3, SEMANTIC_LAYOUT_VERSION, SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION,
-    SEMANTIC_PROJECTION_VERSION,
+    project_semantic_hotspot_centroids, scale_semantic_local_point_sets, semantic_centroid_record,
+    semantic_hotspot_identity_key, semantic_hotspot_identity_sha256, stable_semantic_hotspot_id,
+    SemanticPaperDocument, SemanticPoint3, SEMANTIC_LAYOUT_VERSION, SEMANTIC_LOCAL_P95_RADIUS,
+    SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION, SEMANTIC_PROJECTION_VERSION,
 };
 use research_hotspots_core::{
     atomic_replace_file_with_rollback, create_empty_library_atomically, current_library_revision,
@@ -829,6 +829,8 @@ struct V20GalaxyPayload {
     generated_at: String,
     snapshot_id: Option<String>,
     paper_layout_version: Option<String>,
+    paper_layout_local_p95_radius: Option<f64>,
+    paper_layout_shared_scale: Option<f64>,
     embedding_model_id: Option<String>,
     embedding_model_revision: Option<String>,
     projection_version: Option<String>,
@@ -3002,38 +3004,38 @@ fn prepare_library_cluster_with_control(
         };
     }
 
+    if let Some(task) = modeling_task {
+        let mut progress = task
+            .progress
+            .lock()
+            .map_err(|_| "Cannot lock semantic modeling status.".to_string())?;
+        progress.stage = "local-pca3".into();
+        emit_semantic_modeling_progress(app, &progress);
+    }
+    let mut local_point_sets = assigned_candidates
+        .iter()
+        .map(|candidates| {
+            let records = candidates
+                .iter()
+                .map(|(candidate, _)| {
+                    embedding_by_id
+                        .get(&candidate.id)
+                        .cloned()
+                        .ok_or_else(|| "SEMANTIC_EMBEDDING_CACHE_INCOMPLETE".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            project_semantic_embeddings(&records)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let local_scale_summary = scale_semantic_local_point_sets(&mut local_point_sets)?;
+
     let mut memberships = Vec::with_capacity(before_count as usize);
-    for (hotspot_index, candidates) in assigned_candidates.iter().enumerate() {
+    for ((hotspot_index, candidates), points) in assigned_candidates
+        .iter()
+        .enumerate()
+        .zip(&local_point_sets)
+    {
         let hotspot = &hotspots[hotspot_index];
-        let representative_ids = hotspot
-            .analysis
-            .evidence_paper_ids
-            .iter()
-            .map(String::as_str)
-            .collect::<HashSet<_>>();
-        let records = candidates
-            .iter()
-            .map(|(candidate, _)| {
-                embedding_by_id
-                    .get(&candidate.id)
-                    .cloned()
-                    .ok_or_else(|| "SEMANTIC_EMBEDDING_CACHE_INCOMPLETE".to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        // Representative papers use the existing orbital renderer. Project them separately so
-        // removing the top ten cannot skew the ordinary-paper cloud covariance or robust scale.
-        let ordinary_records = records
-            .iter()
-            .filter(|record| !representative_ids.contains(record.paper_id.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        let representative_records = records
-            .iter()
-            .filter(|record| representative_ids.contains(record.paper_id.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut points = project_semantic_embeddings(&ordinary_records)?;
-        points.extend(project_semantic_embeddings(&representative_records)?);
         for (candidate, group_score) in candidates {
             let point = points
                 .get(&candidate.id)
@@ -3105,9 +3107,10 @@ fn prepare_library_cluster_with_control(
         snapshot_id,
         membership_count: memberships.len() as i64,
         summary: format!(
-            "已生成统一 V20 快照：{before_count} 篇论文、{} 个热点、{} 条论文归属。",
+            "已生成统一 V20 快照：{before_count} 篇论文、{} 个热点、{} 条论文归属；自然语义云共享尺度 {:.6}。",
             hotspots.len(),
-            memberships.len()
+            memberships.len(),
+            local_scale_summary.shared_scale
         ),
         hotspots,
     };
@@ -3347,9 +3350,9 @@ fn v20_membership_for_semantic_candidate(
     SnapshotMembership {
         paper_id: candidate.id.clone(),
         hotspot_id: hotspot.id.clone(),
-        x: hotspot.coordinates.x as f64 + point.x * 9.6,
-        y: hotspot.coordinates.y as f64 + point.y * 9.6,
-        z: hotspot.coordinates.z as f64 + point.z * 9.6,
+        x: hotspot.coordinates.x as f64 + point.x,
+        y: hotspot.coordinates.y as f64 + point.y,
+        z: hotspot.coordinates.z as f64 + point.z,
         representative_rank,
         score: round_metric(
             (0.45 + group_score * 0.45 + candidate.evidence_score.min(4.0) * 0.025).min(1.0),
@@ -4407,6 +4410,8 @@ fn build_v20_galaxy_payload(
             generated_at: now_millis_string(),
             snapshot_id: None,
             paper_layout_version: None,
+            paper_layout_local_p95_radius: None,
+            paper_layout_shared_scale: None,
             embedding_model_id: None,
             embedding_model_revision: None,
             projection_version: None,
@@ -4435,6 +4440,8 @@ fn build_v20_galaxy_payload(
             generated_at: rows.state.generated_at.clone(),
             snapshot_id: Some(rows.state.active_snapshot_id),
             paper_layout_version: None,
+            paper_layout_local_p95_radius: None,
+            paper_layout_shared_scale: None,
             embedding_model_id: None,
             embedding_model_revision: None,
             projection_version: None,
@@ -4538,6 +4545,8 @@ fn build_v20_galaxy_payload(
         generated_at: rows.state.generated_at.clone(),
         snapshot_id: Some(rows.state.active_snapshot_id),
         paper_layout_version: Some(rows.state.layout_version),
+        paper_layout_local_p95_radius: Some(SEMANTIC_LOCAL_P95_RADIUS),
+        paper_layout_shared_scale: Some(1.0),
         embedding_model_id: Some(rows.state.embedding_model_id),
         embedding_model_revision: Some(rows.state.embedding_model_revision),
         projection_version: Some(rows.state.projection_version),
@@ -4771,11 +4780,10 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
     let global_span_ratio = global_spans.iter().copied().fold(f64::INFINITY, f64::min)
         / global_spans.iter().copied().fold(0.0_f64, f64::max).max(1e-12);
     if points.len() < 64
-        || octants < 6
         || cache_count != 512
         || global_octants < 6
         || global_correlations.iter().any(|value| *value > 0.10)
-        || global_span_ratio < 0.55
+        || global_span_ratio < 0.45
         || lineage_summary.0 != result.cluster_count as i64
         || lineage_summary.1 < 1.0 - 1e-12
     {
@@ -7581,15 +7589,9 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
             == Some(research_hotspots_core::semantic_layout::SEMANTIC_EMBEDDING_DIMENSIONS)
         && manifest.embedding_encoding.as_deref() == Some("float16-le")
         && manifest.embedding_count == Some(manifest.paper_count);
-    let semantic_v5_compatible = manifest.manifest_schema_version == 5
+    let semantic_v5_common = manifest.manifest_schema_version == 5
         && manifest.generator_version == "semantic-seed-5"
         && manifest.database_schema_version == research_hotspots_core::LIBRARY_SCHEMA_VERSION
-        && manifest.algorithm_version.as_deref()
-            == Some(research_hotspots_core::V20_ALGORITHM_VERSION)
-        && manifest.paper_layout_version.as_deref()
-            == Some(research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION)
-        && manifest.projection_version.as_deref()
-            == Some(research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION)
         && manifest.embedding_model_id.as_deref()
             == Some(research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID)
         && manifest.embedding_model_revision.as_deref()
@@ -7600,6 +7602,20 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         && manifest.embedding_count == Some(manifest.paper_count)
         && manifest.hotspot_identity_version.as_deref()
             == Some(research_hotspots_core::HOTSPOT_IDENTITY_VERSION);
+    let semantic_v5_current = manifest.algorithm_version.as_deref()
+        == Some(research_hotspots_core::V20_ALGORITHM_VERSION)
+        && manifest.paper_layout_version.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION)
+        && manifest.projection_version.as_deref()
+            == Some(research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION);
+    // Keep the already-published v2 seed installable as a migration source. Once installed, it is
+    // clearly marked as an old layout and requires an explicit v3 modeling run before galaxy use.
+    let semantic_v5_published_v2 = manifest.algorithm_version.as_deref()
+        == Some("v20-semantic-e5-small-2")
+        && manifest.paper_layout_version.as_deref() == Some("semantic-hierarchical-pca3-v2")
+        && manifest.projection_version.as_deref() == Some("centroid-pca3-robust-whiten-v2");
+    let semantic_v5_compatible = semantic_v5_common
+        && (semantic_v5_current || semantic_v5_published_v2);
     if !beta2_compatible && !v022_compatible && !semantic_v4_compatible && !semantic_v5_compatible {
         return Err("默认论文库清单版本与当前应用不兼容。".to_string());
     }

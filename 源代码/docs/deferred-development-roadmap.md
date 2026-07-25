@@ -1,7 +1,7 @@
 # 后续开发路线
 
 本文记录 `v0.22.0-beta.2` 理论星图生产修复之后的独立开发方向。以下内容均不属于当前
-`v20-semantic-e5-small-2` / `semantic-hierarchical-pca3-v2` 生产实现，不得在页面导航、
+`v20-semantic-e5-small-3` / `semantic-hierarchical-natural-pca3-v3` 生产实现，不得在页面导航、
 数据库迁移或热点建模过程中被自动启用。
 
 ## A. 完整语义重聚类实验

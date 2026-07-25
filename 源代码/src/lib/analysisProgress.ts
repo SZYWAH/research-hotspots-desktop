@@ -2,9 +2,9 @@ import type { PipelineJob, V20HotspotSnapshot } from "../types";
 
 export type AnalysisStageState = "pending" | "running" | "done" | "failed";
 
-export const CURRENT_V20_ALGORITHM_VERSION = "v20-semantic-e5-small-2";
-export const CURRENT_V20_LAYOUT_VERSION = "semantic-hierarchical-pca3-v2";
-export const CURRENT_V20_PROJECTION_VERSION = "centroid-pca3-robust-whiten-v2";
+export const CURRENT_V20_ALGORITHM_VERSION = "v20-semantic-e5-small-3";
+export const CURRENT_V20_LAYOUT_VERSION = "semantic-hierarchical-natural-pca3-v3";
+export const CURRENT_V20_PROJECTION_VERSION = "global-centroid-pca3-local-raw-pca3-v3";
 export const CURRENT_V20_EMBEDDING_MODEL_ID = "intfloat/multilingual-e5-small";
 export const CURRENT_V20_HOTSPOT_IDENTITY_VERSION = "stable-field-key-sha256-v2";
 

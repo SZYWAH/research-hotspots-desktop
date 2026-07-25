@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 pub const V20_SCHEMA_VERSION: i64 = 8;
 pub const LIBRARY_SCHEMA_VERSION: i64 = 13;
 pub const MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION: i64 = 8;
-pub const V20_ALGORITHM_VERSION: &str = "v20-semantic-e5-small-2";
+pub const V20_ALGORITHM_VERSION: &str = "v20-semantic-e5-small-3";
 pub const HOTSPOT_IDENTITY_VERSION: &str = "stable-field-key-sha256-v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
