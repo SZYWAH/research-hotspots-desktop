@@ -874,7 +874,22 @@ const APP17_WHEEL_SENSITIVITY = 0.00065;
 const APP17_PERFORMANCE_WINDOW_MS = 10_000;
 const APP17_PERFORMANCE_REPORT_INTERVAL_MS = 500;
 const APP17_INTERACTION_SCENARIO_HOLD_MS = 3_000;
-const APP17_PALETTE = ["#38bdf8", "#818cf8", "#34d399", "#f472b6", "#fbbf24", "#a78bfa", "#2dd4bf", "#fb7185", "#fcd34d", "#94a3b8"];
+// Deep-space colour discipline: the field is carried by one of three
+// temperature families rather than by a saturated hue per hotspot, so
+// neighbouring disciplines separate while the galaxy still reads as starlight.
+const APP17_STAR_WHITE = "#f4f7ff";
+const APP17_COLOR_FAMILIES = [
+  ["#ffc66e", "#ffa94d", "#f58b4c"],
+  ["#7fd4ff", "#4fb8f0", "#3d8fe0"],
+  ["#c9a6ff", "#a78bfa", "#8b6fe8"],
+];
+// Ordinary paper stars sit close to star white; the hotspot core keeps the full
+// family colour so identity stays readable without a field of confetti.
+const APP17_PAPER_STAR_WHITENESS = 0.55;
+const APP17_PALETTE = [
+  "#ffc66e", "#7fd4ff", "#c9a6ff", "#ffa94d", "#4fb8f0",
+  "#a78bfa", "#f58b4c", "#3d8fe0", "#8b6fe8", "#aeb9cf",
+];
 const APP17_FOCUS_TEXTURE_SIZE = 256;
 const APP17_FOCUS_RING_RADIUS = 88;
 const APP17_FOCUS_CSS_DIAMETER = 56;
@@ -3085,7 +3100,7 @@ export function App17GalaxyCanvas({
       return {
         position,
         color: representativePaper?.color ?? ordinaryPaper?.color ?? "#f5f7ff",
-        haloColor: systemResources.hotspot.color || "#8ea7ff",
+        haloColor: app17HotspotFamilyColor(systemResources.hotspot),
         source: metadata?.source ?? representativePaper?.source,
         representative: metadata?.representative ?? Boolean(representativePaper),
         representativeRank: representativePaper?.rank ?? -1,
@@ -5493,8 +5508,6 @@ function buildApp14ShowScene(payload: App17GalaxyPayload): App17SceneData {
     .sort((a, b) => b.paperCount - a.paperCount || a.field.localeCompare(b.field) || a.topicId - b.topicId)
     .slice(0, APP14_VISIBLE_HOTSPOTS);
   const layoutHotspots = stableShuffleHotspotsApp14(topHotspots);
-  const fields = unique(topHotspots.map((hotspot) => hotspot.field));
-  const fieldToColor = new Map(fields.map((field, index) => [field, APP17_PALETTE[index % APP17_PALETTE.length]]));
   const topOrbitKeys = new Set(topHotspots.slice(0, APP14_ORBIT_COUNT).map(topicKeyFromHotspot));
   const hotspotByTopic = new Map<string, App17RenderPoint>();
   const orbitPositions: number[] = [];
@@ -5508,7 +5521,7 @@ function buildApp14ShowScene(payload: App17GalaxyPayload): App17SceneData {
       r * Math.sin(theta) * APP14_COORD_SCALE,
       0,
     );
-    const color = fieldToColor.get(hotspot.field) ?? "#ffffff";
+    const color = app17FamilyColor(hotspot.field, hotspot.topicId);
     const renderPoint: App17RenderPoint = {
       id: hotspot.id,
       title: hotspot.title || hotspot.label || `Topic ${hotspot.topicId}`,
@@ -5566,7 +5579,7 @@ function buildApp14ShowScene(payload: App17GalaxyPayload): App17SceneData {
         x: hotspot.position.x + radius * Math.cos(angle),
         y: hotspot.position.y + radius * Math.sin(angle),
         z: hotspot.position.z,
-        color: hotspot.color,
+        color: app17PaperColor(hotspot.color),
         size: 2.8 * (0.85 + sizeRng() * 0.35),
         alpha: 0.58,
         year: paper.year,
@@ -5609,7 +5622,7 @@ function buildApp15TheoryHotspots(payload: App17GalaxyPayload) {
     field: hotspot.field,
     topicId: hotspot.topicId,
     paperCount: hotspot.paperCount,
-    color: hotspot.color,
+    color: app17FamilyColor(hotspot.field, hotspot.topicId),
     size: hotspot.size,
     seed: stableHash(hotspot.id) / 4294967295,
     glowStrength: app17GlowStrength(hotspot.trend),
@@ -5628,7 +5641,7 @@ function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
     x: paper.x * APP15_COORD_SCALE,
     y: paper.y * APP15_COORD_SCALE,
     z: paper.z * APP15_COORD_SCALE,
-    color: paper.color || "#89b4ff",
+    color: app17PaperColor(app17FamilyColor(paper.field, paper.topicId)),
     size: THREE.MathUtils.clamp(paper.size || 2.2, 2.2, 3.6),
     alpha: 0.62,
     year: paper.year,
@@ -5900,7 +5913,7 @@ function buildGalaxySystemResources(
         y: position.y,
         z: position.z,
         color: representativeYearColor(item.paper.year, minimumTopicYear, maximumTopicYear),
-        haloColor: hotspot.color,
+        haloColor: app17HotspotFamilyColor(hotspot),
         size: THREE.MathUtils.clamp(item.paper.size || 2.2, 2.2, 3.4),
         alpha: 0.48,
         year: item.paper.year,
@@ -6131,7 +6144,7 @@ function buildSystemRepresentativeBundle(
       y: position.y,
       z: position.z,
       color: representativeYearColor(paper.year, minimumYear, maximumYear),
-      haloColor: resources.hotspot.color,
+      haloColor: app17HotspotFamilyColor(resources.hotspot),
       size: displaySize,
       alpha: 0.98,
       year: paper.year,
@@ -7892,7 +7905,7 @@ function createPaperInspectionDataSphere() {
 
 function createSystemStar(hotspot: App17GalaxyHotspotPoint) {
   const object = new THREE.Group();
-  const color = new THREE.Color(hotspot.color || "#7dd3fc");
+  const color = new THREE.Color(app17HotspotFamilyColor(hotspot));
   let projectedDiameter = 0;
   let viewportRatio = 0;
   let bodyBlend = 0;
@@ -9111,7 +9124,9 @@ function createTheoryFarBackgroundLayer(
   const color = new THREE.Color();
   plan.hotspots.forEach((hotspot, index) => {
     const renderHotspot = renderHotspotById.get(hotspot.hotspotId);
-    color.set(hotspot.color || renderHotspot?.color || "#dce9ff");
+    // Prefer the rendered family colour so the retreating proxies match the
+    // galaxy they were lifted from rather than the raw payload palette.
+    color.set(renderHotspot?.color || hotspot.color || "#dce9ff");
     hotspotColors[index * 3] = color.r;
     hotspotColors[index * 3 + 1] = color.g;
     hotspotColors[index * 3 + 2] = color.b;
@@ -9137,8 +9152,9 @@ function createTheoryFarBackgroundLayer(
   const paperBreathSpeeds = new Float32Array(paperRuntime.length);
   let paperIndex = 0;
   plan.hotspots.forEach((hotspot) => {
+    const renderHotspot = renderHotspotById.get(hotspot.hotspotId);
     hotspot.papers.forEach((paper) => {
-      color.set(paper.color || hotspot.color || "#a8c8ff");
+      color.set(app17PaperColor(renderHotspot?.color || hotspot.color || paper.color || "#a8c8ff"));
       paperColors[paperIndex * 3] = color.r;
       paperColors[paperIndex * 3 + 1] = color.g;
       paperColors[paperIndex * 3 + 2] = color.b;
@@ -10439,6 +10455,27 @@ function app17GlowStrength(value: string) {
   if (normalized.includes("stable") || normalized.includes("稳定")) return 0.75;
   if (normalized.includes("declin") || normalized.includes("下降")) return 0.55;
   return 0.65;
+}
+
+function app17FamilyColor(field: string, topicId: number) {
+  const family = APP17_COLOR_FAMILIES[stableHash(field) % APP17_COLOR_FAMILIES.length];
+  return family[stableHash(`${field}_${topicId}`) % family.length];
+}
+
+function app17HotspotFamilyColor(hotspot: Pick<App17GalaxyHotspotPoint, "field" | "topicId">) {
+  return app17FamilyColor(hotspot.field, hotspot.topicId);
+}
+
+const app17PaperColorCache = new Map<string, string>();
+
+function app17PaperColor(hex: string) {
+  const cached = app17PaperColorCache.get(hex);
+  if (cached !== undefined) return cached;
+  const blended = new THREE.Color(hex)
+    .lerp(new THREE.Color(APP17_STAR_WHITE), APP17_PAPER_STAR_WHITENESS);
+  const result = `#${blended.getHexString()}`;
+  app17PaperColorCache.set(hex, result);
+  return result;
 }
 
 function app17BreathProfile(trend: string, id: string) {
