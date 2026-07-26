@@ -1197,6 +1197,110 @@ button:focus-visible {
       inset 0 1px 0 rgba(255, 255, 255, 0.035);
   }
 
+  /* Immersive layout: the star map is the page. The canvas fills the content
+     area and every control floats above it, so the galaxy reads as a place
+     rather than as a figure inside a dashboard card. */
+  .galaxy-layout-immersive {
+    position: relative;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .galaxy-layout-immersive .galaxy-workspace-grid {
+    display: block;
+    height: 100%;
+    gap: 0;
+  }
+
+  .galaxy-layout-immersive .galaxy-panel:not(.galaxy-panel-fullscreen) {
+    position: absolute;
+    inset: 0;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .galaxy-layout-immersive .galaxy-panel:not(.galaxy-panel-fullscreen) .galaxy-stage-3d {
+    height: 100%;
+  }
+
+  /* Docked top-left so the camera controls keep the top-right corner and the
+     two never fight for the same strip of sky. */
+  .galaxy-filter-bar {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 30;
+    width: min(560px, 52vw);
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    border: 1px solid rgba(174, 193, 255, 0.14);
+    border-radius: var(--radius-lg);
+    background: rgba(6, 10, 20, 0.55);
+    padding: 10px 14px;
+    box-shadow:
+      0 18px 44px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(14px) saturate(1.25);
+  }
+
+  .galaxy-filter-bar-title {
+    @apply mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1;
+  }
+
+  .galaxy-filter-bar-title h2 {
+    @apply text-base font-semibold text-ink;
+    letter-spacing: -0.01em;
+  }
+
+  .galaxy-filter-bar-review {
+    @apply inline-flex items-center gap-1.5 text-xs text-cyan/75;
+  }
+
+  /* The diagnostics fold carries about a hundred rows; inside a floating bar it
+     has to scroll rather than push the bar over the whole canvas. */
+  .galaxy-filter-bar .fold-section[data-open="true"] {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .galaxy-layout-immersive .galaxy-hud {
+    top: 14px;
+    right: 14px;
+    max-width: min(46vw, 620px);
+    justify-content: flex-end;
+  }
+
+  .galaxy-layout-immersive .galaxy-inspector {
+    position: absolute;
+    top: 92px;
+    right: 14px;
+    bottom: 14px;
+    z-index: 24;
+    width: min(380px, 92vw);
+    height: auto;
+    opacity: 0;
+    transform: translateX(calc(100% + 32px));
+    transition:
+      transform 0.28s cubic-bezier(0.22, 0.85, 0.3, 1),
+      opacity 0.24s ease;
+    pointer-events: none;
+  }
+
+  .galaxy-layout-immersive .galaxy-inspector[data-open="true"] {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .galaxy-layout-immersive .galaxy-inspector {
+      transition: none;
+    }
+  }
+
   .galaxy-panel-fullscreen {
     position: fixed;
     inset: 0;
@@ -2281,18 +2385,18 @@ button:focus-visible {
   }
 
   @media (min-width: 1280px) {
-    .galaxy-workspace-grid {
+    .galaxy-layout-classic .galaxy-workspace-grid {
       --galaxy-workspace-height: 720px;
       align-items: start;
     }
 
-    .galaxy-workspace-grid > .galaxy-panel:not(.galaxy-panel-fullscreen),
-    .galaxy-workspace-grid > .galaxy-inspector {
+    .galaxy-layout-classic .galaxy-workspace-grid > .galaxy-panel:not(.galaxy-panel-fullscreen),
+    .galaxy-layout-classic .galaxy-workspace-grid > .galaxy-inspector {
       height: var(--galaxy-workspace-height);
       min-height: 0;
     }
 
-    .galaxy-workspace-grid > .galaxy-panel:not(.galaxy-panel-fullscreen) .galaxy-stage-3d {
+    .galaxy-layout-classic .galaxy-workspace-grid > .galaxy-panel:not(.galaxy-panel-fullscreen) .galaxy-stage-3d {
       height: 100%;
     }
 

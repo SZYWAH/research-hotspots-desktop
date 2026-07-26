@@ -2852,6 +2852,7 @@ function ImportProgressPanel({
 
 const GALAXY_FIELD_COLORS = ["#8EA7FF", "#B58DFF", "#F3B75D", "#F47A9C", "#58D4F2", "#D8E2F4"];
 const GALAXY_BG = "#01040d";
+const GALAXY_LAYOUT_STORAGE_KEY = "research-hotspots:galaxy-layout";
 
 function galaxyLoadPhaseLabel(phase: GalaxyLoadPhase) {
   if (phase === "cache") return "正在读取 SQLite 星图缓存";
@@ -3059,6 +3060,15 @@ function GalaxyView({
   const [hotspotEvidenceStatus, setHotspotEvidenceStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [galaxyEvidencePerformance, setGalaxyEvidencePerformance] = useState<GalaxyEvidencePerformance>({ cacheState: "idle", queryMs: 0, pendingQueries: 0 });
   const [galaxyFullscreen, setGalaxyFullscreen] = useState(false);
+  // The star map is the page in the immersive layout; the classic card layout
+  // stays available for anyone who wants the dashboard framing back.
+  const [galaxyLayoutClassic, setGalaxyLayoutClassic] = useState(() => {
+    try {
+      return window.localStorage.getItem(GALAXY_LAYOUT_STORAGE_KEY) === "classic";
+    } catch {
+      return false;
+    }
+  });
   const [galaxyBloomAvailable, setGalaxyBloomAvailable] = useState(true);
   const [galaxyBloomUnavailableReason, setGalaxyBloomUnavailableReason] = useState("");
   const [cameraCommand, setCameraCommand] = useState<GalaxyCameraCommand>({ kind: "reset", target: [0, 0, 0], distance: 78, nonce: 0 });
@@ -3155,6 +3165,11 @@ function GalaxyView({
     [selectedLinks],
   );
   const activeSelectedId = selectionActive ? selected?.id ?? "" : "";
+  // In the immersive layout the inspector is a floating panel: it slides in for
+  // a live selection or a paper being read, and stays out of the way otherwise.
+  const galaxyInspectorOpen = (selectionActive && Boolean(selected))
+    || galaxyExplorationState !== "overview"
+    || (galaxyPaperPanelState !== "hidden" && galaxyPaperFocusState !== "idle");
   const visibleRelatedIds = useMemo(() => (selectionActive ? relatedLinkIds : new Set<string>()), [relatedLinkIds, selectionActive]);
   const visibleRelatedIdList = useMemo(() => Array.from(visibleRelatedIds), [visibleRelatedIds]);
   const galaxyLabelIds = useMemo(() => {
@@ -3582,21 +3597,35 @@ function GalaxyView({
   }, [galaxyFullscreen]);
 
   return (
-    <div className="page-grid">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Research Galaxy</p>
-          {visualReview && (
-            <div className="mb-3 mt-2 inline-flex items-center gap-2 rounded-[6px] border border-cyan/20 bg-cyan/[0.06] px-3 py-2 text-xs text-cyan/80">
-              <Database size={13} />
-              浏览器视觉快照 · 数据 {formatVisualReviewTimestamp(app17Payload?.generatedAt)} · 构建 {formatVisualReviewTimestamp(__BUILD_TIME__)} · {__BUILD_REVISION__}
-            </div>
-          )}
-          <h1>科研星图</h1>
-          <p className="page-subtitle">星图以锐利点阵、星场密度和克制的三色温体系呈现科研热点关系，避免大面积光晕和雾化发光团。</p>
-        </div>
-      </header>
-      <section className="panel-card">
+    <div className={galaxyLayoutClassic ? "page-grid galaxy-layout-classic" : "galaxy-layout-immersive"}>
+      {galaxyLayoutClassic && (
+        <header className="page-header">
+          <div>
+            <p className="eyebrow">Research Galaxy</p>
+            {visualReview && (
+              <div className="mb-3 mt-2 inline-flex items-center gap-2 rounded-[6px] border border-cyan/20 bg-cyan/[0.06] px-3 py-2 text-xs text-cyan/80">
+                <Database size={13} />
+                浏览器视觉快照 · 数据 {formatVisualReviewTimestamp(app17Payload?.generatedAt)} · 构建 {formatVisualReviewTimestamp(__BUILD_TIME__)} · {__BUILD_REVISION__}
+              </div>
+            )}
+            <h1>科研星图</h1>
+            <p className="page-subtitle">星图以锐利点阵、星场密度和克制的三色温体系呈现科研热点关系，避免大面积光晕和雾化发光团。</p>
+          </div>
+        </header>
+      )}
+      <section className={galaxyLayoutClassic ? "panel-card" : "galaxy-filter-bar"}>
+        {!galaxyLayoutClassic && (
+          <div className="galaxy-filter-bar-title">
+            <span className="eyebrow">Research Galaxy</span>
+            <h2>科研星图</h2>
+            {visualReview && (
+              <span className="galaxy-filter-bar-review">
+                <Database size={12} />
+                快照 {formatVisualReviewTimestamp(app17Payload?.generatedAt)} · {__BUILD_REVISION__}
+              </span>
+            )}
+          </div>
+        )}
         <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
           <SelectControl className="h-10 text-sm" value={field} options={[{ value: "all", label: "全部学科" }, ...fields.map((item) => ({ value: item, label: item }))]} onChange={setField} />
           <div className="flex flex-wrap items-center justify-end gap-2 self-end">
@@ -3894,6 +3923,22 @@ function GalaxyView({
                 {galaxyFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                 {galaxyFullscreen ? "退出全屏" : "全屏"}
               </button>
+              <button
+                className="secondary-action h-8 px-3"
+                onClick={() => setGalaxyLayoutClassic((value) => {
+                  const next = !value;
+                  try {
+                    window.localStorage.setItem(GALAXY_LAYOUT_STORAGE_KEY, next ? "classic" : "immersive");
+                  } catch {
+                    // A blocked storage quota should not stop the layout switch.
+                  }
+                  return next;
+                })}
+                aria-pressed={galaxyLayoutClassic}
+                title={galaxyLayoutClassic ? "切换到沉浸布局：星图铺满窗口" : "切换到经典布局：星图回到卡片内"}
+              >
+                {galaxyLayoutClassic ? "沉浸布局" : "经典布局"}
+              </button>
             </div>
             <div className="galaxy-legend">
               {galaxyExplorationState === "overview" ? (
@@ -3982,7 +4027,10 @@ function GalaxyView({
               )}
           </div>
         </div>
-        <aside className={`panel-card galaxy-inspector ${galaxyPaperPanelState !== "hidden" && galaxyPaperInspectionMode !== "centered" && galaxyPaperFocusState !== "idle" ? `galaxy-inspector-paper-reading ${galaxyPaperInspectorClass(galaxyPaperPanelState)}` : ""}`}>
+        <aside
+          className={`panel-card galaxy-inspector ${galaxyPaperPanelState !== "hidden" && galaxyPaperInspectionMode !== "centered" && galaxyPaperFocusState !== "idle" ? `galaxy-inspector-paper-reading ${galaxyPaperInspectorClass(galaxyPaperPanelState)}` : ""}`}
+          data-open={galaxyInspectorOpen}
+        >
           {!galaxyFullscreen
           && galaxyPaperPanelState !== "hidden"
           && galaxyPaperInspectionMode !== "centered"
