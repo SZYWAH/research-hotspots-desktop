@@ -46,6 +46,9 @@ function parseArgs(argv) {
     } else if (value === "--project-id") {
       args.projectId = argv[index + 1];
       index += 2;
+    } else if (value === "--coordinate-override") {
+      args.coordinateOverride = argv[index + 1];
+      index += 2;
     } else if (value === "--force") {
       args.force = true;
       index += 1;
@@ -94,10 +97,23 @@ function resolveDatabase(args) {
       `已检查：${candidates.length ? candidates.join("; ") : "未提供目录，且没有已保存配置"}`,
     ].join("\n"));
   }
+  const coordinateOverrideValue = args.coordinateOverride
+    || process.env.APP17_VISUAL_REVIEW_COORDINATE_OVERRIDE
+    || saved.coordinateOverridePath;
+  const coordinateOverridePath = coordinateOverrideValue
+    ? resolve(coordinateOverrideValue)
+    : undefined;
+  if (coordinateOverridePath && !existsSync(coordinateOverridePath)) {
+    throw new Error(`未找到坐标覆盖文件：${coordinateOverridePath}`);
+  }
   return {
     databasePath,
     databaseDir: dirname(databasePath),
     projectId: args.projectId || saved.projectId || "project-default",
+    coordinateOverridePath,
+    coordinateOverrideModifiedMs: coordinateOverridePath
+      ? statSync(coordinateOverridePath).mtimeMs
+      : undefined,
   };
 }
 
@@ -110,7 +126,11 @@ function snapshotIsCurrent(database, force) {
   return saved?.databasePath
     && comparablePath(saved.databasePath) === comparablePath(database.databasePath)
     && manifest.projectId === database.projectId
-    && Math.abs(Number(manifest.databaseModifiedMs) - databaseStat.mtimeMs) < 2;
+    && Math.abs(Number(manifest.databaseModifiedMs) - databaseStat.mtimeMs) < 2
+    && comparablePath(saved.coordinateOverridePath || "") === comparablePath(database.coordinateOverridePath || "")
+    && Math.abs(
+      Number(saved.coordinateOverrideModifiedMs || 0) - Number(database.coordinateOverrideModifiedMs || 0),
+    ) < 2;
 }
 
 function exportSnapshot(database, force) {
@@ -137,6 +157,9 @@ function exportSnapshot(database, force) {
     "--output-dir",
     snapshotDir,
   ];
+  if (database.coordinateOverridePath) {
+    cargoArgs.push("--coordinate-override", database.coordinateOverridePath);
+  }
   const cargo = spawnSync("cargo", cargoArgs, { cwd: rootDir, stdio: "inherit", shell: false });
   if (cargo.error) throw cargo.error;
   if (cargo.status !== 0) throw new Error(`快照导出失败，cargo 退出码 ${cargo.status ?? "unknown"}。`);

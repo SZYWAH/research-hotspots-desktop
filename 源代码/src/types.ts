@@ -245,6 +245,7 @@ export type AiSettings = {
   exportDir: string;
   workerTempDir: string;
   backupDir: string;
+  semanticEmbeddingDevice: "cpu" | "gpu";
   cnki: CnkiSettings;
   mysql: MysqlImportSettings;
   updatedAt: string;
@@ -428,6 +429,15 @@ export type App17GalaxyPayload = {
   papers: App17GalaxyPaperPoint[];
   hotspots: App17GalaxyHotspotPoint[];
   snapshotId?: string;
+  paperLayoutVersion?: string;
+  paperLayoutCoordinateSpace?: "hierarchical" | "global";
+  paperLayoutScaleMode?: "shared" | "per-hotspot";
+  paperLayoutLocalP95Radius?: number;
+  paperLayoutSharedScale?: number;
+  embeddingModelId?: string;
+  embeddingModelRevision?: string;
+  projectionVersion?: string;
+  hotspotIdentityVersion?: string;
   hotspotRecords?: Hotspot[];
 };
 
@@ -435,6 +445,11 @@ export type V20AnalysisState = {
   projectId: string;
   activeSnapshotId: string;
   algorithmVersion: string;
+  layoutVersion?: string;
+  projectionVersion?: string;
+  embeddingModelId?: string;
+  embeddingModelRevision?: string;
+  hotspotIdentityVersion?: string;
   paperCount: number;
   hotspotCount: number;
   membershipCount: number;

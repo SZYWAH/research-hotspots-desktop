@@ -34,4 +34,4 @@ assert.doesNotMatch(tools, /online_search|shell|arbitrary_sql|campus_library/);
 for (const kind of ["research_report", "paper_file_import", "paper_mysql_import", "library_clean", "v20_modeling", "report_export"]) assert.match(types + workspace, new RegExp(kind));
 assert.doesNotMatch(workspace, /dangerouslySetInnerHTML/);
 
-console.log(JSON.stringify({ schemaVersion: 11, governedToolCount: 7, highRiskToolCount: 4, atomicImportStaging: true, libraryLease: true, safeExport: true, onlineConnectorsDeferred: true }, null, 2));
+console.log(JSON.stringify({ schemaVersion: 12, governedToolCount: 7, highRiskToolCount: 4, atomicImportStaging: true, libraryLease: true, safeExport: true, onlineConnectorsDeferred: true }, null, 2));

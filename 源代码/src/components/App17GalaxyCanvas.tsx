@@ -6,6 +6,30 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 
 import type { App17GalaxyHotspotPoint, App17GalaxyPayload, HotspotEvidencePaperSnapshot } from "../types";
 import {
+  GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_BREATH_AMPLITUDE,
+  GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_OPACITY,
+  GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_BREATH_AMPLITUDE,
+  GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_OPACITY,
+  GALAXY_FAR_BACKGROUND_HOTSPOT_SIZE_SCALE,
+  GALAXY_FAR_BACKGROUND_PAPER_BREATH_AMPLITUDE,
+  GALAXY_FAR_BACKGROUND_PAPER_OPACITY,
+  GALAXY_FAR_BACKGROUND_PAPER_SIZE_SCALE,
+  buildGalaxyFarBackgroundPlan,
+  resolveGalaxyFarBackgroundMask,
+  resolveGalaxyFarBackgroundTransition,
+  type GalaxyFarBackgroundPlan,
+  type GalaxyFarBackgroundHotspotPlan,
+} from "../lib/galaxyFarBackground";
+import {
+  distanceAfterSimilarityRebase,
+  normalizeEntryScale,
+  resolveTheorySystemVisibility,
+} from "../lib/galaxySystemTransition";
+import {
+  selectDeterministicTheoryView,
+  type GalaxyTheoryViewSelection,
+} from "../lib/galaxyTheoryView";
+import {
   App17PaperJourneyController,
   resolveGalaxyPaperReadingPose,
   type GalaxyPaperJourneyFrame,
@@ -51,6 +75,13 @@ export type GalaxyAmbientMotion = "none" | "rotation-breath" | "breath";
 export type GalaxyEnvironmentMotion = "none" | "twinkle";
 
 export type GalaxyBloomRenderMode = "none" | "local";
+
+export type GalaxyReviewCameraPreset =
+  | "global"
+  | "interwoven"
+  | "system-small"
+  | "system-medium"
+  | "system-large";
 
 export type GalaxyPerformanceSnapshot = {
   scenario: GalaxyPerformanceScenario;
@@ -110,6 +141,38 @@ export type GalaxyPerformanceSnapshot = {
   systemStarMotionActive: boolean;
   overviewSelectedTopicOpacity: number;
   systemCloudOpacity: number;
+  systemEntryCameraTravelDistance: number;
+  systemEntryNonSelectedWorldDrift: number;
+  systemEntryScale: number;
+  systemCanonicalRebaseCount: number;
+  systemCanonicalRebaseProjectionDeltaPx: number;
+  systemEntrySelectedCenterDeltaPx: number;
+  systemEntryCloudDiameterRatio: number;
+  systemNonSelectedPaperOpacity: number;
+  systemNonSelectedHotspotOpacity: number;
+  farBackgroundHotspotCount: number;
+  farBackgroundPaperSampleCount: number;
+  farBackgroundRetreatHotspotCount: number;
+  farBackgroundCrossfadeHotspotCount: number;
+  farBackgroundNearestRadius: number;
+  farBackgroundFarthestRadius: number;
+  farBackgroundLocalOffsetError: number;
+  farBackgroundCentralMaskVisibleCount: number;
+  farBackgroundPaperBrightnessMin: number;
+  farBackgroundPaperBrightnessMax: number;
+  farBackgroundHotspotCoreBrightnessMin: number;
+  farBackgroundHotspotCoreBrightnessMax: number;
+  farBackgroundHotspotHaloBrightnessMin: number;
+  farBackgroundHotspotHaloBrightnessMax: number;
+  farBackgroundRebaseProjectionDeltaPx: number;
+  systemOverviewVisibleObjectCount: number;
+  systemOverviewPickableObjectCount: number;
+  theoryViewAzimuthDegrees: number;
+  theoryViewElevationDegrees: number;
+  theoryViewBaselineScore: number;
+  theoryViewSelectedScore: number;
+  theoryViewImprovementRatio: number;
+  theoryViewOptimized: boolean;
   systemUniquePaperCount: number;
   systemDuplicatePaperCount: number;
   systemHiddenRepresentativeCount: number;
@@ -255,6 +318,7 @@ export type GalaxyPerformanceSnapshot = {
 type App17GalaxyCanvasProps = {
   active: boolean;
   payload: App17GalaxyPayload;
+  farBackgroundPayload?: App17GalaxyPayload;
   selectedId: string;
   selectedPaperId?: string;
   selectedPaperVisual?: GalaxyPaperVisualMetadata;
@@ -275,6 +339,7 @@ type App17GalaxyCanvasProps = {
   fullscreen?: boolean;
   onBloomAvailabilityChange?: (available: boolean, reason?: string) => void;
   onPerformanceSnapshot?: (snapshot: GalaxyPerformanceSnapshot) => void;
+  reviewCameraPreset?: GalaxyReviewCameraPreset;
 };
 
 type App17RenderPoint = {
@@ -328,6 +393,15 @@ type App17CameraPreset = {
   zScale: number;
   autoRotate: boolean;
   autoRotateAzimuthStep: number;
+  theoryFraming?: App17TheoryFraming;
+};
+
+type App17TheoryFraming = {
+  p95Radius: number;
+  maxRadius: number;
+  boundsMin: THREE.Vector3;
+  boundsMax: THREE.Vector3;
+  viewSelection: GalaxyTheoryViewSelection;
 };
 
 type App17ViewMode = "overview" | "system" | "top";
@@ -398,6 +472,8 @@ type GalaxySystemPaper = {
   displaySize: number;
   color: string;
   orbit: GalaxySystemOrbit;
+  semanticPosition: THREE.Vector3;
+  orbitPosition: THREE.Vector3;
   position: THREE.Vector3;
 };
 
@@ -465,6 +541,7 @@ type GalaxySystemResources = {
   visualMode: GalaxySystemVisualMode;
   root: THREE.Group;
   cloudLayer: ReturnType<typeof createSystemPaperLayer>;
+  farBackgroundLayer?: ReturnType<typeof createTheoryFarBackgroundLayer>;
   representativeLayer?: ReturnType<typeof createSystemRepresentativeLayer>;
   representativeBloomLayer?: ReturnType<typeof createSystemRepresentativeBloomLayer>;
   orbitLayer?: ReturnType<typeof createSystemOrbitLayer>;
@@ -476,9 +553,18 @@ type GalaxySystemResources = {
   hiddenRepresentativeCount: number;
   unresolvedRepresentativeCount: number;
   representativeSignature: string;
+  representativeLayoutBlend: number;
+  representativeLayoutTarget: number;
+  opacity: number;
   activeTimeSeconds: number;
   entryScale: number;
   starEntryScale: number;
+  coordinateScale: number;
+  cloudP95Radius: number;
+  frameRadius: number;
+  initialDistance: number;
+  minDistance: number;
+  maxDistance: number;
   updateAnimation: (elapsedSeconds: number, motionEnabled: boolean, frozenPaperIds: Set<string>) => boolean;
   dispose: () => void;
 };
@@ -508,6 +594,7 @@ type GalaxyExplorationRuntime = {
   selectedTopicKey: string;
   systemDistance: number;
   entryFocusDistance: number;
+  canonicalRebased: boolean;
 };
 
 type GalaxyPaperJourneyPresentationRuntime = {
@@ -668,6 +755,7 @@ const APP17_SYSTEM_MIN_DISTANCE = 1;
 const APP17_SYSTEM_MAX_DISTANCE = 12;
 const APP17_SYSTEM_ELEVATION = THREE.MathUtils.degToRad(24);
 const APP17_SYSTEM_RADIUS = 3.2;
+const APP17_NATURAL_LAYOUT_VERSION = "semantic-hierarchical-natural-pca3-v3";
 const APP17_SYSTEM_ORBIT_SEGMENTS = 96;
 const APP17_SYSTEM_CACHE_LIMIT = 4;
 const APP17_SYSTEM_STAR_RADIUS = 0.38;
@@ -958,6 +1046,7 @@ function assignHotspotVisualMetrics(hotspots: App17RenderPoint[], kind: App17Sce
 export function App17GalaxyCanvas({
   active,
   payload,
+  farBackgroundPayload = payload,
   selectedId,
   selectedPaperId = "",
   selectedPaperVisual,
@@ -978,6 +1067,7 @@ export function App17GalaxyCanvas({
   fullscreen = false,
   onBloomAvailabilityChange,
   onPerformanceSnapshot,
+  reviewCameraPreset,
 }: App17GalaxyCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const labelCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1114,6 +1204,25 @@ export function App17GalaxyCanvas({
     onBloomAvailabilityChangeRef.current?.(bloomAvailable, bloomUnavailableReason || undefined);
     const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reduceMotion = reducedMotionMedia.matches;
+    const cameraPreset: App17CameraPreset = {
+      ...sceneData.camera,
+      center: sceneData.camera.center.clone(),
+      theoryFraming: sceneData.camera.theoryFraming
+        ? {
+          ...sceneData.camera.theoryFraming,
+          boundsMin: sceneData.camera.theoryFraming.boundsMin.clone(),
+          boundsMax: sceneData.camera.theoryFraming.boundsMax.clone(),
+        }
+        : undefined,
+    };
+    if (import.meta.env.DEV && reviewCameraPreset) {
+      applyGalaxyReviewCameraPreset(cameraPreset, sceneData, reviewCameraPreset);
+    }
+    const fixedSystemReview = import.meta.env.DEV
+      && Boolean(reviewCameraPreset?.startsWith("system-"));
+    const farBackgroundRenderHotspots = sceneData.kind === "app15"
+      ? buildApp15TheoryHotspots(farBackgroundPayload)
+      : sceneData.hotspots;
 
     const environmentStarLayer = createEnvironmentStarLayer(currentPixelRatio);
     scene.add(environmentStarLayer.object);
@@ -1122,7 +1231,7 @@ export function App17GalaxyCanvas({
     scene.add(overviewRoot);
     const root = new THREE.Group();
     root.rotation.set(0, 0, 0);
-    root.scale.set(1, 1, sceneData.camera.zScale);
+    root.scale.set(1, 1, cameraPreset.zScale);
     overviewRoot.add(root);
 
     const paperLayer = createPaperLayer(sceneData.papers, currentPixelRatio, sceneData.kind);
@@ -1160,6 +1269,8 @@ export function App17GalaxyCanvas({
     const overviewPointPickThreshold = sceneData.kind === "app14" ? 0.22 : 0.16;
     raycaster.params.Points = { threshold: overviewPointPickThreshold };
     const pointer = new THREE.Vector2();
+    const hotspotPickWorldPosition = new THREE.Vector3();
+    const hotspotPickProjectedPosition = new THREE.Vector3();
     const systemPickWorldPosition = new THREE.Vector3();
     const systemPickViewPosition = new THREE.Vector3();
     const systemPickProjectedPosition = new THREE.Vector3();
@@ -1178,11 +1289,11 @@ export function App17GalaxyCanvas({
     let pressedTargetKind: "hotspot" | "paper" | "inspection" = "hotspot";
     const commandNonceRef = { current: commandRef.current.nonce };
     const orbit: App17OrbitState = {
-      center: sceneData.camera.center.clone(),
-      distance: sceneData.camera.distance,
-      targetDistance: sceneData.camera.distance,
-      azimuth: sceneData.camera.azimuth,
-      elevation: sceneData.camera.elevation,
+      center: cameraPreset.center.clone(),
+      distance: cameraPreset.distance,
+      targetDistance: cameraPreset.distance,
+      azimuth: cameraPreset.azimuth,
+      elevation: cameraPreset.elevation,
       transition: null,
       pointerPressed: false,
       dragging: false,
@@ -1193,6 +1304,7 @@ export function App17GalaxyCanvas({
       pauseUntil: 0,
       viewMode: "overview",
     };
+    let overviewFramingMode: "initial" | "fit" | "manual" = "initial";
     const exploration: GalaxyExplorationRuntime = {
       state: "overview",
       blend: 0,
@@ -1206,6 +1318,7 @@ export function App17GalaxyCanvas({
       selectedTopicKey: "",
       systemDistance: APP17_SYSTEM_DISTANCE,
       entryFocusDistance: APP17_SYSTEM_DISTANCE,
+      canonicalRebased: false,
     };
     const paperPresentation: GalaxyPaperJourneyPresentationRuntime = {
       mode: "none",
@@ -1343,6 +1456,23 @@ export function App17GalaxyCanvas({
     let lastWheelDistanceRatio = 0;
     let overviewSelectedTopicOpacity = 1;
     let systemCloudOpacity = 0;
+    let lastSystemEntryCameraTravelDistance = 0;
+    let lastSystemEntryNonSelectedWorldDrift = 0;
+    let lastSystemEntryScale = 1;
+    let systemCanonicalRebaseCount = 0;
+    let lastSystemCanonicalRebaseProjectionDeltaPx = 0;
+    let lastFarBackgroundRebaseProjectionDeltaPx = 0;
+    let lastSystemEntrySelectedCenterDeltaPx = 0;
+    let lastSystemEntryCloudDiameterRatio = 1;
+    const systemEntryCameraStart = new THREE.Vector3();
+    let queuedEnterHotspotId = "";
+    let theoryWorldReference: Array<{
+      kind: "paper" | "hotspot";
+      index: number;
+      x: number;
+      y: number;
+      z: number;
+    }> = [];
     const transitionFrameTimes: number[] = [];
     const transitionTailFrameTimes: number[] = [];
     const frameSamples: App17TimedSample[] = [];
@@ -1421,7 +1551,7 @@ export function App17GalaxyCanvas({
         sceneData.kind === "app14"
         && exploration.state === "overview"
         && orbit.viewMode === "overview"
-        && sceneData.camera.autoRotate
+        && cameraPreset.autoRotate
       ) return 30;
       return sceneData.kind === "app14" ? 20 : 12;
     }
@@ -1616,6 +1746,12 @@ export function App17GalaxyCanvas({
       const bloomRequestedMode = getRequestedBloomMode();
       const bloomEffectiveMode = getEffectiveBloomMode();
       const bloomParameters = getBloomParameters(bloomEffectiveMode);
+      const theoryVisibility = resolveTheorySystemVisibility(exploration.blend);
+      const farBackgroundVisualState = systemResources?.farBackgroundLayer?.getDiagnostics(
+        camera,
+        systemResources.root,
+      );
+      const theoryViewSelection = cameraPreset.theoryFraming?.viewSelection;
       callback({
         scenario: performanceScenario,
         fullscreen: fullscreenRef.current,
@@ -1677,6 +1813,51 @@ export function App17GalaxyCanvas({
         systemStarMotionActive: Boolean(starVisualState?.motionActive),
         overviewSelectedTopicOpacity,
         systemCloudOpacity,
+        systemEntryCameraTravelDistance: lastSystemEntryCameraTravelDistance,
+        systemEntryNonSelectedWorldDrift: lastSystemEntryNonSelectedWorldDrift,
+        systemEntryScale: lastSystemEntryScale,
+        systemCanonicalRebaseCount,
+        systemCanonicalRebaseProjectionDeltaPx: lastSystemCanonicalRebaseProjectionDeltaPx,
+        systemEntrySelectedCenterDeltaPx: lastSystemEntrySelectedCenterDeltaPx,
+        systemEntryCloudDiameterRatio: lastSystemEntryCloudDiameterRatio,
+        systemNonSelectedPaperOpacity: sceneData.kind === "app15"
+          ? theoryVisibility.paperOpacity
+          : THREE.MathUtils.lerp(1, APP17_FAR_PAPER_OPACITY, exploration.blend),
+        systemNonSelectedHotspotOpacity: sceneData.kind === "app15"
+          ? theoryVisibility.hotspotCoreOpacity
+          : THREE.MathUtils.lerp(1, APP17_FAR_HOTSPOT_CORE_OPACITY, exploration.blend),
+        farBackgroundHotspotCount: farBackgroundVisualState?.hotspotCount ?? 0,
+        farBackgroundPaperSampleCount: farBackgroundVisualState?.paperSampleCount ?? 0,
+        farBackgroundRetreatHotspotCount: farBackgroundVisualState?.retreatHotspotCount ?? 0,
+        farBackgroundCrossfadeHotspotCount: farBackgroundVisualState?.crossfadeHotspotCount ?? 0,
+        farBackgroundNearestRadius: farBackgroundVisualState?.nearestRadius ?? 0,
+        farBackgroundFarthestRadius: farBackgroundVisualState?.farthestRadius ?? 0,
+        farBackgroundLocalOffsetError: farBackgroundVisualState?.localOffsetError ?? 0,
+        farBackgroundCentralMaskVisibleCount: farBackgroundVisualState?.centralMaskVisibleCount ?? 0,
+        farBackgroundPaperBrightnessMin: farBackgroundVisualState?.paperBrightnessMin ?? 0,
+        farBackgroundPaperBrightnessMax: farBackgroundVisualState?.paperBrightnessMax ?? 0,
+        farBackgroundHotspotCoreBrightnessMin: farBackgroundVisualState?.hotspotCoreBrightnessMin ?? 0,
+        farBackgroundHotspotCoreBrightnessMax: farBackgroundVisualState?.hotspotCoreBrightnessMax ?? 0,
+        farBackgroundHotspotHaloBrightnessMin: farBackgroundVisualState?.hotspotHaloBrightnessMin ?? 0,
+        farBackgroundHotspotHaloBrightnessMax: farBackgroundVisualState?.hotspotHaloBrightnessMax ?? 0,
+        farBackgroundRebaseProjectionDeltaPx: lastFarBackgroundRebaseProjectionDeltaPx,
+        systemOverviewVisibleObjectCount: overviewRoot.visible
+          ? sceneData.papers.length + sceneData.hotspots.length
+          : 0,
+        systemOverviewPickableObjectCount: overviewRoot.visible
+          && !(sceneData.kind === "app15" && exploration.blend >= 0.7)
+          ? sceneData.hotspots.length
+          : 0,
+        theoryViewAzimuthDegrees: theoryViewSelection
+          ? THREE.MathUtils.radToDeg(theoryViewSelection.azimuth)
+          : THREE.MathUtils.radToDeg(cameraPreset.azimuth),
+        theoryViewElevationDegrees: theoryViewSelection
+          ? THREE.MathUtils.radToDeg(theoryViewSelection.elevation)
+          : THREE.MathUtils.radToDeg(cameraPreset.elevation),
+        theoryViewBaselineScore: theoryViewSelection?.baselineScore ?? 0,
+        theoryViewSelectedScore: theoryViewSelection?.selectedScore ?? 0,
+        theoryViewImprovementRatio: theoryViewSelection?.improvementRatio ?? 0,
+        theoryViewOptimized: Boolean(theoryViewSelection?.usedOptimizedView),
         systemUniquePaperCount: systemResources?.uniquePaperCount ?? 0,
         systemDuplicatePaperCount: systemResources?.duplicatePaperCount ?? 0,
         systemHiddenRepresentativeCount: systemResources?.hiddenRepresentativeCount ?? 0,
@@ -1918,6 +2099,51 @@ export function App17GalaxyCanvas({
 
     invalidateRef.current = () => invalidate(true);
 
+    const updateTheoryCameraFraming = (nextAspect: number) => {
+      const framing = cameraPreset.theoryFraming;
+      if (sceneData.kind !== "app15" || !framing) return;
+      const previousDistance = cameraPreset.distance;
+      const previousTargetDistance = orbit.targetDistance;
+      const nextPreset = resolveTheoryCameraPreset({
+        center: cameraPreset.center,
+        framing,
+        aspect: nextAspect,
+      });
+      Object.assign(cameraPreset, nextPreset);
+      cameraPreset.center.copy(nextPreset.center);
+      if (import.meta.env.DEV && reviewCameraPreset) {
+        applyGalaxyReviewCameraPreset(cameraPreset, sceneData, reviewCameraPreset);
+      }
+      if (
+        exploration.state === "overview"
+        && !orbit.transition
+        && paperJourney.getState() === "idle"
+      ) {
+        let nextDistance = cameraPreset.distance;
+        if (orbit.viewMode === "top") {
+          nextDistance = cameraPreset.topDistance;
+        } else if (overviewFramingMode === "fit") {
+          nextDistance = cameraPreset.fitDistance;
+        } else if (overviewFramingMode === "manual") {
+          const relativeZoom = previousTargetDistance / Math.max(0.001, previousDistance);
+          nextDistance = cameraPreset.distance * relativeZoom;
+        }
+        nextDistance = THREE.MathUtils.clamp(
+          nextDistance,
+          cameraPreset.minDistance,
+          cameraPreset.maxDistance,
+        );
+        orbit.distance = nextDistance;
+        orbit.targetDistance = nextDistance;
+        orbit.center.copy(cameraPreset.center);
+      }
+      camera.near = Math.max(0.001, Math.min(0.02, cameraPreset.minDistance * 0.04));
+      camera.far = Math.max(
+        240,
+        cameraPreset.maxDistance + framing.maxRadius * 4,
+      );
+    };
+
     const resize = () => {
       if (!runtimeActive) return;
       const rect = hostElement.getBoundingClientRect();
@@ -1931,6 +2157,7 @@ export function App17GalaxyCanvas({
       renderer.setSize(width, height, false);
       bloomBufferPixelRatio = bloomPipeline?.setSize(width, height, currentPixelRatio) ?? 0;
       camera.aspect = width / height;
+      updateTheoryCameraFraming(camera.aspect);
       camera.updateProjectionMatrix();
       if (paperJourney.getState() === "reading") {
         paperJourney.reprojectReading({
@@ -1992,7 +2219,7 @@ export function App17GalaxyCanvas({
       lastMeasuredRenderTime = 0;
       lastAmbientRenderTime = 0;
       resize();
-      if (orbit.viewMode === "overview" && sceneData.camera.autoRotate && orbit.pauseUntil > resumeRequestedAt) {
+      if (orbit.viewMode === "overview" && cameraPreset.autoRotate && orbit.pauseUntil > resumeRequestedAt) {
         autoResumeTimer = window.setTimeout(() => {
           autoResumeTimer = 0;
           invalidate(true);
@@ -2083,18 +2310,28 @@ export function App17GalaxyCanvas({
       setPaperCameraWriter("orbit");
     };
 
-    const calculateSystemEntryScale = (renderHotspot: App17RenderPoint, topicKey: string) => {
+    const calculateSystemEntryScale = (
+      resources: GalaxySystemResources,
+      renderHotspot: App17RenderPoint,
+      topicKey: string,
+    ) => {
+      if (
+        sceneData.kind === "app15"
+        && (payload.paperLayoutScaleMode === "shared" || payload.paperLayoutVersion === APP17_NATURAL_LAYOUT_VERSION)
+      ) {
+        return normalizeEntryScale(APP15_COORD_SCALE / Math.max(1e-9, resources.coordinateScale));
+      }
       const radii = sceneData.papers
         .filter((paper) => paper.topicKey === topicKey)
         .map((paper) => Math.hypot(
           paper.x - renderHotspot.position.x,
           paper.y - renderHotspot.position.y,
-          (paper.z - renderHotspot.position.z) * sceneData.camera.zScale,
+          (paper.z - renderHotspot.position.z) * cameraPreset.zScale,
         ))
         .sort((a, b) => a - b);
       const radiusIndex = Math.min(radii.length - 1, Math.max(0, Math.floor(radii.length * 0.95)));
       const overviewRadius = radii[radiusIndex] || APP17_SYSTEM_RADIUS * 0.12;
-      return THREE.MathUtils.clamp(overviewRadius / APP17_SYSTEM_RADIUS, 0.045, 0.42);
+      return normalizeEntryScale(THREE.MathUtils.clamp(overviewRadius / APP17_SYSTEM_RADIUS, 0.045, 0.42));
     };
 
     const configureSystemEntry = (resources: GalaxySystemResources, renderHotspot: App17RenderPoint) => {
@@ -2105,13 +2342,19 @@ export function App17GalaxyCanvas({
       const hotspotRadius = renderHotspot.displaySize * worldPerCssPixel * 0.5;
       resources.starEntryScale = THREE.MathUtils.clamp(hotspotRadius / APP17_SYSTEM_STAR_RADIUS, 0.08, 1.2);
 
-      const initialVisualScale = Math.max(resources.entryScale, resources.starEntryScale);
-      const growthLimitedDistance = (focusDistance / Math.max(initialVisualScale, 0.001)) * 0.96;
-      exploration.systemDistance = THREE.MathUtils.clamp(
-        Math.min(APP17_SYSTEM_DISTANCE, growthLimitedDistance),
-        APP17_SYSTEM_MIN_DISTANCE * 1.4,
-        APP17_SYSTEM_DISTANCE,
-      );
+      if (sceneData.kind === "app15") {
+        exploration.systemDistance = fixedSystemReview
+          ? APP17_SYSTEM_DISTANCE * resources.entryScale
+          : resources.initialDistance * resources.entryScale;
+      } else {
+        const initialVisualScale = Math.max(resources.entryScale, resources.starEntryScale);
+        const growthLimitedDistance = (focusDistance / Math.max(initialVisualScale, 0.001)) * 0.96;
+        exploration.systemDistance = THREE.MathUtils.clamp(
+          Math.min(resources.initialDistance, growthLimitedDistance),
+          resources.minDistance * 1.4,
+          resources.initialDistance,
+        );
+      }
     };
 
     const cancelScheduledPreparation = (resetPreparingState = false) => {
@@ -2170,6 +2413,14 @@ export function App17GalaxyCanvas({
       exploration.selectedTopicKey = topicKeyFromHotspot(payloadHotspot);
       paperLayer.setExplorationSelection(exploration.selectedTopicKey, exploration.focusLocal);
       hotspotLayer.setExplorationSelection(exploration.selectedTopicKey, exploration.focusLocal);
+      const farTransitionModeByTopic = new Map(
+        resources.farBackgroundLayer?.plan.hotspots.map((hotspot) => [
+          hotspot.topicKey,
+          hotspot.transitionMode,
+        ]) ?? [],
+      );
+      paperLayer.setTheoryFarTransitionModes(farTransitionModeByTopic);
+      hotspotLayer.setTheoryFarTransitionModes(farTransitionModeByTopic);
       if (systemResources && systemResources !== resources) setGalaxySystemOpacity(systemResources, 0);
       systemResources = resources;
       systemResources.root.position.copy(focusWorld);
@@ -2202,6 +2453,28 @@ export function App17GalaxyCanvas({
       }
       exploration.fromBlend = exploration.blend;
       exploration.toBlend = 1;
+      exploration.canonicalRebased = false;
+      if (sceneData.kind === "app15") {
+        systemResources.representativeLayoutBlend = 0;
+        systemResources.representativeLayoutTarget = 0;
+        systemResources.representativePapers.forEach((paper) => {
+          paper.position.copy(paper.semanticPosition);
+        });
+        const positions = systemResources.representativePapers.map((paper) => paper.position);
+        systemResources.representativeLayer?.setPointPositions(positions);
+        systemResources.representativeBloomLayer?.setPointPositions(positions);
+      }
+      systemResources.root.scale.setScalar(normalizeEntryScale(systemResources.entryScale));
+      systemResources.star.object.scale.setScalar(1);
+      lastSystemEntryScale = normalizeEntryScale(systemResources.entryScale);
+      lastSystemCanonicalRebaseProjectionDeltaPx = 0;
+      lastFarBackgroundRebaseProjectionDeltaPx = 0;
+      lastSystemEntrySelectedCenterDeltaPx = 0;
+      lastSystemEntryCloudDiameterRatio = 1;
+      lastSystemEntryNonSelectedWorldDrift = 0;
+      applyCameraOrbit(camera, orbit);
+      systemEntryCameraStart.copy(camera.position);
+      captureTheoryWorldReference();
       orbit.viewMode = "system";
       clearAutoResumeTimer();
       transitionFrameTimes.length = 0;
@@ -2213,8 +2486,8 @@ export function App17GalaxyCanvas({
         "enter-system",
         exploration.focusWorld,
         exploration.systemDistance,
-        orbit.azimuth,
-        APP17_SYSTEM_ELEVATION,
+        fixedSystemReview ? Math.PI / 4 : orbit.azimuth,
+        fixedSystemReview ? THREE.MathUtils.degToRad(26) : APP17_SYSTEM_ELEVATION,
         now,
         APP17_SYSTEM_TRANSITION_MS,
       );
@@ -2251,14 +2524,20 @@ export function App17GalaxyCanvas({
         const startedAt = performance.now();
         const resources = buildGalaxySystemResources(
           payload,
+          farBackgroundPayload,
           payloadHotspot,
           representativePapersRef.current,
           currentPixelRatio,
           systemVisualMode,
+          farBackgroundRenderHotspots,
         );
         const renderHotspot = hotspotById.get(hotspotId);
         if (renderHotspot) {
-          resources.entryScale = calculateSystemEntryScale(renderHotspot, topicKeyFromHotspot(payloadHotspot));
+          resources.entryScale = calculateSystemEntryScale(
+            resources,
+            renderHotspot,
+            topicKeyFromHotspot(payloadHotspot),
+          );
         }
         scene.add(resources.root);
         resources.root.visible = true;
@@ -2434,6 +2713,10 @@ export function App17GalaxyCanvas({
       const ambientStrength = reduceMotion ? 0 : 1;
       paperLayer.setFarRotation(rotationAngle);
       hotspotLayer.setAmbientState(ambientTimeSeconds, rotationAngle, ambientStrength);
+      systemResources?.farBackgroundLayer?.setAnimation(
+        ambientTimeSeconds,
+        ambientStrength,
+      );
       orbitLayer?.setExploration(
         smoothStepRange(0, 0.78, exploration.blend),
         exploration.focusLocal,
@@ -2441,10 +2724,157 @@ export function App17GalaxyCanvas({
       );
     };
 
+    function overviewTheoryFarBlend() {
+      if (
+        sceneData.kind !== "app15"
+        || exploration.state !== "overview"
+        || cameraPreset.maxDistance <= cameraPreset.distance
+      ) return 0;
+      return smoothStepRange(
+        cameraPreset.distance,
+        cameraPreset.maxDistance,
+        orbit.distance,
+      );
+    }
+
+    const applyOverviewDistanceLod = () => {
+      const farBlend = overviewTheoryFarBlend();
+      paperLayer.setOverviewFarBlend(farBlend);
+      hotspotLayer.setOverviewFarBlend(farBlend);
+    };
+
+    const captureTheoryWorldReference = () => {
+      if (sceneData.kind !== "app15") {
+        theoryWorldReference = [];
+        return;
+      }
+      const references: typeof theoryWorldReference = [];
+      const paperStride = Math.max(1, Math.floor(sceneData.papers.length / 48));
+      for (let index = 0; index < sceneData.papers.length && references.length < 48; index += paperStride) {
+        const point = sceneData.papers[index];
+        references.push({ kind: "paper", index, x: point.x, y: point.y, z: point.z });
+      }
+      const hotspotStride = Math.max(1, Math.floor(sceneData.hotspots.length / 16));
+      for (let index = 0; index < sceneData.hotspots.length && references.length < 64; index += hotspotStride) {
+        const point = sceneData.hotspots[index].position;
+        references.push({ kind: "hotspot", index, x: point.x, y: point.y, z: point.z });
+      }
+      theoryWorldReference = references;
+    };
+
+    const measureTheoryWorldDrift = () => {
+      let maximum = 0;
+      for (const reference of theoryWorldReference) {
+        const point = reference.kind === "paper"
+          ? sceneData.papers[reference.index]
+          : sceneData.hotspots[reference.index]?.position;
+        if (!point) continue;
+        const x = reference.kind === "paper" ? point.x : point.x;
+        const y = reference.kind === "paper" ? point.y : point.y;
+        const z = reference.kind === "paper" ? point.z : point.z;
+        maximum = Math.max(
+          maximum,
+          Math.hypot(x - reference.x, y - reference.y, z - reference.z),
+        );
+      }
+      lastSystemEntryNonSelectedWorldDrift = maximum;
+      return maximum;
+    };
+
+    const performTheoryCanonicalRebase = (toCanonical: boolean) => {
+      if (
+        sceneData.kind !== "app15"
+        || !systemResources
+        || exploration.canonicalRebased === toCanonical
+      ) return;
+      const entryScale = normalizeEntryScale(systemResources.entryScale);
+      const sample = systemResources.cloudLayer.getPaperByIndex(0)?.position.clone()
+        ?? new THREE.Vector3(APP17_SYSTEM_RADIUS, 0, 0);
+      applyCameraOrbit(camera, orbit);
+      systemResources.root.updateMatrixWorld(true);
+      const beforeCenter = exploration.focusWorld.clone().project(camera);
+      const beforeSample = sample.clone().applyMatrix4(systemResources.root.matrixWorld).project(camera);
+      const farSample = systemResources.farBackgroundLayer?.getSamplePosition();
+      const beforeFarSample = farSample
+        ?.clone()
+        .applyMatrix4(systemResources.root.matrixWorld)
+        .project(camera);
+      const beforeRadius = Math.hypot(
+        (beforeSample.x - beforeCenter.x) * width * 0.5,
+        (beforeSample.y - beforeCenter.y) * height * 0.5,
+      );
+
+      systemResources.root.scale.setScalar(toCanonical ? 1 : entryScale);
+      orbit.distance = distanceAfterSimilarityRebase(orbit.distance, entryScale, toCanonical);
+      orbit.targetDistance = distanceAfterSimilarityRebase(orbit.targetDistance, entryScale, toCanonical);
+      exploration.systemDistance = toCanonical
+        ? fixedSystemReview ? APP17_SYSTEM_DISTANCE : systemResources.initialDistance
+        : (fixedSystemReview ? APP17_SYSTEM_DISTANCE : systemResources.initialDistance) * entryScale;
+      exploration.canonicalRebased = toCanonical;
+      applyCameraOrbit(camera, orbit);
+      systemResources.root.updateMatrixWorld(true);
+
+      const afterCenter = exploration.focusWorld.clone().project(camera);
+      const afterSample = sample.clone().applyMatrix4(systemResources.root.matrixWorld).project(camera);
+      const afterFarSample = farSample
+        ?.clone()
+        .applyMatrix4(systemResources.root.matrixWorld)
+        .project(camera);
+      const afterRadius = Math.hypot(
+        (afterSample.x - afterCenter.x) * width * 0.5,
+        (afterSample.y - afterCenter.y) * height * 0.5,
+      );
+      lastSystemCanonicalRebaseProjectionDeltaPx = Math.hypot(
+        (afterSample.x - beforeSample.x) * width * 0.5,
+        (afterSample.y - beforeSample.y) * height * 0.5,
+      );
+      lastSystemEntrySelectedCenterDeltaPx = Math.hypot(
+        (afterCenter.x - beforeCenter.x) * width * 0.5,
+        (afterCenter.y - beforeCenter.y) * height * 0.5,
+      );
+      lastSystemEntryCloudDiameterRatio = beforeRadius > 1e-9 ? afterRadius / beforeRadius : 1;
+      lastFarBackgroundRebaseProjectionDeltaPx = beforeFarSample && afterFarSample
+        ? Math.hypot(
+            (afterFarSample.x - beforeFarSample.x) * width * 0.5,
+            (afterFarSample.y - beforeFarSample.y) * height * 0.5,
+          )
+        : 0;
+      systemCanonicalRebaseCount += 1;
+    };
+
+    const updateTheoryFarBackgroundMask = () => {
+      const layer = systemResources?.farBackgroundLayer;
+      if (!layer || !systemResources) return;
+      systemResources.root.updateMatrixWorld(true);
+      const centerWorld = new THREE.Vector3().setFromMatrixPosition(systemResources.root.matrixWorld);
+      const centerNdc3 = centerWorld.clone().project(camera);
+      systemResources.root.getWorldScale(systemWorldScale);
+      const worldP95Radius = systemResources.cloudP95Radius * Math.max(
+        systemWorldScale.x,
+        systemWorldScale.y,
+        systemWorldScale.z,
+      );
+      const focusDistance = Math.max(0.001, camera.position.distanceTo(centerWorld));
+      const projectedP95RadiusNdc = worldP95Radius
+        * camera.zoom
+        / (focusDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5));
+      const mask = resolveGalaxyFarBackgroundMask(projectedP95RadiusNdc);
+      layer.setMask(
+        new THREE.Vector2(centerNdc3.x, centerNdc3.y),
+        mask.innerRadiusNdc,
+        mask.outerRadiusNdc,
+      );
+    };
+
     const applyExplorationBlend = (blend: number) => {
       exploration.blend = THREE.MathUtils.clamp(blend, 0, 1);
-      const retreatProgress = smoothStepRange(0, 0.78, exploration.blend);
-      const systemFade = smoothStepRange(0.2, 0.78, exploration.blend);
+      const theoryMode = sceneData.kind === "app15";
+      const retreatProgress = theoryMode
+        ? exploration.blend
+        : smoothStepRange(0, 0.78, exploration.blend);
+      const systemFade = theoryMode
+        ? smoothStepRange(0.76, 1, exploration.blend)
+        : smoothStepRange(0.2, 0.78, exploration.blend);
       const systemRevealProgress = smoothStepRange(
         APP17_SYSTEM_PAPER_REVEAL_START,
         APP17_SYSTEM_PAPER_REVEAL_END,
@@ -2454,35 +2884,51 @@ export function App17GalaxyCanvas({
       systemCloudOpacity = systemFade;
       const systemExpansion = smoothStepRange(0.16, 0.94, exploration.blend);
       const starExpansion = smoothStepRange(0.28, 0.88, exploration.blend);
-      overviewRoot.visible = true;
+      overviewRoot.visible = !theoryMode || exploration.blend < 1 - 1e-9;
       overviewRoot.scale.setScalar(1);
       overviewRoot.position.set(0, 0, 0);
       paperLayer.setExplorationProgress(retreatProgress, overviewSelectedTopicOpacity);
       hotspotLayer.setExplorationProgress(retreatProgress);
       applyAmbientVisuals();
       if (systemResources) {
-        const currentFocusDistance = Math.max(0.1, camera.position.distanceTo(exploration.focusWorld));
-        const distanceRatio = currentFocusDistance / Math.max(0.1, exploration.entryFocusDistance);
-        const scaleFloor = systemResources.entryScale * distanceRatio;
-        const starScaleFloor = systemResources.starEntryScale * distanceRatio;
-        const systemScale = Math.min(1, Math.max(
-          THREE.MathUtils.lerp(systemResources.entryScale, 1, systemExpansion),
-          scaleFloor,
-        ));
-        const starWorldScale = Math.min(1, Math.max(
-          THREE.MathUtils.lerp(systemResources.starEntryScale, 1, starExpansion),
-          starScaleFloor,
-        ));
-        systemResources.root.scale.setScalar(systemScale);
-        systemResources.star.object.scale.setScalar(starWorldScale / Math.max(0.001, systemScale));
+        systemResources.farBackgroundLayer?.setProgress(exploration.blend);
+        if (theoryMode) {
+          const systemScale = exploration.canonicalRebased
+            ? 1
+            : normalizeEntryScale(systemResources.entryScale);
+          systemResources.root.scale.setScalar(systemScale);
+          systemResources.star.object.scale.setScalar(1);
+        } else {
+          const currentFocusDistance = Math.max(0.1, camera.position.distanceTo(exploration.focusWorld));
+          const distanceRatio = currentFocusDistance / Math.max(0.1, exploration.entryFocusDistance);
+          const scaleFloor = systemResources.entryScale * distanceRatio;
+          const starScaleFloor = systemResources.starEntryScale * distanceRatio;
+          const systemScale = Math.min(1, Math.max(
+            THREE.MathUtils.lerp(systemResources.entryScale, 1, systemExpansion),
+            scaleFloor,
+          ));
+          const starWorldScale = Math.min(1, Math.max(
+            THREE.MathUtils.lerp(systemResources.starEntryScale, 1, starExpansion),
+            starScaleFloor,
+          ));
+          systemResources.root.scale.setScalar(systemScale);
+          systemResources.star.object.scale.setScalar(starWorldScale / Math.max(0.001, systemScale));
+        }
         systemResources.cloudLayer.setRevealProgress(systemRevealProgress);
         setGalaxySystemOpacity(systemResources, systemFade);
+        if (systemResources.farBackgroundLayer?.hasVisibleProxy()) {
+          systemResources.root.visible = true;
+        }
       }
       focusSprite.visible = exploration.blend < 0.02 && Boolean(selectedIdRef.current);
     };
 
     const beginEnterSystem = (now: number) => {
       const selectedHotspotId = selectedIdRef.current;
+      if (exploration.state === "entering" || exploration.state === "exiting") {
+        queuedEnterHotspotId = selectedHotspotId;
+        return;
+      }
       const cached = systemCache.get(systemCacheKey(selectedHotspotId));
       if (cached && activateSystemResources(cached)) {
         lastSystemCacheHit = true;
@@ -2506,11 +2952,17 @@ export function App17GalaxyCanvas({
         returnToSystemCenter(now);
         return;
       }
+      if (sceneData.kind === "app15" && exploration.canonicalRebased) {
+        performTheoryCanonicalRebase(false);
+      }
+      if (sceneData.kind === "app15" && systemResources) {
+        systemResources.representativeLayoutTarget = 0;
+      }
       const saved = exploration.savedOverviewPose ?? {
-        center: sceneData.camera.center.clone(),
-        distance: sceneData.camera.distance,
-        azimuth: sceneData.camera.azimuth,
-        elevation: sceneData.camera.elevation,
+        center: cameraPreset.center.clone(),
+        distance: cameraPreset.distance,
+        azimuth: cameraPreset.azimuth,
+        elevation: cameraPreset.elevation,
       };
       exploration.fromBlend = exploration.blend;
       exploration.toBlend = 0;
@@ -2542,9 +2994,9 @@ export function App17GalaxyCanvas({
         orbit,
         "reset-system",
         exploration.focusWorld,
-        exploration.systemDistance,
+        fixedSystemReview ? APP17_SYSTEM_DISTANCE : exploration.systemDistance,
         Math.PI / 4,
-        APP17_SYSTEM_ELEVATION,
+        fixedSystemReview ? THREE.MathUtils.degToRad(26) : APP17_SYSTEM_ELEVATION,
         now,
       );
     };
@@ -2687,7 +3139,15 @@ export function App17GalaxyCanvas({
       paperComposition.lastReturnDirection = 0;
       onPaperInspectionModeChangeRef.current?.("none", "");
       onPaperPanelStateChangeRef.current?.("hidden", "");
-      camera.near = 0.1;
+      camera.near = sceneData.kind === "app15"
+        ? Math.max(0.001, Math.min(0.02, cameraPreset.minDistance * 0.04))
+        : 0.1;
+      if (sceneData.kind === "app15" && cameraPreset.theoryFraming) {
+        camera.far = Math.max(
+          240,
+          cameraPreset.maxDistance + cameraPreset.theoryFraming.maxRadius * 4,
+        );
+      }
       camera.updateProjectionMatrix();
       savedSystemPose = null;
       paperFocusTargetDistance = 0;
@@ -3321,11 +3781,56 @@ export function App17GalaxyCanvas({
     };
 
     const pickHotspot = () => {
-      raycaster.params.Points.threshold = overviewPointPickThreshold;
-      raycaster.setFromCamera(pointer, camera);
-      const intersections = raycaster.intersectObject(hotspotLayer.object, false);
-      const index = intersections.length > 0 ? intersections[0].index ?? -1 : -1;
-      return index >= 0 ? hotspotByIndex[index]?.id ?? "" : "";
+      if (
+        sceneData.kind === "app15"
+        && exploration.blend >= 0.7
+      ) return "";
+      if (sceneData.kind !== "app15") {
+        raycaster.params.Points.threshold = overviewPointPickThreshold;
+        raycaster.setFromCamera(pointer, camera);
+        const intersections = raycaster.intersectObject(hotspotLayer.object, false);
+        const index = intersections.length > 0 ? intersections[0].index ?? -1 : -1;
+        return index >= 0 ? hotspotByIndex[index]?.id ?? "" : "";
+      }
+      root.updateMatrixWorld(true);
+      const pointerX = (pointer.x * 0.5 + 0.5) * width;
+      const pointerY = (-pointer.y * 0.5 + 0.5) * height;
+      const farBlend = overviewTheoryFarBlend();
+      let bestId = "";
+      let bestDistanceSquared = Number.POSITIVE_INFINITY;
+      let bestDepth = Number.POSITIVE_INFINITY;
+      for (const hotspot of hotspotByIndex) {
+        hotspotPickWorldPosition.copy(hotspot.position).applyMatrix4(root.matrixWorld);
+        hotspotPickProjectedPosition.copy(hotspotPickWorldPosition).project(camera);
+        if (
+          hotspotPickProjectedPosition.z < -1
+          || hotspotPickProjectedPosition.z > 1
+          || Math.abs(hotspotPickProjectedPosition.x) > 1
+          || Math.abs(hotspotPickProjectedPosition.y) > 1
+        ) continue;
+        const x = (hotspotPickProjectedPosition.x * 0.5 + 0.5) * width;
+        const y = (-hotspotPickProjectedPosition.y * 0.5 + 0.5) * height;
+        const deltaX = x - pointerX;
+        const deltaY = y - pointerY;
+        const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        const displayRadius = Math.max(
+          10,
+          hotspot.displaySize * THREE.MathUtils.lerp(1, 0.68, farBlend) * 0.5,
+        );
+        if (distanceSquared > displayRadius * displayRadius) continue;
+        if (
+          distanceSquared < bestDistanceSquared - 0.01
+          || (
+            Math.abs(distanceSquared - bestDistanceSquared) <= 0.01
+            && hotspotPickProjectedPosition.z < bestDepth
+          )
+        ) {
+          bestId = hotspot.id;
+          bestDistanceSquared = distanceSquared;
+          bestDepth = hotspotPickProjectedPosition.z;
+        }
+      }
+      return bestId;
     };
 
     const pickSystemPaper = (force = false) => {
@@ -3482,7 +3987,7 @@ export function App17GalaxyCanvas({
     };
 
     const scheduleAutoRotateResume = (now = performance.now()) => {
-      if (exploration.state !== "overview" || orbit.viewMode !== "overview" || !sceneData.camera.autoRotate) return;
+      if (exploration.state !== "overview" || orbit.viewMode !== "overview" || !cameraPreset.autoRotate) return;
       clearAutoResumeTimer();
       orbit.pauseUntil = now + APP17_INTERACTION_PAUSE_MS;
       autoResumeTimer = window.setTimeout(() => {
@@ -3545,16 +4050,16 @@ export function App17GalaxyCanvas({
           const azimuth = readingOrbit.azimuth - dx * 0.0045;
           const elevation = THREE.MathUtils.clamp(
             readingOrbit.elevation + dy * 0.0022,
-            sceneData.camera.minElevation,
-            sceneData.camera.maxElevation,
+            cameraPreset.minElevation,
+            cameraPreset.maxElevation,
           );
           paperJourney.setReadingOrbit({ azimuth, elevation });
         } else {
           orbit.azimuth -= dx * 0.0045;
           orbit.elevation = THREE.MathUtils.clamp(
             orbit.elevation + dy * 0.0022,
-            sceneData.camera.minElevation,
-            sceneData.camera.maxElevation,
+            cameraPreset.minElevation,
+            cameraPreset.maxElevation,
           );
         }
         invalidate(true);
@@ -3709,11 +4214,15 @@ export function App17GalaxyCanvas({
         return Math.abs(nextDistance - previousDistance) > 0.0001;
       }
       const minDistance = exploration.state === "system"
-        ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE : APP17_SYSTEM_MIN_DISTANCE
-        : sceneData.camera.minDistance;
+        ? systemViewMode === "paper-focus"
+          ? APP17_SYSTEM_PAPER_FOCUS_MIN_DISTANCE
+          : systemResources?.minDistance ?? APP17_SYSTEM_MIN_DISTANCE
+        : cameraPreset.minDistance;
       const maxDistance = exploration.state === "system"
-        ? systemViewMode === "paper-focus" ? APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE : APP17_SYSTEM_MAX_DISTANCE
-        : sceneData.camera.maxDistance;
+        ? systemViewMode === "paper-focus"
+          ? APP17_SYSTEM_PAPER_FOCUS_MAX_DISTANCE
+          : systemResources?.maxDistance ?? APP17_SYSTEM_MAX_DISTANCE
+        : cameraPreset.maxDistance;
       const previousTargetDistance = orbit.targetDistance;
       const nextTargetDistance = THREE.MathUtils.clamp(
         previousTargetDistance * Math.exp(normalizedDelta * APP17_WHEEL_SENSITIVITY),
@@ -3721,6 +4230,7 @@ export function App17GalaxyCanvas({
         maxDistance,
       );
       orbit.targetDistance = nextTargetDistance;
+      if (exploration.state === "overview") overviewFramingMode = "manual";
       lastNormalizedWheelDelta = normalizedDelta;
       lastWheelDistanceRatio = previousTargetDistance > 0
         ? nextTargetDistance / previousTargetDistance - 1
@@ -3795,34 +4305,36 @@ export function App17GalaxyCanvas({
           startOrbitTransition(
             orbit,
             "top",
-            sceneData.camera.center,
-            sceneData.camera.topDistance,
-            sceneData.camera.topAzimuth,
-            sceneData.camera.topElevation,
+            cameraPreset.center,
+            cameraPreset.topDistance,
+            cameraPreset.topAzimuth,
+            cameraPreset.topElevation,
             now,
           );
         } else if (commandRef.current.kind === "fit") {
           orbit.viewMode = "overview";
+          overviewFramingMode = "fit";
           orbit.pauseUntil = 0;
           startOrbitTransition(
             orbit,
             "fit",
-            sceneData.camera.center,
-            sceneData.camera.fitDistance,
-            sceneData.camera.fitAzimuth,
-            sceneData.camera.fitElevation,
+            cameraPreset.center,
+            cameraPreset.fitDistance,
+            cameraPreset.fitAzimuth,
+            cameraPreset.fitElevation,
             now,
           );
         } else {
           orbit.viewMode = "overview";
+          overviewFramingMode = "initial";
           orbit.pauseUntil = 0;
           startOrbitTransition(
             orbit,
             "reset",
-            sceneData.camera.center,
-            sceneData.camera.distance,
-            sceneData.camera.azimuth,
-            sceneData.camera.elevation,
+            cameraPreset.center,
+            cameraPreset.distance,
+            cameraPreset.azimuth,
+            cameraPreset.elevation,
             now,
           );
         }
@@ -3846,7 +4358,7 @@ export function App17GalaxyCanvas({
         && !orbit.dragging
         && !transitioningBefore
         && !zoomingBefore
-        && sceneData.camera.autoRotate
+        && cameraPreset.autoRotate
         && now >= orbit.pauseUntil;
       const frameInterval = orbit.dragging || transitioningBefore || zoomingBefore || fullscreenTransitioningBefore || inspectionTransitioningBefore
         ? APP17_INTERACTION_FRAME_INTERVAL
@@ -3979,8 +4491,22 @@ export function App17GalaxyCanvas({
           lastTransitionTailP95Ms = percentileNumber(transitionTailFrameTimes, 0.95);
           lastTransitionTailLongFrames50 = transitionTailFrameTimes.filter((value) => value > 50).length;
           applyExplorationBlend(1);
+          applyCameraOrbit(camera, orbit);
+          lastSystemEntryCameraTravelDistance = camera.position.distanceTo(systemEntryCameraStart);
+          measureTheoryWorldDrift();
+          performTheoryCanonicalRebase(true);
+          if (sceneData.kind === "app15" && systemResources) {
+            systemResources.representativeLayoutTarget = 1;
+          }
           setExplorationState("system", true);
           flushDeferredRepresentativeUpdate();
+          if (
+            queuedEnterHotspotId
+            && queuedEnterHotspotId !== systemResources?.hotspotId
+          ) {
+            queuedEnterHotspotId = "";
+            beginExitSystem(now);
+          }
         } else if (completed && activeTransition.kind === "reset-system") {
           if (paperJourney.getState() !== "idle") finishPaperFocusReset();
           else setSystemViewMode("system");
@@ -3992,7 +4518,7 @@ export function App17GalaxyCanvas({
           applyExplorationBlend(0);
           orbit.viewMode = exploration.savedOverviewViewMode;
           orbit.pauseUntil = exploration.savedOverviewPauseUntil;
-          if (orbit.viewMode === "overview" && sceneData.camera.autoRotate && orbit.pauseUntil > now) {
+          if (orbit.viewMode === "overview" && cameraPreset.autoRotate && orbit.pauseUntil > now) {
             clearAutoResumeTimer();
             autoResumeTimer = window.setTimeout(() => {
               autoResumeTimer = 0;
@@ -4010,12 +4536,17 @@ export function App17GalaxyCanvas({
           onSelectPaperRef.current?.("");
           setExplorationState("overview", true);
           flushDeferredRepresentativeUpdate();
+          if (queuedEnterHotspotId) {
+            const queued = queuedEnterHotspotId;
+            queuedEnterHotspotId = "";
+            if (selectedIdRef.current === queued) beginEnterSystem(now);
+          }
         }
       } else if (advanceOrbitZoom(orbit, elapsedMs)) {
         orbitChanged = true;
       }
       if (autoRotateActive) {
-        orbit.azimuth += sceneData.camera.autoRotateAzimuthStep * (elapsedMs / 50);
+        orbit.azimuth += cameraPreset.autoRotateAzimuthStep * (elapsedMs / 50);
         orbit.targetDistance = orbit.distance;
         orbitChanged = true;
       }
@@ -4030,6 +4561,7 @@ export function App17GalaxyCanvas({
 
       if (webglRenderNeeded) {
         applyRuntimeCamera();
+        applyOverviewDistanceLod();
         lastPaperQuaternionDeltaDegrees = paperJourneyFrame.state !== "idle"
           ? THREE.MathUtils.radToDeg(lastRenderedPaperCameraQuaternion.angleTo(camera.quaternion))
           : 0;
@@ -4050,6 +4582,7 @@ export function App17GalaxyCanvas({
         overviewRoot.updateMatrixWorld();
         root.updateMatrixWorld();
         systemResources?.root.updateMatrixWorld();
+        updateTheoryFarBackgroundMask();
         if (systemResources) {
           if (paperJourneyFrame.state !== "idle") {
             const historyCutoff = now - 600;
@@ -4229,7 +4762,7 @@ export function App17GalaxyCanvas({
             .applyMatrix4(camera.matrixWorldInverse);
           systemResources.root.getWorldScale(systemWorldScale);
           const systemDepthStrength = smoothStepRange(0.62, 1, exploration.blend);
-          const systemDepthRange = APP17_SYSTEM_RADIUS * Math.max(
+          const systemDepthRange = systemResources.frameRadius * Math.max(
             systemWorldScale.x,
             systemWorldScale.y,
             systemWorldScale.z,
@@ -4377,7 +4910,7 @@ export function App17GalaxyCanvas({
       if (labelDirty && now - lastLabelRenderTime >= APP17_LABEL_FRAME_INTERVAL) {
         const measurePerformance = ensureDiagnosticsActive(now);
         const labelStartedAt = measurePerformance ? performance.now() : 0;
-        if (exploration.blend > 0.55 && systemResources) {
+        if (exploration.blend >= 0.7 && systemResources) {
           drawSystemLabels(
             labelCanvas!,
             camera,
@@ -4493,7 +5026,7 @@ export function App17GalaxyCanvas({
       bloomPipeline?.dispose();
       renderer.dispose();
     };
-  }, [sceneData]);
+  }, [farBackgroundPayload, reviewCameraPreset, sceneData]);
 
   return (
     <>
@@ -4992,8 +5525,8 @@ function buildApp14ShowScene(payload: App17GalaxyPayload): App17SceneData {
   };
 }
 
-function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
-  const hotspots = assignHotspotVisualMetrics(payload.hotspots.map((hotspot) => ({
+function buildApp15TheoryHotspots(payload: App17GalaxyPayload) {
+  return assignHotspotVisualMetrics(payload.hotspots.map((hotspot) => ({
     id: hotspot.id,
     title: hotspot.title || hotspot.label || `${hotspot.field} ${hotspot.topicId}`,
     field: hotspot.field,
@@ -5007,6 +5540,10 @@ function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
     displaySize: 0,
     position: new THREE.Vector3(hotspot.x * APP15_COORD_SCALE, hotspot.y * APP15_COORD_SCALE, hotspot.z * APP15_COORD_SCALE),
   })), "app15");
+}
+
+function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
+  const hotspots = buildApp15TheoryHotspots(payload);
   const papers = payload.papers.map((paper) => ({
     paperId: paper.scopedPaperId || paper.rawPaperId,
     topicKey: `${paper.field}_${paper.topicId}`,
@@ -5019,40 +5556,193 @@ function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
     year: paper.year,
     ...paperVisualVariation(paper.scopedPaperId || paper.rawPaperId),
   }));
+  const theoryFraming = resolveTheorySceneFraming(hotspots, papers);
+  const camera = resolveTheoryCameraPreset({
+    center: theoryFraming.center,
+    framing: theoryFraming.framing,
+    aspect: 16 / 9,
+  });
 
   return {
     kind: "app15",
     papers,
     hotspots,
     orbitPositions: null,
-    camera: {
-      center: new THREE.Vector3(0, 0, 0),
-      distance: Math.hypot(8.7, 3.92),
-      minDistance: 1.7,
-      maxDistance: 14.8,
-      azimuth: Math.PI / 4,
-      elevation: Math.atan2(3.92, 8.7),
-      minElevation: THREE.MathUtils.degToRad(-80),
-      maxElevation: THREE.MathUtils.degToRad(88),
-      fitDistance: Math.hypot(10.2, 4.1),
-      fitAzimuth: Math.PI / 4,
-      fitElevation: Math.atan2(4.1, 10.2),
-      topDistance: Math.hypot(0.5, 11.4),
-      topAzimuth: Math.PI / 2,
-      topElevation: Math.atan2(11.4, 0.5),
-      zScale: 0.42,
-      autoRotate: false,
-      autoRotateAzimuthStep: 0,
+    camera,
+  };
+}
+
+function applyGalaxyReviewCameraPreset(
+  cameraPreset: App17CameraPreset,
+  sceneData: App17SceneData,
+  preset: GalaxyReviewCameraPreset,
+) {
+  if (sceneData.kind !== "app15") return;
+  const azimuth = Math.PI / 4;
+  const elevation = THREE.MathUtils.degToRad(18);
+  const center = cameraPreset.center.clone();
+  let points: THREE.Vector3[] = [
+    ...sceneData.hotspots.map((hotspot) => hotspot.position),
+    ...sceneData.papers.map((paper) => new THREE.Vector3(paper.x, paper.y, paper.z)),
+  ];
+
+  if (preset === "interwoven") {
+    const firstTopicKey = "Computational Biology_138";
+    const secondTopicKey = "Computational Biology_96";
+    const first = sceneData.hotspots.find((hotspot) => topicKeyFromHotspot(hotspot) === firstTopicKey);
+    const second = sceneData.hotspots.find((hotspot) => topicKeyFromHotspot(hotspot) === secondTopicKey);
+    if (first && second) {
+      center.copy(first.position).add(second.position).multiplyScalar(0.5);
+      points = [
+        first.position,
+        second.position,
+        ...sceneData.papers
+          .filter((paper) => paper.topicKey === firstTopicKey || paper.topicKey === secondTopicKey)
+          .map((paper) => new THREE.Vector3(paper.x, paper.y, paper.z)),
+      ];
+    }
+  }
+
+  const radii = points
+    .map((point) => point.distanceTo(center))
+    .sort((first, second) => first - second);
+  const p95Radius = percentileNumber(radii, 0.95) || 1;
+  const framingFraction = preset === "interwoven" ? 0.62 : 0.78;
+  const distance = Math.max(
+    0.25,
+    p95Radius / (
+      framingFraction
+      * Math.tan(THREE.MathUtils.degToRad(APP17_CAMERA_FOV) * 0.5)
+    ),
+  );
+  cameraPreset.center.copy(center);
+  cameraPreset.distance = distance;
+  cameraPreset.fitDistance = distance;
+  cameraPreset.azimuth = azimuth;
+  cameraPreset.elevation = elevation;
+  cameraPreset.fitAzimuth = azimuth;
+  cameraPreset.fitElevation = elevation;
+  cameraPreset.minDistance = Math.max(0.01, distance * 0.18);
+  cameraPreset.maxDistance = Math.max(distance * 2.2, distance + p95Radius * 2);
+  cameraPreset.autoRotate = false;
+}
+
+function resolveTheorySceneFraming(
+  hotspots: App17RenderPoint[],
+  papers: App17ParticlePoint[],
+) {
+  const hotspotXs = hotspots.map((hotspot) => hotspot.position.x).sort((a, b) => a - b);
+  const hotspotYs = hotspots.map((hotspot) => hotspot.position.y).sort((a, b) => a - b);
+  const hotspotZs = hotspots.map((hotspot) => hotspot.position.z).sort((a, b) => a - b);
+  const center = new THREE.Vector3(
+    percentileNumber(hotspotXs, 0.5),
+    percentileNumber(hotspotYs, 0.5),
+    percentileNumber(hotspotZs, 0.5),
+  );
+  const boundsMin = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+  const boundsMax = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+  const radii: number[] = [];
+  const include = (point: THREE.Vector3) => {
+    boundsMin.min(point);
+    boundsMax.max(point);
+    radii.push(point.distanceTo(center));
+  };
+  hotspots.forEach((hotspot) => include(hotspot.position));
+  papers.forEach((paper) => include(new THREE.Vector3(paper.x, paper.y, paper.z)));
+  radii.sort((a, b) => a - b);
+  const fallbackRadius = 0.5;
+  const maxRadius = Math.max(fallbackRadius, radii.at(-1) ?? fallbackRadius);
+  const p95Radius = Math.max(maxRadius * 0.1, percentileNumber(radii, 0.95));
+  const viewSelection = selectDeterministicTheoryView(
+    hotspots.map((hotspot) => ({
+      x: hotspot.position.x,
+      y: hotspot.position.y,
+      z: hotspot.position.z,
+      topicKey: `${hotspot.field}_${hotspot.topicId}`,
+      displaySize: hotspot.displaySize,
+    })),
+    papers.map((paper) => ({
+      x: paper.x,
+      y: paper.y,
+      z: paper.z,
+      topicKey: paper.topicKey,
+      displaySize: paper.size,
+    })),
+    16 / 9,
+    APP17_CAMERA_FOV,
+  );
+  return {
+    center,
+    framing: {
+      p95Radius,
+      maxRadius,
+      boundsMin,
+      boundsMax,
+      viewSelection,
+    } satisfies App17TheoryFraming,
+  };
+}
+
+function resolveTheoryCameraPreset({
+  center,
+  framing,
+  aspect,
+}: {
+  center: THREE.Vector3;
+  framing: App17TheoryFraming;
+  aspect: number;
+}): App17CameraPreset {
+  const verticalHalfFov = THREE.MathUtils.degToRad(APP17_CAMERA_FOV) * 0.5;
+  const verticalTangent = Math.tan(verticalHalfFov);
+  const horizontalTangent = verticalTangent * Math.max(0.1, aspect);
+  const limitingTangent = Math.max(0.01, Math.min(verticalTangent, horizontalTangent));
+  const distanceForCoverage = (coverage: number) => (
+    framing.maxRadius / Math.max(0.01, coverage * limitingTangent)
+  );
+  const aspectCorrection = Math.max(1, (16 / 9) / Math.max(0.1, aspect));
+  const optimizedDistance = framing.viewSelection.distance * aspectCorrection;
+  const distance = Math.max(optimizedDistance, framing.p95Radius * 0.6);
+  const fitDistance = Math.max(distance * 1.12, distanceForCoverage(0.86));
+  const maxDistance = Math.max(distance * 1.75, distanceForCoverage(0.45));
+  const minDistance = Math.max(0.01, framing.p95Radius * 0.2);
+  const azimuth = framing.viewSelection.azimuth;
+  const elevation = framing.viewSelection.elevation;
+  return {
+    center: center.clone(),
+    distance,
+    minDistance,
+    maxDistance,
+    azimuth,
+    elevation,
+    minElevation: THREE.MathUtils.degToRad(-80),
+    maxElevation: THREE.MathUtils.degToRad(88),
+    fitDistance,
+    fitAzimuth: azimuth,
+    fitElevation: elevation,
+    topDistance: fitDistance,
+    topAzimuth: THREE.MathUtils.degToRad(90),
+    topElevation: THREE.MathUtils.degToRad(87.5),
+    zScale: 1,
+    autoRotate: false,
+    autoRotateAzimuthStep: 0,
+    theoryFraming: {
+      p95Radius: framing.p95Radius,
+      maxRadius: framing.maxRadius,
+      boundsMin: framing.boundsMin.clone(),
+      boundsMax: framing.boundsMax.clone(),
+      viewSelection: { ...framing.viewSelection, score: { ...framing.viewSelection.score } },
     },
   };
 }
 
 function buildGalaxySystemResources(
   payload: App17GalaxyPayload,
+  farBackgroundPayload: App17GalaxyPayload,
   hotspot: App17GalaxyHotspotPoint,
   representativePapers: HotspotEvidencePaperSnapshot[],
   pixelRatio: number,
   visualMode: GalaxySystemVisualMode,
+  renderHotspots: App17RenderPoint[],
 ) {
   const topicPaperByCanonicalId = new Map<string, (typeof payload.papers)[number]>();
   let duplicatePaperCount = 0;
@@ -5067,14 +5757,41 @@ function buildGalaxySystemResources(
     topicPaperByCanonicalId.set(canonicalId, paper);
   });
   const topicPapers = [...topicPaperByCanonicalId.values()];
+  const semanticLayout = payload.paperLayoutVersion?.startsWith("semantic-") ?? false;
+  const naturalSemanticLayout = payload.paperLayoutScaleMode === "shared"
+    || payload.paperLayoutVersion === APP17_NATURAL_LAYOUT_VERSION;
   const relativePoints = topicPapers.map((paper) => ({
     paper,
-    vector: new THREE.Vector3(paper.x - hotspot.x, paper.y - hotspot.y, (paper.z - hotspot.z) * 0.62),
+    vector: new THREE.Vector3(
+      paper.x - hotspot.x,
+      paper.y - hotspot.y,
+      (paper.z - hotspot.z) * (semanticLayout ? 1 : 0.62),
+    ),
   }));
   const radii = relativePoints.map((item) => item.vector.length()).sort((a, b) => a - b);
   const percentileIndex = Math.min(radii.length - 1, Math.max(0, Math.floor(radii.length * 0.95)));
   const percentileRadius = radii[percentileIndex] || 1;
-  const coordinateScale = APP17_SYSTEM_RADIUS / Math.max(0.0001, percentileRadius);
+  const naturalLayoutUnitScale = naturalSemanticLayout
+    ? Math.max(0.0001, payload.paperLayoutSharedScale ?? 1)
+    : 1;
+  const coordinateScale = naturalSemanticLayout
+    ? APP17_SYSTEM_RADIUS /
+      Math.max(
+        0.0001,
+        (payload.paperLayoutLocalP95Radius ?? 10.5) * naturalLayoutUnitScale,
+      )
+    : APP17_SYSTEM_RADIUS / Math.max(0.0001, percentileRadius);
+  const scaledRadii = radii.map((radius) => radius * coordinateScale);
+  const p99Index = Math.min(
+    scaledRadii.length - 1,
+    Math.max(0, Math.floor(scaledRadii.length * 0.99)),
+  );
+  const ordinaryCloudP99Radius = scaledRadii[p99Index] || APP17_SYSTEM_RADIUS;
+  const frameRadius = Math.max(APP17_SYSTEM_RADIUS, ordinaryCloudP99Radius);
+  const limitingTangent = Math.max(0.01, Math.tan(THREE.MathUtils.degToRad(APP17_CAMERA_FOV) * 0.5));
+  const initialDistance = frameRadius / (0.72 * limitingTangent);
+  const minDistance = Math.max(APP17_SYSTEM_STAR_RADIUS * 1.35, frameRadius * 0.2);
+  const maxDistance = frameRadius / (0.45 * limitingTangent);
   const canonicalPaperIdById = new Map<string, string>();
   relativePoints.forEach((item) => {
     const canonicalId = item.paper.scopedPaperId || item.paper.rawPaperId;
@@ -5090,7 +5807,7 @@ function buildGalaxySystemResources(
     .map((item) => {
       const paperId = item.paper.scopedPaperId || item.paper.rawPaperId;
       const position = item.vector.clone().multiplyScalar(coordinateScale);
-      if (position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
+      if (!semanticLayout && position.length() < APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS) {
         if (position.lengthSq() < 1e-12) {
           const random = seededRandom(stableHash(`${paperId}:star-exclusion`));
           position.set(random() - 0.5, random() - 0.5, random() - 0.5);
@@ -5115,6 +5832,19 @@ function buildGalaxySystemResources(
 
   const root = new THREE.Group();
   root.visible = false;
+  const farBackgroundLayer = visualMode === "theory"
+    ? createTheoryFarBackgroundLayer(
+        buildGalaxyFarBackgroundPlan(
+          farBackgroundPayload.hotspots,
+          farBackgroundPayload.papers,
+          hotspot.id,
+          coordinateScale,
+        ),
+        renderHotspots,
+        pixelRatio,
+      )
+    : undefined;
+  if (farBackgroundLayer) root.add(farBackgroundLayer.object);
   const cloudLayer = createSystemPaperLayer(cloudPoints, pixelRatio, false);
   root.add(cloudLayer.object);
   const star = createSystemStar(hotspot);
@@ -5126,6 +5856,7 @@ function buildGalaxySystemResources(
     visualMode,
     root,
     cloudLayer,
+    farBackgroundLayer,
     star,
     representativePapers: [],
     canonicalPaperIdById,
@@ -5134,18 +5865,54 @@ function buildGalaxySystemResources(
     hiddenRepresentativeCount: 0,
     unresolvedRepresentativeCount: 0,
     representativeSignature: "",
+    representativeLayoutBlend: visualMode === "theory" ? 0 : 1,
+    representativeLayoutTarget: visualMode === "theory" ? 0 : 1,
+    opacity: 0,
     activeTimeSeconds: 0,
     entryScale: 1,
     starEntryScale: 1,
+    coordinateScale,
+    cloudP95Radius: scaledRadii[percentileIndex] || APP17_SYSTEM_RADIUS,
+    frameRadius,
+    initialDistance,
+    minDistance,
+    maxDistance,
     updateAnimation: (elapsedSeconds, motionEnabled, frozenPaperIds) => {
       const elapsed = THREE.MathUtils.clamp(elapsedSeconds, 0, 0.12);
       let positionsChanged = false;
-      if (motionEnabled && elapsed > 0) {
+      const previousLayoutBlend = resources.representativeLayoutBlend;
+      if (resources.representativeLayoutTarget > resources.representativeLayoutBlend) {
+        resources.representativeLayoutBlend = Math.min(
+          resources.representativeLayoutTarget,
+          resources.representativeLayoutBlend + elapsed / 0.3,
+        );
+      } else if (resources.representativeLayoutTarget < resources.representativeLayoutBlend) {
+        resources.representativeLayoutBlend = Math.max(
+          resources.representativeLayoutTarget,
+          resources.representativeLayoutBlend - elapsed / 0.3,
+        );
+      }
+      const layoutChanged = Math.abs(previousLayoutBlend - resources.representativeLayoutBlend) > 1e-9;
+      if (layoutChanged) {
+        resources.orbitLayer?.setOpacity(resources.opacity * smootherStep(resources.representativeLayoutBlend));
+      }
+      if ((motionEnabled || layoutChanged) && elapsed > 0) {
         resources.activeTimeSeconds += elapsed;
         resources.representativePapers.forEach((paper) => {
-          if (frozenPaperIds.has(paper.id)) return;
-          paper.orbit.phase = (paper.orbit.phase + paper.orbit.angularSpeed * elapsed) % (Math.PI * 2);
-          galaxySystemOrbitPoint(paper.orbit, paper.orbit.phase, paper.position);
+          if (!layoutChanged && frozenPaperIds.has(paper.id)) return;
+          if (
+            motionEnabled
+            && !frozenPaperIds.has(paper.id)
+            && resources.representativeLayoutBlend > 0.999
+          ) {
+            paper.orbit.phase = (paper.orbit.phase + paper.orbit.angularSpeed * elapsed) % (Math.PI * 2);
+          }
+          galaxySystemOrbitPoint(paper.orbit, paper.orbit.phase, paper.orbitPosition);
+          paper.position.lerpVectors(
+            paper.semanticPosition,
+            paper.orbitPosition,
+            smootherStep(resources.representativeLayoutBlend),
+          );
           positionsChanged = true;
         });
         if (positionsChanged) {
@@ -5173,6 +5940,7 @@ function buildGalaxySystemResources(
       const orbitHighlightChanged = resources.orbitLayer?.advanceHighlight(elapsed, !motionEnabled) ?? false;
       star.setAnimation(resources.activeTimeSeconds, motionEnabled ? 1 : 0);
       return positionsChanged
+        || layoutChanged
         || orbitHighlightChanged
         || cloudFocusChanged
         || representativeFocusChanged
@@ -5183,6 +5951,7 @@ function buildGalaxySystemResources(
       resources.representativeLayer?.dispose();
       resources.representativeBloomLayer?.dispose();
       resources.orbitLayer?.dispose();
+      resources.farBackgroundLayer?.dispose();
       star.dispose();
     },
   };
@@ -5228,7 +5997,7 @@ function buildSystemRepresentativeBundle(
     .filter((year): year is number => Number.isFinite(year));
   const minimumYear = knownYears.length > 0 ? Math.min(...knownYears) : 0;
   const maximumYear = knownYears.length > 0 ? Math.max(...knownYears) : 0;
-  representatives.forEach(({ paper, rank }) => {
+  representatives.forEach(({ paper, rank, canonicalId }) => {
     const count = Math.max(1, representatives.length);
     const radius = count === 1 ? 1.35 : 0.82 + (rank / Math.max(1, count - 1)) * 2.18;
     const random = seededRandom(stableHash(paper.id));
@@ -5268,7 +6037,12 @@ function buildSystemRepresentativeBundle(
       orbitRanks.push(rank, rank);
       orbitAlphas.push(orbitAlpha, orbitAlpha);
     }
-    const position = galaxySystemOrbitPoint(orbit, phase);
+    const orbitPosition = galaxySystemOrbitPoint(orbit, phase);
+    const semanticPosition = resources.cloudLayer.getPaperById(canonicalId)?.position.clone()
+      ?? orbitPosition.clone();
+    const position = resources.visualMode === "theory"
+      ? semanticPosition.clone()
+      : orbitPosition.clone();
     const displaySize = (
       7 + Math.pow(1 - Math.min(9, rank) / 9, 0.72) * 7
     ) * APP17_REPRESENTATIVE_SYSTEM_SIZE_SCALE;
@@ -5295,6 +6069,8 @@ function buildSystemRepresentativeBundle(
       displaySize,
       color: representativeYearColor(paper.year, minimumYear, maximumYear),
       orbit,
+      semanticPosition,
+      orbitPosition,
       position,
     });
   });
@@ -5359,6 +6135,13 @@ function commitSystemRepresentativeBundle(
   resources.hiddenRepresentativeCount = bundle.hiddenRepresentativeCount;
   resources.unresolvedRepresentativeCount = bundle.unresolvedRepresentativeCount;
   resources.representativeSignature = bundle.signature;
+  if (resources.visualMode === "theory") {
+    resources.representativeLayoutBlend = 0;
+    resources.representativeLayoutTarget = 0;
+  } else {
+    resources.representativeLayoutBlend = 1;
+    resources.representativeLayoutTarget = 1;
+  }
   resources.cloudLayer.setHiddenPaperIds(bundle.hiddenRepresentativeIds);
   if (resources.representativeLayer) resources.root.add(resources.representativeLayer.object);
   if (resources.representativeBloomLayer) resources.root.add(resources.representativeBloomLayer.object);
@@ -6028,11 +6811,12 @@ function galaxySystemOrbitPoint(orbit: GalaxySystemOrbit, angle: number, target 
 }
 
 function setGalaxySystemOpacity(resources: GalaxySystemResources, opacity: number) {
+  resources.opacity = opacity;
   resources.root.visible = opacity > 0.001;
   resources.cloudLayer.setOpacity(opacity);
   resources.representativeLayer?.setOpacity(opacity);
   resources.representativeBloomLayer?.setOpacity(opacity);
-  resources.orbitLayer?.setOpacity(opacity);
+  resources.orbitLayer?.setOpacity(opacity * smootherStep(resources.representativeLayoutBlend));
   resources.star.setOpacity(opacity);
 }
 
@@ -8032,6 +8816,7 @@ function createPaperLayer(
   const alphas = new Float32Array(count);
   const originalAlphas = new Float32Array(count);
   const selectedMasks = new Float32Array(count);
+  const crossfadeMasks = new Float32Array(count);
   const topicKeys = papers.map((paper) => paper.topicKey);
   const paperIds = papers.map((paper) => paper.paperId);
   const color = new THREE.Color();
@@ -8059,6 +8844,8 @@ function createPaperLayer(
   geometry.setAttribute("pointAlpha", alphaAttribute);
   const selectedMaskAttribute = new THREE.BufferAttribute(selectedMasks, 1);
   geometry.setAttribute("selectedMask", selectedMaskAttribute);
+  const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);
+  geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);
 
   const material = createPaperMaterial(pixelRatio, kind);
   const object = new THREE.Points(geometry, material);
@@ -8082,8 +8869,17 @@ function createPaperLayer(
       material.uniforms.uExplorationProgress.value = progress;
       material.uniforms.uSelectedTopicOpacity.value = THREE.MathUtils.clamp(selectedTopicOpacity, 0, 1);
     },
+    setTheoryFarTransitionModes: (modeByTopic: Map<string, "retreat" | "crossfade">) => {
+      for (let index = 0; index < crossfadeMasks.length; index += 1) {
+        crossfadeMasks[index] = modeByTopic.get(topicKeys[index]) === "crossfade" ? 1 : 0;
+      }
+      crossfadeMaskAttribute.needsUpdate = true;
+    },
     setFarRotation: (rotationAngle: number) => {
       material.uniforms.uFarRotationAngle.value = rotationAngle;
+    },
+    setOverviewFarBlend: (blend: number) => {
+      material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
     },
     setSystemDepthCue: (centerViewDepth: number, depthRange: number, strength: number) => {
       material.uniforms.uSystemCenterViewDepth.value = centerViewDepth;
@@ -8124,6 +8920,7 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
   const breathPhases = new Float32Array(count);
   const breathSpeeds = new Float32Array(count);
   const selectedMasks = new Float32Array(count);
+  const crossfadeMasks = new Float32Array(count);
   const topicKeys = hotspots.map((hotspot) => topicKeyFromHotspot(hotspot));
   const color = new THREE.Color();
   const rayRankById = new Map(
@@ -8165,6 +8962,8 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
   geometry.setAttribute("breathSpeed", new THREE.BufferAttribute(breathSpeeds, 1));
   const selectedMaskAttribute = new THREE.BufferAttribute(selectedMasks, 1);
   geometry.setAttribute("selectedMask", selectedMaskAttribute);
+  const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);
+  geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);
 
   const material = createHotspotPointSourceMaterial(pixelRatio, kind);
   const object = new THREE.Points(geometry, material);
@@ -8188,16 +8987,414 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
     setExplorationProgress: (progress: number) => {
       material.uniforms.uExplorationProgress.value = progress;
     },
+    setTheoryFarTransitionModes: (modeByTopic: Map<string, "retreat" | "crossfade">) => {
+      for (let index = 0; index < crossfadeMasks.length; index += 1) {
+        crossfadeMasks[index] = modeByTopic.get(topicKeys[index]) === "crossfade" ? 1 : 0;
+      }
+      crossfadeMaskAttribute.needsUpdate = true;
+    },
     setAmbientState: (timeSeconds: number, rotationAngle: number, strength: number) => {
       material.uniforms.uAmbientTime.value = timeSeconds;
       material.uniforms.uFarRotationAngle.value = rotationAngle;
       material.uniforms.uAmbientStrength.value = strength;
+    },
+    setOverviewFarBlend: (blend: number) => {
+      material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
     },
     dispose: () => {
       geometry.dispose();
       material.dispose();
     },
   };
+}
+
+function createTheoryFarBackgroundLayer(
+  plan: GalaxyFarBackgroundPlan,
+  renderHotspots: App17RenderPoint[],
+  pixelRatio: number,
+) {
+  type FarPaperRuntime = {
+    hotspot: GalaxyFarBackgroundHotspotPlan;
+    localOffset: THREE.Vector3;
+  };
+
+  const root = new THREE.Group();
+  root.name = "theory-far-background";
+  root.visible = false;
+  const renderHotspotById = new Map(renderHotspots.map((hotspot) => [hotspot.id, hotspot]));
+  const hotspotPositions = new Float32Array(plan.hotspots.length * 3);
+  const hotspotColors = new Float32Array(plan.hotspots.length * 3);
+  const hotspotSizes = new Float32Array(plan.hotspots.length);
+  const hotspotReveals = new Float32Array(plan.hotspots.length);
+  const hotspotBreathPhases = new Float32Array(plan.hotspots.length);
+  const hotspotBreathSpeeds = new Float32Array(plan.hotspots.length);
+  const color = new THREE.Color();
+  plan.hotspots.forEach((hotspot, index) => {
+    const renderHotspot = renderHotspotById.get(hotspot.hotspotId);
+    color.set(hotspot.color || renderHotspot?.color || "#dce9ff");
+    hotspotColors[index * 3] = color.r;
+    hotspotColors[index * 3 + 1] = color.g;
+    hotspotColors[index * 3 + 2] = color.b;
+    hotspotSizes[index] = renderHotspot?.displaySize ?? Math.max(6, hotspot.sourceSize);
+    hotspotBreathPhases[index] = hotspot.breathPhase;
+    hotspotBreathSpeeds[index] = Math.PI * 2 / Math.max(1, hotspot.breathingPeriodSeconds);
+  });
+
+  const paperRuntime: FarPaperRuntime[] = [];
+  plan.hotspots.forEach((hotspot) => {
+    hotspot.papers.forEach((paper) => {
+      paperRuntime.push({
+        hotspot,
+        localOffset: new THREE.Vector3(...paper.localOffset),
+      });
+    });
+  });
+  const paperPositions = new Float32Array(paperRuntime.length * 3);
+  const paperColors = new Float32Array(paperRuntime.length * 3);
+  const paperSizes = new Float32Array(paperRuntime.length);
+  const paperReveals = new Float32Array(paperRuntime.length);
+  const paperBreathPhases = new Float32Array(paperRuntime.length);
+  const paperBreathSpeeds = new Float32Array(paperRuntime.length);
+  let paperIndex = 0;
+  plan.hotspots.forEach((hotspot) => {
+    hotspot.papers.forEach((paper) => {
+      color.set(paper.color || hotspot.color || "#a8c8ff");
+      paperColors[paperIndex * 3] = color.r;
+      paperColors[paperIndex * 3 + 1] = color.g;
+      paperColors[paperIndex * 3 + 2] = color.b;
+      paperSizes[paperIndex] = THREE.MathUtils.clamp(paper.size || 2.2, 2.2, 3.6);
+      paperBreathPhases[paperIndex] = hotspot.breathPhase;
+      paperBreathSpeeds[paperIndex] = Math.PI * 2 / Math.max(1, hotspot.breathingPeriodSeconds);
+      paperIndex += 1;
+    });
+  });
+
+  const paperGeometry = new THREE.BufferGeometry();
+  const paperPositionAttribute = new THREE.BufferAttribute(paperPositions, 3);
+  paperPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+  const paperRevealAttribute = new THREE.BufferAttribute(paperReveals, 1);
+  paperRevealAttribute.setUsage(THREE.DynamicDrawUsage);
+  paperGeometry.setAttribute("position", paperPositionAttribute);
+  paperGeometry.setAttribute("color", new THREE.BufferAttribute(paperColors, 3));
+  paperGeometry.setAttribute("pointSize", new THREE.BufferAttribute(paperSizes, 1));
+  paperGeometry.setAttribute("reveal", paperRevealAttribute);
+  paperGeometry.setAttribute("breathPhase", new THREE.BufferAttribute(paperBreathPhases, 1));
+  paperGeometry.setAttribute("breathSpeed", new THREE.BufferAttribute(paperBreathSpeeds, 1));
+  const paperMaterial = createTheoryFarBackgroundPaperMaterial(pixelRatio);
+  const paperObject = new THREE.Points(paperGeometry, paperMaterial);
+  paperObject.name = "theory-far-background-papers";
+  paperObject.frustumCulled = false;
+  paperObject.renderOrder = -20;
+  paperObject.raycast = () => undefined;
+  root.add(paperObject);
+
+  const hotspotGeometry = new THREE.BufferGeometry();
+  const hotspotPositionAttribute = new THREE.BufferAttribute(hotspotPositions, 3);
+  hotspotPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+  const hotspotRevealAttribute = new THREE.BufferAttribute(hotspotReveals, 1);
+  hotspotRevealAttribute.setUsage(THREE.DynamicDrawUsage);
+  hotspotGeometry.setAttribute("position", hotspotPositionAttribute);
+  hotspotGeometry.setAttribute("color", new THREE.BufferAttribute(hotspotColors, 3));
+  hotspotGeometry.setAttribute("pointSize", new THREE.BufferAttribute(hotspotSizes, 1));
+  hotspotGeometry.setAttribute("reveal", hotspotRevealAttribute);
+  hotspotGeometry.setAttribute("breathPhase", new THREE.BufferAttribute(hotspotBreathPhases, 1));
+  hotspotGeometry.setAttribute("breathSpeed", new THREE.BufferAttribute(hotspotBreathSpeeds, 1));
+  const hotspotMaterial = createTheoryFarBackgroundHotspotMaterial(pixelRatio);
+  const hotspotObject = new THREE.Points(hotspotGeometry, hotspotMaterial);
+  hotspotObject.name = "theory-far-background-hotspots";
+  hotspotObject.frustumCulled = false;
+  hotspotObject.renderOrder = -19;
+  hotspotObject.raycast = () => undefined;
+  root.add(hotspotObject);
+
+  const currentCenterByHotspotId = new Map<string, THREE.Vector3>();
+  const scratchCenter = new THREE.Vector3();
+  let progress = 0;
+  let maximumReveal = 0;
+  let maskInnerRadiusNdc = 0.18;
+  let maskOuterRadiusNdc = 0.3;
+  const maskCenterNdc = new THREE.Vector2();
+
+  const updateGeometry = (nextProgress: number) => {
+    progress = THREE.MathUtils.clamp(nextProgress, 0, 1);
+    maximumReveal = 0;
+    plan.hotspots.forEach((hotspot, index) => {
+      const transition = resolveGalaxyFarBackgroundTransition(progress, hotspot.transitionMode);
+      scratchCenter.set(
+        THREE.MathUtils.lerp(hotspot.startCenter[0], hotspot.targetCenter[0], transition.centerProgress),
+        THREE.MathUtils.lerp(hotspot.startCenter[1], hotspot.targetCenter[1], transition.centerProgress),
+        THREE.MathUtils.lerp(hotspot.startCenter[2], hotspot.targetCenter[2], transition.centerProgress),
+      );
+      currentCenterByHotspotId.set(hotspot.hotspotId, scratchCenter.clone());
+      hotspotPositions[index * 3] = scratchCenter.x;
+      hotspotPositions[index * 3 + 1] = scratchCenter.y;
+      hotspotPositions[index * 3 + 2] = scratchCenter.z;
+      hotspotReveals[index] = transition.revealProgress;
+      maximumReveal = Math.max(maximumReveal, transition.revealProgress);
+    });
+    paperRuntime.forEach((paper, index) => {
+      const center = currentCenterByHotspotId.get(paper.hotspot.hotspotId);
+      const transition = resolveGalaxyFarBackgroundTransition(progress, paper.hotspot.transitionMode);
+      if (center) {
+        paperPositions[index * 3] = center.x + paper.localOffset.x;
+        paperPositions[index * 3 + 1] = center.y + paper.localOffset.y;
+        paperPositions[index * 3 + 2] = center.z + paper.localOffset.z;
+      }
+      paperReveals[index] = transition.revealProgress;
+    });
+    hotspotPositionAttribute.needsUpdate = true;
+    hotspotRevealAttribute.needsUpdate = true;
+    paperPositionAttribute.needsUpdate = true;
+    paperRevealAttribute.needsUpdate = true;
+    root.visible = maximumReveal > 0.001;
+  };
+  updateGeometry(0);
+
+  return {
+    object: root,
+    plan,
+    setProgress: updateGeometry,
+    hasVisibleProxy: () => maximumReveal > 0.001,
+    setPixelRatio: (nextPixelRatio: number) => {
+      paperMaterial.uniforms.uPixelRatio.value = nextPixelRatio;
+      hotspotMaterial.uniforms.uPixelRatio.value = nextPixelRatio;
+    },
+    setAnimation: (timeSeconds: number, motionStrength: number) => {
+      paperMaterial.uniforms.uAmbientTime.value = timeSeconds;
+      paperMaterial.uniforms.uMotionStrength.value = THREE.MathUtils.clamp(motionStrength, 0, 1);
+      hotspotMaterial.uniforms.uAmbientTime.value = timeSeconds;
+      hotspotMaterial.uniforms.uMotionStrength.value = THREE.MathUtils.clamp(motionStrength, 0, 1);
+    },
+    setMask: (centerNdc: THREE.Vector2, innerRadiusNdc: number, outerRadiusNdc: number) => {
+      maskCenterNdc.copy(centerNdc);
+      maskInnerRadiusNdc = innerRadiusNdc;
+      maskOuterRadiusNdc = outerRadiusNdc;
+      paperMaterial.uniforms.uMaskCenterNdc.value.copy(centerNdc);
+      paperMaterial.uniforms.uMaskInnerRadiusNdc.value = innerRadiusNdc;
+      paperMaterial.uniforms.uMaskOuterRadiusNdc.value = outerRadiusNdc;
+      hotspotMaterial.uniforms.uMaskCenterNdc.value.copy(centerNdc);
+      hotspotMaterial.uniforms.uMaskInnerRadiusNdc.value = innerRadiusNdc;
+      hotspotMaterial.uniforms.uMaskOuterRadiusNdc.value = outerRadiusNdc;
+    },
+    getSamplePosition: () => (
+      plan.hotspots.length > 0
+        ? new THREE.Vector3(
+            hotspotPositions[0],
+            hotspotPositions[1],
+            hotspotPositions[2],
+          )
+        : undefined
+    ),
+    getDiagnostics: (camera?: THREE.Camera, worldRoot?: THREE.Object3D) => {
+      let centralMaskVisibleCount = 0;
+      if (camera && worldRoot && maximumReveal > 0.001) {
+        worldRoot.updateMatrixWorld(true);
+        const worldPosition = new THREE.Vector3();
+        const projected = new THREE.Vector3();
+        plan.hotspots.forEach((hotspot, index) => {
+          if (hotspotReveals[index] <= 0.001) return;
+          worldPosition
+            .set(
+              hotspotPositions[index * 3],
+              hotspotPositions[index * 3 + 1],
+              hotspotPositions[index * 3 + 2],
+            )
+            .applyMatrix4(worldRoot.matrixWorld);
+          projected.copy(worldPosition).project(camera);
+          const distance = Math.hypot(
+            projected.x - maskCenterNdc.x,
+            projected.y - maskCenterNdc.y,
+          );
+          const maskVisibility = smoothStepRange(maskInnerRadiusNdc, maskOuterRadiusNdc, distance);
+          if (distance <= maskInnerRadiusNdc && maskVisibility > 1e-9) centralMaskVisibleCount += 1;
+        });
+      }
+      return {
+        hotspotCount: plan.hotspots.length,
+        paperSampleCount: plan.paperSampleCount,
+        retreatHotspotCount: plan.retreatHotspotCount,
+        crossfadeHotspotCount: plan.crossfadeHotspotCount,
+        nearestRadius: plan.nearestTargetRadius,
+        farthestRadius: plan.farthestTargetRadius,
+        localOffsetError: plan.maximumLocalOffsetError,
+        centralMaskVisibleCount,
+        paperBrightnessMin: GALAXY_FAR_BACKGROUND_PAPER_OPACITY
+          * (1 - GALAXY_FAR_BACKGROUND_PAPER_BREATH_AMPLITUDE),
+        paperBrightnessMax: GALAXY_FAR_BACKGROUND_PAPER_OPACITY
+          * (1 + GALAXY_FAR_BACKGROUND_PAPER_BREATH_AMPLITUDE),
+        hotspotCoreBrightnessMin: GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_OPACITY
+          * (1 - GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_BREATH_AMPLITUDE),
+        hotspotCoreBrightnessMax: GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_OPACITY
+          * (1 + GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_BREATH_AMPLITUDE),
+        hotspotHaloBrightnessMin: GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_OPACITY
+          * (1 - GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_BREATH_AMPLITUDE),
+        hotspotHaloBrightnessMax: GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_OPACITY
+          * (1 + GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_BREATH_AMPLITUDE),
+        progress,
+      };
+    },
+    dispose: () => {
+      paperGeometry.dispose();
+      paperMaterial.dispose();
+      hotspotGeometry.dispose();
+      hotspotMaterial.dispose();
+    },
+  };
+}
+
+function createTheoryFarBackgroundPaperMaterial(pixelRatio: number) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: pixelRatio },
+      uAmbientTime: { value: 0 },
+      uMotionStrength: { value: 1 },
+      uMaskCenterNdc: { value: new THREE.Vector2() },
+      uMaskInnerRadiusNdc: { value: 0.18 },
+      uMaskOuterRadiusNdc: { value: 0.3 },
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.NormalBlending,
+    toneMapped: false,
+    vertexShader: `
+      attribute vec3 color;
+      attribute float pointSize;
+      attribute float reveal;
+      attribute float breathPhase;
+      attribute float breathSpeed;
+      uniform float uPixelRatio;
+      uniform float uAmbientTime;
+      uniform float uMotionStrength;
+      uniform vec2 uMaskCenterNdc;
+      uniform float uMaskInnerRadiusNdc;
+      uniform float uMaskOuterRadiusNdc;
+      varying vec3 vColor;
+      varying float vAlpha;
+      varying float vMaskVisibility;
+      void main() {
+        vColor = color;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vec4 clipPosition = projectionMatrix * mvPosition;
+        vec2 projectedNdc = clipPosition.xy / max(0.0001, clipPosition.w);
+        vMaskVisibility = smoothstep(
+          uMaskInnerRadiusNdc,
+          uMaskOuterRadiusNdc,
+          distance(projectedNdc, uMaskCenterNdc)
+        );
+        float breath = sin(uAmbientTime * breathSpeed + breathPhase)
+          * ${GALAXY_FAR_BACKGROUND_PAPER_BREATH_AMPLITUDE.toFixed(3)}
+          * uMotionStrength;
+        vAlpha = ${GALAXY_FAR_BACKGROUND_PAPER_OPACITY.toFixed(3)} * reveal * (1.0 + breath);
+        float perspectiveScale = clamp(12.0 / max(1.0, -mvPosition.z), 0.10, 1.0);
+        gl_PointSize = max(
+          0.45,
+          pointSize * ${GALAXY_FAR_BACKGROUND_PAPER_SIZE_SCALE.toFixed(2)} * perspectiveScale
+        ) * uPixelRatio;
+        gl_Position = clipPosition;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vAlpha;
+      varying float vMaskVisibility;
+      void main() {
+        vec2 centered = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(centered);
+        float antialias = max(fwidth(radius), 0.018);
+        float disc = 1.0 - smoothstep(1.0 - antialias, 1.0 + antialias, radius);
+        float core = exp(-radius * radius * 16.0);
+        float alpha = disc * vAlpha * (0.28 + core * 0.72) * vMaskVisibility;
+        if (alpha < 0.0002) discard;
+        gl_FragColor = vec4(mix(vColor, vec3(1.0), core * 0.58), alpha);
+      }
+    `,
+  });
+}
+
+function createTheoryFarBackgroundHotspotMaterial(pixelRatio: number) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: pixelRatio },
+      uAmbientTime: { value: 0 },
+      uMotionStrength: { value: 1 },
+      uMaskCenterNdc: { value: new THREE.Vector2() },
+      uMaskInnerRadiusNdc: { value: 0.18 },
+      uMaskOuterRadiusNdc: { value: 0.3 },
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.NormalBlending,
+    toneMapped: false,
+    vertexShader: `
+      attribute vec3 color;
+      attribute float pointSize;
+      attribute float reveal;
+      attribute float breathPhase;
+      attribute float breathSpeed;
+      uniform float uPixelRatio;
+      uniform float uAmbientTime;
+      uniform float uMotionStrength;
+      uniform vec2 uMaskCenterNdc;
+      uniform float uMaskInnerRadiusNdc;
+      uniform float uMaskOuterRadiusNdc;
+      varying vec3 vColor;
+      varying float vReveal;
+      varying float vCoreBreath;
+      varying float vHaloBreath;
+      varying float vMaskVisibility;
+      void main() {
+        vColor = color;
+        vReveal = reveal;
+        float breathWave = sin(uAmbientTime * breathSpeed + breathPhase) * uMotionStrength;
+        vCoreBreath = 1.0
+          + breathWave * ${GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_BREATH_AMPLITUDE.toFixed(3)};
+        vHaloBreath = 1.0
+          + breathWave * ${GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_BREATH_AMPLITUDE.toFixed(3)};
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vec4 clipPosition = projectionMatrix * mvPosition;
+        vec2 projectedNdc = clipPosition.xy / max(0.0001, clipPosition.w);
+        vMaskVisibility = smoothstep(
+          uMaskInnerRadiusNdc,
+          uMaskOuterRadiusNdc,
+          distance(projectedNdc, uMaskCenterNdc)
+        );
+        float perspectiveScale = clamp(14.0 / max(1.0, -mvPosition.z), 0.12, 1.0);
+        gl_PointSize = max(
+          0.85,
+          pointSize * ${GALAXY_FAR_BACKGROUND_HOTSPOT_SIZE_SCALE.toFixed(2)} * perspectiveScale
+        ) * uPixelRatio;
+        gl_Position = clipPosition;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vReveal;
+      varying float vCoreBreath;
+      varying float vHaloBreath;
+      varying float vMaskVisibility;
+      void main() {
+        vec2 uv = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(uv);
+        float radiusSquared = dot(uv, uv);
+        float edge = 1.0 - smoothstep(0.74, 1.0, radius);
+        float halo = exp(-radiusSquared * 4.8) * edge
+          * ${GALAXY_FAR_BACKGROUND_HOTSPOT_HALO_OPACITY.toFixed(3)}
+          * vHaloBreath;
+        float inner = exp(-radiusSquared * 20.0) * 0.42;
+        float core = exp(-radiusSquared * 92.0);
+        float coreEnergy = (inner + core)
+          * ${GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_OPACITY.toFixed(3)}
+          * vCoreBreath;
+        float alpha = (halo + coreEnergy) * vReveal * vMaskVisibility;
+        if (radius > 1.0 || alpha < 0.00025) discard;
+        vec3 warmCore = vec3(1.0, 0.975, 0.91);
+        vec3 finalColor = mix(vColor, warmCore, core / max(0.001, core + halo) * 0.76);
+        gl_FragColor = vec4(finalColor, min(0.82, alpha));
+      }
+    `,
+  });
 }
 
 function createOrbitLayer(positions: Float32Array) {
@@ -8605,6 +9802,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       uSelectedTopicOpacity: { value: 1 },
       uFocusPosition: { value: new THREE.Vector3() },
       uFarRotationAngle: { value: 0 },
+      uOverviewFarBlend: { value: 0 },
       uSystemCenterViewDepth: { value: 0 },
       uSystemDepthRange: { value: APP17_SYSTEM_RADIUS },
       uSystemDepthStrength: { value: 0 },
@@ -8619,6 +9817,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       attribute float pointSize;
       attribute float pointAlpha;
       attribute float selectedMask;
+      attribute float crossfadeMask;
       uniform float uPixelRatio;
       uniform float uMinimumCssSize;
       uniform float uDistanceAttenuation;
@@ -8627,6 +9826,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       uniform float uSelectedTopicOpacity;
       uniform vec3 uFocusPosition;
       uniform float uFarRotationAngle;
+      uniform float uOverviewFarBlend;
       uniform float uSystemCenterViewDepth;
       uniform float uSystemDepthRange;
       uniform float uSystemDepthStrength;
@@ -8634,7 +9834,12 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       varying float vAlpha;
       void main() {
         vColor = color;
-        float retreatScale = mix(1.0, ${APP17_FAR_SCENE_SCALE.toFixed(1)}, uExplorationProgress);
+        float isolationProgress = ${kind === "app15"
+          ? "smoothstep(0.70, 1.0, uExplorationProgress)"
+          : "uExplorationProgress"};
+        float retreatScale = ${kind === "app15"
+          ? "1.0"
+          : `mix(1.0, ${APP17_FAR_SCENE_SCALE.toFixed(1)}, uExplorationProgress)`};
         float effectiveRotation = uFarRotationAngle * smoothstep(0.7, 1.0, uExplorationProgress);
         float rotationCosine = cos(effectiveRotation);
         float rotationSine = sin(effectiveRotation);
@@ -8643,19 +9848,29 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
         farOffset.xy = farRotation * farOffset.xy;
         vec3 distantPosition = uFocusPosition + farOffset * retreatScale;
         vec3 transformedPosition = mix(distantPosition, position, selectedMask);
-        float distantVisibility = mix(1.0, ${APP17_FAR_PAPER_OPACITY.toFixed(2)}, uExplorationProgress);
+        float distantVisibility = ${kind === "app15"
+          ? "mix(1.0 - smoothstep(0.70, 0.76, uExplorationProgress), 1.0 - smoothstep(0.76, 1.0, uExplorationProgress), crossfadeMask)"
+          : `mix(1.0, ${APP17_FAR_PAPER_OPACITY.toFixed(2)}, isolationProgress)`};
         float selectedVisibility = uSelectedTopicOpacity;
         float visibility = mix(distantVisibility, selectedVisibility, selectedMask);
-        float distantPointScale = mix(1.0, ${APP17_FAR_PAPER_SIZE.toFixed(2)}, uExplorationProgress);
+        float distantPointScale = ${kind === "app15"
+          ? "1.0"
+          : `mix(1.0, ${APP17_FAR_PAPER_SIZE.toFixed(2)}, isolationProgress)`};
         float pointScale = mix(distantPointScale, 1.0, selectedMask);
         vec4 mvPosition = modelViewMatrix * vec4(transformedPosition, 1.0);
         float relativeDepth = ((-mvPosition.z) - uSystemCenterViewDepth) / max(0.001, uSystemDepthRange);
         float deepPosition = clamp(max(relativeDepth, 0.0), 0.0, 1.0);
         float depthVisibility = mix(1.0, mix(1.0, 0.72, deepPosition), uSystemDepthStrength);
-        vAlpha = pointAlpha * uSceneOpacity * visibility * depthVisibility;
+        float overviewOpacity = mix(1.0, 0.78, uOverviewFarBlend);
+        vAlpha = pointAlpha * uSceneOpacity * visibility * depthVisibility * overviewOpacity;
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.78, 1.2);
         float displayScale = mix(1.0, distanceScale, uDistanceAttenuation);
-        gl_PointSize = max(pointSize * pointScale, uMinimumCssSize * pointScale) * uPixelRatio * displayScale;
+        float overviewPointScale = mix(1.0, 0.62, uOverviewFarBlend);
+        float overviewMinimumCssSize = mix(uMinimumCssSize, 1.15, uOverviewFarBlend);
+        gl_PointSize = max(
+          pointSize * pointScale * overviewPointScale,
+          overviewMinimumCssSize * pointScale
+        ) * uPixelRatio * displayScale;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -8691,6 +9906,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uFarRotationAngle: { value: 0 },
       uAmbientTime: { value: 0 },
       uAmbientStrength: { value: 1 },
+      uOverviewFarBlend: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -8706,6 +9922,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       attribute float breathPhase;
       attribute float breathSpeed;
       attribute float selectedMask;
+      attribute float crossfadeMask;
       uniform float uPixelRatio;
       uniform float uDepthAttenuation;
       uniform float uSceneOpacity;
@@ -8714,6 +9931,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uniform float uFarRotationAngle;
       uniform float uAmbientTime;
       uniform float uAmbientStrength;
+      uniform float uOverviewFarBlend;
       varying vec3 vColor;
       varying float vPointIntensity;
       varying float vHaloStrength;
@@ -8726,7 +9944,12 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
         vPointIntensity = pointIntensity;
         vHaloStrength = haloStrength;
         vRayStrength = rayStrength;
-        float retreatScale = mix(1.0, ${APP17_FAR_SCENE_SCALE.toFixed(1)}, uExplorationProgress);
+        float isolationProgress = ${kind === "app15"
+          ? "smoothstep(0.70, 1.0, uExplorationProgress)"
+          : "uExplorationProgress"};
+        float retreatScale = ${kind === "app15"
+          ? "1.0"
+          : `mix(1.0, ${APP17_FAR_SCENE_SCALE.toFixed(1)}, uExplorationProgress)`};
         float effectiveRotation = uFarRotationAngle * smoothstep(0.7, 1.0, uExplorationProgress);
         float rotationCosine = cos(effectiveRotation);
         float rotationSine = sin(effectiveRotation);
@@ -8735,27 +9958,46 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
         farOffset.xy = farRotation * farOffset.xy;
         vec3 distantPosition = uFocusPosition + farOffset * retreatScale;
         vec3 transformedPosition = mix(distantPosition, position, selectedMask);
-        float selectedVisibility = 1.0 - smoothstep(0.32, 0.76, uExplorationProgress);
-        float distantCoreVisibility = mix(1.0, ${APP17_FAR_HOTSPOT_CORE_OPACITY.toFixed(2)}, uExplorationProgress);
-        float distantHaloVisibility = mix(1.0, ${APP17_FAR_HOTSPOT_HALO_OPACITY.toFixed(2)}, uExplorationProgress);
-        float distantRayVisibility = mix(1.0, ${APP17_FAR_HOTSPOT_RAY_OPACITY.toFixed(2)}, uExplorationProgress);
+        float selectedVisibility = 1.0 - smoothstep(${kind === "app15" ? "0.76, 1.0" : "0.32, 0.76"}, uExplorationProgress);
+        float theorySourceVisibility = mix(
+          1.0 - smoothstep(0.70, 0.76, uExplorationProgress),
+          1.0 - smoothstep(0.76, 1.0, uExplorationProgress),
+          crossfadeMask
+        );
+        float distantCoreVisibility = ${kind === "app15"
+          ? "theorySourceVisibility"
+          : `mix(1.0, ${APP17_FAR_HOTSPOT_CORE_OPACITY.toFixed(2)}, isolationProgress)`};
+        float distantHaloVisibility = ${kind === "app15"
+          ? "theorySourceVisibility"
+          : `mix(1.0, ${APP17_FAR_HOTSPOT_HALO_OPACITY.toFixed(2)}, isolationProgress)`};
+        float distantRayVisibility = ${kind === "app15"
+          ? "theorySourceVisibility"
+          : `mix(1.0, ${APP17_FAR_HOTSPOT_RAY_OPACITY.toFixed(2)}, isolationProgress)`};
         float ambientMask = (1.0 - selectedMask) * smoothstep(0.7, 1.0, uExplorationProgress) * uAmbientStrength;
         float breath = sin(uAmbientTime * breathSpeed + breathPhase) * ambientMask;
         float baseCoreVisibility = mix(distantCoreVisibility, selectedVisibility, selectedMask);
         float baseHaloVisibility = mix(distantHaloVisibility, selectedVisibility, selectedMask);
-        vCoreVisibility = uSceneOpacity * ${kind === "app14"
+        vCoreVisibility = uSceneOpacity * mix(1.0, 0.82, uOverviewFarBlend) * ${kind === "app14"
           ? "baseCoreVisibility * (1.0 + breath * 0.04)"
-          : "clamp(baseCoreVisibility + breath * 0.06, 0.0, 1.0)"};
-        vHaloVisibility = uSceneOpacity * ${kind === "app14"
+          : "baseCoreVisibility * (1.0 + breath * 0.06)"};
+        vHaloVisibility = uSceneOpacity * mix(1.0, 0.45, uOverviewFarBlend) * ${kind === "app14"
           ? "baseHaloVisibility * (1.0 + breath * 0.08)"
-          : "clamp(baseHaloVisibility + breath * 0.12, 0.0, 1.0)"};
-        vRayVisibility = uSceneOpacity * mix(distantRayVisibility, selectedVisibility, selectedMask);
-        float distantPointScale = mix(1.0, ${APP17_FAR_HOTSPOT_SIZE.toFixed(2)}, uExplorationProgress);
+          : "baseHaloVisibility * (1.0 + breath * 0.12)"};
+        vRayVisibility = uSceneOpacity
+          * mix(1.0, 0.45, uOverviewFarBlend)
+          * mix(distantRayVisibility, selectedVisibility, selectedMask);
+        float distantPointScale = ${kind === "app15"
+          ? "1.0"
+          : `mix(1.0, ${APP17_FAR_HOTSPOT_SIZE.toFixed(2)}, isolationProgress)`};
         float pointScale = mix(distantPointScale, 1.0, selectedMask);
         vec4 mvPosition = modelViewMatrix * vec4(transformedPosition, 1.0);
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.74, 1.22);
         float displayScale = mix(1.0, distanceScale, uDepthAttenuation);
-        gl_PointSize = pointSize * pointScale * displayScale * uPixelRatio;
+        gl_PointSize = pointSize
+          * pointScale
+          * mix(1.0, 0.68, uOverviewFarBlend)
+          * displayScale
+          * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,

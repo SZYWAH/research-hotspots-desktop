@@ -5,6 +5,7 @@ pub mod agent_protocol;
 pub mod agent_report;
 pub mod agent_store;
 pub mod agent_tools;
+pub mod semantic_layout;
 
 use std::collections::HashSet;
 use std::fs;
@@ -17,20 +18,35 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const V20_SCHEMA_VERSION: i64 = 8;
-pub const LIBRARY_SCHEMA_VERSION: i64 = 11;
+pub const LIBRARY_SCHEMA_VERSION: i64 = 13;
 pub const MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION: i64 = 8;
-pub const V20_ALGORITHM_VERSION: &str = "v20-unified-1";
+pub const V20_ALGORITHM_VERSION: &str = "v20-semantic-e5-small-3";
+pub const HOTSPOT_IDENTITY_VERSION: &str = "stable-field-key-sha256-v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotHotspot {
     pub hotspot_id: String,
     pub payload_json: String,
+    pub identity_key_sha256: String,
     pub x: f64,
     pub y: f64,
     pub z: f64,
     pub paper_count: i64,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotHotspotLineage {
+    pub from_snapshot_id: String,
+    pub from_hotspot_id: String,
+    pub to_snapshot_id: String,
+    pub to_hotspot_id: String,
+    pub relation_type: String,
+    pub member_overlap: f64,
+    pub identity_key_match: bool,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,10 +67,17 @@ pub struct SnapshotWriteInput {
     pub snapshot_id: String,
     pub project_id: String,
     pub algorithm_version: String,
+    pub layout_version: String,
+    pub projection_version: String,
+    pub embedding_model_id: String,
+    pub embedding_model_revision: String,
+    pub hotspot_identity_version: String,
     pub paper_count: i64,
     pub created_at: String,
     pub hotspots: Vec<SnapshotHotspot>,
     pub memberships: Vec<SnapshotMembership>,
+    #[serde(default)]
+    pub lineage: Vec<SnapshotHotspotLineage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,6 +86,11 @@ pub struct AnalysisState {
     pub project_id: String,
     pub active_snapshot_id: String,
     pub algorithm_version: String,
+    pub layout_version: String,
+    pub projection_version: String,
+    pub embedding_model_id: String,
+    pub embedding_model_revision: String,
+    pub hotspot_identity_version: String,
     pub paper_count: i64,
     pub hotspot_count: i64,
     pub membership_count: i64,
@@ -197,22 +225,71 @@ pub fn write_snapshot_in_transaction(
         )
         .map_err(|error| error.to_string())?;
     tx.execute(
-        "INSERT INTO v20_analysis_snapshots (id, project_id, algorithm_version, paper_count, hotspot_count, membership_count, status, created_at, library_revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'writing', ?7, ?8)",
-        params![input.snapshot_id, input.project_id, input.algorithm_version, input.paper_count, input.hotspots.len() as i64, input.memberships.len() as i64, input.created_at, library_revision],
+        "INSERT INTO v20_analysis_snapshots (
+           id,project_id,algorithm_version,layout_version,projection_version,
+           embedding_model_id,embedding_model_revision,hotspot_identity_version,
+           paper_count,hotspot_count,membership_count,status,created_at,library_revision
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'writing',?12,?13)",
+        params![
+            input.snapshot_id,
+            input.project_id,
+            input.algorithm_version,
+            input.layout_version,
+            input.projection_version,
+            input.embedding_model_id,
+            input.embedding_model_revision,
+            input.hotspot_identity_version,
+            input.paper_count,
+            input.hotspots.len() as i64,
+            input.memberships.len() as i64,
+            input.created_at,
+            library_revision
+        ],
     ).map_err(|error| error.to_string())?;
     {
-        let mut stmt = tx.prepare("INSERT INTO v20_hotspots (snapshot_id, project_id, hotspot_id, payload_json, x, y, z, paper_count, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)").map_err(|error| error.to_string())?;
+        let mut stmt = tx.prepare(
+            "INSERT INTO v20_hotspots (
+               snapshot_id,project_id,hotspot_id,payload_json,identity_key_sha256,
+               x,y,z,paper_count,updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        ).map_err(|error| error.to_string())?;
         for row in &input.hotspots {
             stmt.execute(params![
                 input.snapshot_id,
                 input.project_id,
                 row.hotspot_id,
                 row.payload_json,
+                row.identity_key_sha256,
                 row.x,
                 row.y,
                 row.z,
                 row.paper_count,
                 row.updated_at
+            ])
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO v20_hotspot_lineage(
+               project_id,from_snapshot_id,from_hotspot_id,to_snapshot_id,to_hotspot_id,
+               relation_type,member_overlap,identity_key_match,created_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        ).map_err(|error| error.to_string())?;
+        for row in &input.lineage {
+            if row.to_snapshot_id != input.snapshot_id {
+                return Err("V20_HOTSPOT_LINEAGE_TARGET_MISMATCH".into());
+            }
+            stmt.execute(params![
+                input.project_id,
+                row.from_snapshot_id,
+                row.from_hotspot_id,
+                row.to_snapshot_id,
+                row.to_hotspot_id,
+                row.relation_type,
+                row.member_overlap,
+                i64::from(row.identity_key_match),
+                row.created_at,
             ])
             .map_err(|error| error.to_string())?;
         }
@@ -247,6 +324,11 @@ pub fn write_snapshot_in_transaction(
         project_id: input.project_id.clone(),
         active_snapshot_id: input.snapshot_id.clone(),
         algorithm_version: input.algorithm_version.clone(),
+        layout_version: input.layout_version.clone(),
+        projection_version: input.projection_version.clone(),
+        embedding_model_id: input.embedding_model_id.clone(),
+        embedding_model_revision: input.embedding_model_revision.clone(),
+        hotspot_identity_version: input.hotspot_identity_version.clone(),
         paper_count: input.paper_count,
         hotspot_count: input.hotspots.len() as i64,
         membership_count: input.memberships.len() as i64,
@@ -267,15 +349,52 @@ pub fn read_analysis_state(
         )
         .map_err(|error| error.to_string())?
         > 0;
-    let query = if has_library_revision {
-        "SELECT s.project_id, s.id, s.algorithm_version, s.paper_count, s.hotspot_count, s.membership_count, s.created_at, s.library_revision FROM v20_analysis_state a JOIN v20_analysis_snapshots s ON s.id = a.active_snapshot_id AND s.status = 'ready' WHERE a.project_id = ?1"
+    let has_layout_metadata = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('v20_analysis_snapshots') WHERE name = 'layout_version'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?
+        > 0;
+    let query = if has_library_revision && has_layout_metadata {
+        "SELECT s.project_id,s.id,s.algorithm_version,s.layout_version,s.projection_version,
+                s.embedding_model_id,s.embedding_model_revision,s.hotspot_identity_version,
+                s.paper_count,s.hotspot_count,s.membership_count,s.created_at,s.library_revision
+         FROM v20_analysis_state a
+         JOIN v20_analysis_snapshots s ON s.id=a.active_snapshot_id AND s.status='ready'
+         WHERE a.project_id=?1"
+    } else if has_library_revision {
+        "SELECT s.project_id,s.id,s.algorithm_version,'legacy','legacy','','','ranked-hash-v1',
+                s.paper_count,s.hotspot_count,s.membership_count,s.created_at,s.library_revision
+         FROM v20_analysis_state a
+         JOIN v20_analysis_snapshots s ON s.id=a.active_snapshot_id AND s.status='ready'
+         WHERE a.project_id=?1"
     } else {
-        "SELECT s.project_id, s.id, s.algorithm_version, s.paper_count, s.hotspot_count, s.membership_count, s.created_at, 0 AS library_revision FROM v20_analysis_state a JOIN v20_analysis_snapshots s ON s.id = a.active_snapshot_id AND s.status = 'ready' WHERE a.project_id = ?1"
+        "SELECT s.project_id,s.id,s.algorithm_version,'legacy','legacy','','','ranked-hash-v1',
+                s.paper_count,s.hotspot_count,s.membership_count,s.created_at,0
+         FROM v20_analysis_state a
+         JOIN v20_analysis_snapshots s ON s.id=a.active_snapshot_id AND s.status='ready'
+         WHERE a.project_id=?1"
     };
     conn.query_row(
         query,
         params![project_id],
-        |row| Ok(AnalysisState { project_id: row.get(0)?, active_snapshot_id: row.get(1)?, algorithm_version: row.get(2)?, paper_count: row.get(3)?, hotspot_count: row.get(4)?, membership_count: row.get(5)?, generated_at: row.get(6)?, library_revision: row.get(7)? }),
+        |row| Ok(AnalysisState {
+            project_id: row.get(0)?,
+            active_snapshot_id: row.get(1)?,
+            algorithm_version: row.get(2)?,
+            layout_version: row.get(3)?,
+            projection_version: row.get(4)?,
+            embedding_model_id: row.get(5)?,
+            embedding_model_revision: row.get(6)?,
+            hotspot_identity_version: row.get(7)?,
+            paper_count: row.get(8)?,
+            hotspot_count: row.get(9)?,
+            membership_count: row.get(10)?,
+            generated_at: row.get(11)?,
+            library_revision: row.get(12)?,
+        }),
     ).optional().map_err(|error| error.to_string())
 }
 
@@ -286,17 +405,34 @@ pub fn read_unified_galaxy_rows(
     let Some(state) = read_analysis_state(conn, project_id)? else {
         return Ok(None);
     };
-    let mut hotspot_stmt = conn.prepare("SELECT hotspot_id, payload_json, x, y, z, paper_count, updated_at FROM v20_hotspots WHERE project_id = ?1 AND snapshot_id = ?2 ORDER BY paper_count DESC, hotspot_id ASC").map_err(|error| error.to_string())?;
+    let has_identity_key = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('v20_hotspots') WHERE name='identity_key_sha256'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())? > 0;
+    let hotspot_query = if has_identity_key {
+        "SELECT hotspot_id,payload_json,identity_key_sha256,x,y,z,paper_count,updated_at
+         FROM v20_hotspots WHERE project_id=?1 AND snapshot_id=?2
+         ORDER BY paper_count DESC,hotspot_id ASC"
+    } else {
+        "SELECT hotspot_id,payload_json,'' AS identity_key_sha256,x,y,z,paper_count,updated_at
+         FROM v20_hotspots WHERE project_id=?1 AND snapshot_id=?2
+         ORDER BY paper_count DESC,hotspot_id ASC"
+    };
+    let mut hotspot_stmt = conn.prepare(hotspot_query).map_err(|error| error.to_string())?;
     let hotspots = hotspot_stmt
         .query_map(params![project_id, state.active_snapshot_id], |row| {
             Ok(SnapshotHotspot {
                 hotspot_id: row.get(0)?,
                 payload_json: row.get(1)?,
-                x: row.get(2)?,
-                y: row.get(3)?,
-                z: row.get(4)?,
-                paper_count: row.get(5)?,
-                updated_at: row.get(6)?,
+                identity_key_sha256: row.get(2)?,
+                x: row.get(3)?,
+                y: row.get(4)?,
+                z: row.get(5)?,
+                paper_count: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -332,17 +468,34 @@ pub fn read_unified_hotspot_rows(
     let Some(state) = read_analysis_state(conn, project_id)? else {
         return Ok(None);
     };
-    let mut stmt = conn.prepare("SELECT hotspot_id, payload_json, x, y, z, paper_count, updated_at FROM v20_hotspots WHERE project_id = ?1 AND snapshot_id = ?2 ORDER BY paper_count DESC, hotspot_id ASC").map_err(|error| error.to_string())?;
+    let has_identity_key = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('v20_hotspots') WHERE name='identity_key_sha256'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())? > 0;
+    let query = if has_identity_key {
+        "SELECT hotspot_id,payload_json,identity_key_sha256,x,y,z,paper_count,updated_at
+         FROM v20_hotspots WHERE project_id=?1 AND snapshot_id=?2
+         ORDER BY paper_count DESC,hotspot_id ASC"
+    } else {
+        "SELECT hotspot_id,payload_json,'' AS identity_key_sha256,x,y,z,paper_count,updated_at
+         FROM v20_hotspots WHERE project_id=?1 AND snapshot_id=?2
+         ORDER BY paper_count DESC,hotspot_id ASC"
+    };
+    let mut stmt = conn.prepare(query).map_err(|error| error.to_string())?;
     let hotspots = stmt
         .query_map(params![project_id, state.active_snapshot_id], |row| {
             Ok(SnapshotHotspot {
                 hotspot_id: row.get(0)?,
                 payload_json: row.get(1)?,
-                x: row.get(2)?,
-                y: row.get(3)?,
-                z: row.get(4)?,
-                paper_count: row.get(5)?,
-                updated_at: row.get(6)?,
+                identity_key_sha256: row.get(2)?,
+                x: row.get(3)?,
+                y: row.get(4)?,
+                z: row.get(5)?,
+                paper_count: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -888,11 +1041,17 @@ mod tests {
             snapshot_id: snapshot.into(),
             project_id: "p".into(),
             algorithm_version: V20_ALGORITHM_VERSION.into(),
+            layout_version: semantic_layout::SEMANTIC_LAYOUT_VERSION.into(),
+            projection_version: semantic_layout::SEMANTIC_PROJECTION_VERSION.into(),
+            embedding_model_id: semantic_layout::SEMANTIC_MODEL_ID.into(),
+            embedding_model_revision: semantic_layout::SEMANTIC_MODEL_REVISION.into(),
+            hotspot_identity_version: HOTSPOT_IDENTITY_VERSION.into(),
             paper_count: 1,
             created_at: snapshot.into(),
             hotspots: vec![SnapshotHotspot {
                 hotspot_id: "h".into(),
                 payload_json: "{}".into(),
+                identity_key_sha256: "identity".into(),
                 x: 1.0,
                 y: 2.0,
                 z: 3.0,
@@ -908,6 +1067,7 @@ mod tests {
                 representative_rank: Some(1),
                 score: 1.0,
             }],
+            lineage: Vec::new(),
         }
     }
 

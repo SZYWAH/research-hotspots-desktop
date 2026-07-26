@@ -55,7 +55,7 @@ fn main() -> Result<(), String> {
     let schema_version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| error.to_string())?;
-    if schema_version != 11 || LIBRARY_SCHEMA_VERSION != 11 {
+    if schema_version != 12 || LIBRARY_SCHEMA_VERSION != 12 {
         return Err(format!(
             "AGENT_EXECUTOR_AUDIT_SCHEMA_MISMATCH:{schema_version}:{}",
             LIBRARY_SCHEMA_VERSION
@@ -360,6 +360,11 @@ fn audit_supervised_write_and_completion(
         project_id: PROJECT_ID.into(),
         active_snapshot_id: SNAPSHOT_ID.into(),
         algorithm_version: "v20".into(),
+        layout_version: "layout".into(),
+        projection_version: "projection".into(),
+        embedding_model_id: "model".into(),
+        embedding_model_revision: "revision".into(),
+        hotspot_identity_version: "identity".into(),
         paper_count: 3,
         hotspot_count: 1,
         membership_count: 3,

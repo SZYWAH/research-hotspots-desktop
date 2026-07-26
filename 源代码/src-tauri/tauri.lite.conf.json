@@ -1,5 +1,13 @@
 {
   "bundle": {
-    "resources": []
+    "resources": {
+      "../release-assets/semantic-model/model.cpu-portable.onnx": "semantic-model/model.cpu-portable.onnx",
+      "../release-assets/semantic-model/tokenizer.json": "semantic-model/tokenizer.json",
+      "../release-assets/semantic-model/config.json": "semantic-model/config.json",
+      "../release-assets/semantic-model/special_tokens_map.json": "semantic-model/special_tokens_map.json",
+      "../release-assets/semantic-model/tokenizer_config.json": "semantic-model/tokenizer_config.json",
+      "../resources/semantic-model/semantic-model-manifest.json": "semantic-model/semantic-model-manifest.json",
+      "../resources/semantic-model/LICENSE-MIT.txt": "semantic-model/LICENSE-MIT.txt"
+    }
   }
 }

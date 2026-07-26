@@ -1,6 +1,6 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.22.0-beta.1"
+version = "0.22.0-beta.2"
 description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
 authors = ["Research Hotspots Desktop"]
 edition = "2021"
@@ -70,6 +70,21 @@ name = "audit_agent_performance"
 path = "src/bin/audit_agent_performance.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "audit_semantic_embedding_runtime"
+path = "src/bin/audit_semantic_embedding_runtime.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "audit_galaxy_semantic_layout"
+path = "src/bin/audit_galaxy_semantic_layout.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "rebuild_semantic_galaxy_snapshot"
+path = "src/bin/rebuild_semantic_galaxy_snapshot.rs"
+required-features = ["dev-tools"]
+
 [lib]
 name = "research_hotspots_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -92,6 +107,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 csv = "1"
 sha2 = "0.10"
 fs2 = "0.4"
+fastembed = { version = "5.17.3", default-features = false, features = ["ort-download-binaries-rustls-tls", "directml"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["download-binaries", "tls-rustls", "directml"] }
 research-hotspots-core = { path = "core" }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

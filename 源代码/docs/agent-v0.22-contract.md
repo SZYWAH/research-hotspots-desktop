@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Version `0.22.0-beta.1` introduces a supervised research Agent above the existing local paper library, V20 hotspot snapshot, evidence loading, AI report generation, and report audit capabilities. The first flagship workflow is:
+Version `0.22.0-beta.2` retains the supervised research Agent above the local paper library and adds the schema 12 semantic galaxy layout. The first flagship workflow is:
 
 > Analyse a user-specified research topic from the active local paper library and V20 snapshot, then produce an audited report whose claims can be traced to the exact snapshot, hotspots, and papers used.
 

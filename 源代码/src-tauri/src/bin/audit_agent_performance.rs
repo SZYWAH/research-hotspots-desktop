@@ -87,10 +87,16 @@ fn run() -> Result<(), String> {
             snapshot_id: snapshot_id.clone(),
             project_id: PROJECT_ID.into(),
             algorithm_version: V20_ALGORITHM_VERSION.into(),
+            layout_version: research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION.into(),
+            projection_version: research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION.into(),
+            embedding_model_id: research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID.into(),
+            embedding_model_revision: research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION.into(),
+            hotspot_identity_version: research_hotspots_core::HOTSPOT_IDENTITY_VERSION.into(),
             paper_count: PAPER_COUNT,
             created_at,
             hotspots,
             memberships: memberships.clone(),
+            lineage: Vec::new(),
         },
     )?;
     let modeling_ms = modeling_started.elapsed().as_millis();
@@ -219,7 +225,7 @@ fn prepare_snapshot_rows(connection: &Connection) -> Result<(Vec<SnapshotHotspot
         counts[index] += 1;
         memberships.push(SnapshotMembership { paper_id, hotspot_id: format!("hotspot-{index:03}"), x: ((hash & 0xffff) as f64 / 65535.0) * 20.0 - 10.0, y: (((hash>>16)&0xffff) as f64 / 65535.0) * 20.0 - 10.0, z: (((hash>>32)&0xffff) as f64 / 65535.0) * 20.0 - 10.0, representative_rank: (counts[index] <= 10).then_some(counts[index]), score: 0.5 + (hash % 5000) as f64 / 10000.0 });
     }
-    let hotspots = counts.into_iter().enumerate().map(|(index,paper_count)| SnapshotHotspot { hotspot_id: format!("hotspot-{index:03}"), payload_json: format!(r#"{{"id":"hotspot-{index:03}","title":"Performance hotspot {index}","paperCount":{paper_count}}}"#), x: (index % 20) as f64 - 10.0, y: ((index / 20) % 8) as f64 - 4.0, z: (index % 7) as f64 - 3.0, paper_count, updated_at: "performance".into() }).collect();
+    let hotspots = counts.into_iter().enumerate().map(|(index,paper_count)| SnapshotHotspot { hotspot_id: format!("hotspot-{index:03}"), payload_json: format!(r#"{{"id":"hotspot-{index:03}","title":"Performance hotspot {index}","paperCount":{paper_count}}}"#), identity_key_sha256: format!("identity-{index:03}"), x: (index % 20) as f64 - 10.0, y: ((index / 20) % 8) as f64 - 4.0, z: (index % 7) as f64 - 3.0, paper_count, updated_at: "performance".into() }).collect();
     Ok((hotspots, memberships))
 }
 

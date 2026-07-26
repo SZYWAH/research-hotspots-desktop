@@ -41,6 +41,27 @@ export type LibraryMutationStatus = {
   operationKind?: string;
 };
 
+export type SemanticModelingStatus = {
+  running: boolean;
+  stage: string;
+  processed: number;
+  total: number;
+  cached: number;
+  inferred: number;
+  provider?: string;
+  fallbackReason?: string;
+  paused: boolean;
+  cancellable: boolean;
+};
+
+export type SemanticEmbeddingCapabilities = {
+  modelId: string;
+  modelRevision: string;
+  modelRoot?: string;
+  cpuAvailable: boolean;
+  gpuAvailable: boolean;
+};
+
 export type PaperFileImportProgress = {
   taskId: string;
   fileName: string;
@@ -424,11 +445,41 @@ export async function deletePapersFromLibrary(databaseDir: string | undefined, p
   return invoke<number>("delete_papers_from_library", { databaseDir, projectId, ids });
 }
 
-export async function runLibraryClusterWorker(databaseDir: string | undefined, projectId: string | undefined) {
+export async function runLibraryClusterWorker(
+  databaseDir: string | undefined,
+  projectId: string | undefined,
+  embeddingDevice: "cpu" | "gpu" = "cpu",
+) {
   if (!isDesktopRuntime()) {
     return runBrowserCluster([]);
   }
-  return invoke<ClusterWorkerResult>("cluster_paper_library", { databaseDir, projectId });
+  return invoke<ClusterWorkerResult>("cluster_paper_library", { databaseDir, projectId, embeddingDevice });
+}
+
+export async function getSemanticModelingStatus(databaseDir?: string, projectId?: string) {
+  if (!isDesktopRuntime()) return undefined;
+  return invoke<SemanticModelingStatus | null>("get_semantic_modeling_status", { databaseDir, projectId });
+}
+
+export async function controlSemanticModeling(
+  databaseDir: string | undefined,
+  projectId: string | undefined,
+  action: "pause" | "resume" | "cancel",
+) {
+  if (!isDesktopRuntime()) throw new Error("语义建模控制只在桌面端可用。");
+  return invoke<SemanticModelingStatus>("control_semantic_modeling", { databaseDir, projectId, action });
+}
+
+export async function getSemanticEmbeddingCapabilities() {
+  if (!isDesktopRuntime()) {
+    return {
+      modelId: "intfloat/multilingual-e5-small",
+      modelRevision: "browser-review",
+      cpuAvailable: false,
+      gpuAvailable: false,
+    } satisfies SemanticEmbeddingCapabilities;
+  }
+  return invoke<SemanticEmbeddingCapabilities>("get_semantic_embedding_capabilities");
 }
 
 export async function exportHotspotEvidence(input: { databaseDir?: string; projectId?: string; hotspotId?: string; maxPapers?: number }) {

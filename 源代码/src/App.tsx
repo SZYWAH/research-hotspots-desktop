@@ -63,6 +63,7 @@ import {
   type GalaxyPaperFocusState,
   type GalaxyPaperDetailCacheState,
   type GalaxyPerformanceSnapshot,
+  type GalaxyReviewCameraPreset,
   type GalaxySystemViewMode,
 } from "./components/App17GalaxyCanvas";
 import { AgentWorkspace } from "./components/AgentWorkspace";
@@ -140,12 +141,15 @@ import {
   chooseSqliteBackupFile,
   confirmDesktopAction,
   controlPaperFileImport,
+  controlSemanticModeling,
   deletePapersFromLibrary,
   getApp17GalaxyPayload,
   getV20GalaxyPayload,
   getV20HotspotSnapshot,
   getLibraryMutationStatus,
   getLibrarySetupState,
+  getSemanticEmbeddingCapabilities,
+  getSemanticModelingStatus,
   getPaperLibraryFacets,
   getPaperLibraryStatus,
   getAppCredentialStatus,
@@ -179,6 +183,8 @@ import {
   type LibraryMutationStatus,
   type InitializeLibraryResult,
   type PaperFileImportProgress,
+  type SemanticEmbeddingCapabilities,
+  type SemanticModelingStatus,
 } from "./lib/desktop";
 import { formatDateTime, nowIso } from "./lib/dates";
 import { analyzePaperImport } from "./lib/importers";
@@ -312,6 +318,7 @@ type GalaxyVisualReviewIntent = {
   topic?: number;
   paperId?: string;
   stage: "overview" | "system" | "paper";
+  preset?: GalaxyReviewCameraPreset;
 };
 
 function readGalaxyVisualReviewIntent(): GalaxyVisualReviewIntent | undefined {
@@ -319,11 +326,20 @@ function readGalaxyVisualReviewIntent(): GalaxyVisualReviewIntent | undefined {
   const params = new URLSearchParams(window.location.search);
   const parsedTopic = Number(params.get("topic"));
   const requestedStage = params.get("stage");
+  const requestedPreset = params.get("preset");
+  const preset: GalaxyReviewCameraPreset | undefined = requestedPreset === "global"
+    || requestedPreset === "interwoven"
+    || requestedPreset === "system-small"
+    || requestedPreset === "system-medium"
+    || requestedPreset === "system-large"
+    ? requestedPreset
+    : undefined;
   return {
     field: params.get("field")?.trim() || undefined,
     topic: params.has("topic") && Number.isFinite(parsedTopic) ? parsedTopic : undefined,
     paperId: params.get("paperId")?.trim() || undefined,
     stage: requestedStage === "system" || requestedStage === "paper" ? requestedStage : "overview",
+    preset,
   };
 }
 
@@ -1027,6 +1043,7 @@ type SelectOption = {
   value: string;
   label: string;
   description?: string;
+  disabled?: boolean;
 };
 
 function SelectControl({
@@ -1059,20 +1076,29 @@ function SelectControl({
 
   function commit(nextIndex: number) {
     const option = options[nextIndex];
-    if (!option) return;
+    if (!option || option.disabled) return;
     onChange(option.value);
     setOpen(false);
+  }
+
+  function selectableIndex(start: number, direction: -1 | 1) {
+    let index = start;
+    while (index >= 0 && index < options.length) {
+      if (!options[index]?.disabled) return index;
+      index += direction;
+    }
+    return Math.max(0, Math.min(options.length - 1, start));
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       if (!open) setOpen(true);
-      setActiveIndex((current) => Math.min(options.length - 1, current + 1));
+      setActiveIndex((current) => selectableIndex(Math.min(options.length - 1, current + 1), 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       if (!open) setOpen(true);
-      setActiveIndex((current) => Math.max(0, current - 1));
+      setActiveIndex((current) => selectableIndex(Math.max(0, current - 1), -1));
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (open) commit(activeIndex);
@@ -1105,7 +1131,9 @@ function SelectControl({
                 type="button"
                 role="option"
                 aria-selected={selectedOption}
-                className={`select-option ${index === activeIndex ? "select-option-active" : ""} ${selectedOption ? "select-option-selected" : ""}`}
+                aria-disabled={option.disabled || undefined}
+                disabled={option.disabled}
+                className={`select-option ${index === activeIndex ? "select-option-active" : ""} ${selectedOption ? "select-option-selected" : ""} disabled:cursor-not-allowed disabled:opacity-45`}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => commit(index)}
               >
@@ -3004,9 +3032,14 @@ function GalaxyView({
   onOpenPaperList: (hotspot: Hotspot) => void;
   onOpenPaper: (paper: { id: string; title: string; field: string }) => void;
 }) {
+  const visualReviewCapture = visualReview
+    && typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("capture") === "clean";
   const [field, setField] = useState("all");
   const [layoutMode, setLayoutMode] = useState<GalaxyLayoutMode>("semantic");
-  const [visualMode, setVisualMode] = useState<GalaxyVisualMode>("nebula");
+  const [visualMode, setVisualMode] = useState<GalaxyVisualMode>(
+    visualReviewIntent?.preset ? "galaxy" : "nebula",
+  );
   const [minPaperCount, setMinPaperCount] = useState(1);
   const [minConfidence, setMinConfidence] = useState(0);
   const [selectedId, setSelectedId] = useState("");
@@ -3392,6 +3425,7 @@ function GalaxyView({
       visualReviewTargetHotspot.id,
       visualReviewIntent.stage,
       visualReviewIntent.paperId ?? "",
+      visualReviewIntent.preset ?? "",
     ].join("::");
     if (visualReviewAutomationRef.current.key !== automationKey) {
       visualReviewAutomationRef.current = {
@@ -3404,9 +3438,14 @@ function GalaxyView({
     }
     if (visualReviewAutomationRef.current.hotspotSelected) return;
     visualReviewAutomationRef.current.hotspotSelected = true;
-    setField(visualReviewTargetHotspot.field);
+    setField(visualReviewIntent.preset === "global"
+      ? "all"
+      : visualReviewTargetHotspot.field);
     setSelectedId(visualReviewTargetHotspot.id);
-    setSelectionActive(true);
+    setSelectionActive(
+      visualReviewIntent.preset !== "global"
+      && visualReviewIntent.preset !== "interwoven",
+    );
   }, [app17Payload?.generatedAt, visualReview, visualReviewIntent, visualReviewTargetHotspot]);
 
   useEffect(() => {
@@ -3636,6 +3675,20 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="表面细节 / 遮挡" value={galaxyPerformance.systemStarLod === "none" ? "未进入" : `${Math.round(galaxyPerformance.systemStarSurfaceDetailBlend * 100)}% / ${galaxyPerformance.systemStarDepthOcclusionActive ? "启用" : "等待近景"}`} />
                 <GalaxyDiagnosticMetric label="表面辉光 / 日冕近景" value={galaxyPerformance.systemStarLod === "none" ? "未进入" : `${Math.round(galaxyPerformance.systemStarSurfaceBloomBlend * 100)}% / ${Math.round(galaxyPerformance.systemStarCoronaCloseupBlend * 100)}%`} />
                 <GalaxyDiagnosticMetric label="全景 topic / 局部云" value={`${Math.round(galaxyPerformance.overviewSelectedTopicOpacity * 100)}% / ${Math.round(galaxyPerformance.systemCloudOpacity * 100)}%`} />
+                <GalaxyDiagnosticMetric label="非选中论文 / 热点" value={`${Math.round(galaxyPerformance.systemNonSelectedPaperOpacity * 100)}% / ${Math.round(galaxyPerformance.systemNonSelectedHotspotOpacity * 100)}%`} />
+                <GalaxyDiagnosticMetric label="进入位移 / 世界漂移" value={`${galaxyPerformance.systemEntryCameraTravelDistance.toFixed(3)} / ${galaxyPerformance.systemEntryNonSelectedWorldDrift.toExponential(2)}`} />
+                <GalaxyDiagnosticMetric label="入口尺度 / 重基准" value={`${galaxyPerformance.systemEntryScale.toFixed(6)} / ${galaxyPerformance.systemCanonicalRebaseCount}`} />
+                <GalaxyDiagnosticMetric label="重基准像素 / 云直径比" value={`${galaxyPerformance.systemCanonicalRebaseProjectionDeltaPx.toFixed(3)} px / ${galaxyPerformance.systemEntryCloudDiameterRatio.toFixed(4)}`} />
+                <GalaxyDiagnosticMetric label="远景热点 / 论文样本" value={`${galaxyPerformance.farBackgroundHotspotCount} / ${galaxyPerformance.farBackgroundPaperSampleCount}`} />
+                <GalaxyDiagnosticMetric label="远景退远 / 交织淡入" value={`${galaxyPerformance.farBackgroundRetreatHotspotCount} / ${galaxyPerformance.farBackgroundCrossfadeHotspotCount}`} />
+                <GalaxyDiagnosticMetric label="远景最近 / 最远半径" value={`${galaxyPerformance.farBackgroundNearestRadius.toFixed(2)} / ${galaxyPerformance.farBackgroundFarthestRadius.toFixed(2)}`} />
+                <GalaxyDiagnosticMetric label="远景局部向量 / 重基准误差" value={`${galaxyPerformance.farBackgroundLocalOffsetError.toExponential(2)} / ${galaxyPerformance.farBackgroundRebaseProjectionDeltaPx.toFixed(3)} px`} />
+                <GalaxyDiagnosticMetric label="中央遮罩可见代理" value={String(galaxyPerformance.farBackgroundCentralMaskVisibleCount)} />
+                <GalaxyDiagnosticMetric label="远景论文 / 核心呼吸范围" value={`${(galaxyPerformance.farBackgroundPaperBrightnessMin * 100).toFixed(2)}–${(galaxyPerformance.farBackgroundPaperBrightnessMax * 100).toFixed(2)}% / ${(galaxyPerformance.farBackgroundHotspotCoreBrightnessMin * 100).toFixed(2)}–${(galaxyPerformance.farBackgroundHotspotCoreBrightnessMax * 100).toFixed(2)}%`} />
+                <GalaxyDiagnosticMetric label="远景光晕呼吸范围" value={`${(galaxyPerformance.farBackgroundHotspotHaloBrightnessMin * 100).toFixed(2)}–${(galaxyPerformance.farBackgroundHotspotHaloBrightnessMax * 100).toFixed(2)}%`} />
+                <GalaxyDiagnosticMetric label="真实概览可见 / 可拾取" value={`${galaxyPerformance.systemOverviewVisibleObjectCount} / ${galaxyPerformance.systemOverviewPickableObjectCount}`} />
+                <GalaxyDiagnosticMetric label="理论初始视角" value={`${galaxyPerformance.theoryViewAzimuthDegrees.toFixed(1)}° / ${galaxyPerformance.theoryViewElevationDegrees.toFixed(1)}°${galaxyPerformance.theoryViewOptimized ? " · 优化" : " · 基线"}`} />
+                <GalaxyDiagnosticMetric label="构图评分 / 改善" value={`${galaxyPerformance.theoryViewSelectedScore.toFixed(4)} / ${(galaxyPerformance.theoryViewImprovementRatio * 100).toFixed(1)}%`} />
                 <GalaxyDiagnosticMetric label="唯一论文 / 去重" value={`${galaxyPerformance.systemUniquePaperCount.toLocaleString()} / ${galaxyPerformance.systemDuplicatePaperCount.toLocaleString()}`} />
                 <GalaxyDiagnosticMetric label="隐藏代表 / 未匹配" value={`${galaxyPerformance.systemHiddenRepresentativeCount} / ${galaxyPerformance.systemUnresolvedRepresentativeCount}`} />
                 <GalaxyDiagnosticMetric label="论文星 LOD / 混合" value={`${galaxySystemPaperLodLabel(galaxyPerformance.systemPaperLod)} / ${Math.round(galaxyPerformance.systemPaperLodBlend * 100)}%`} />
@@ -3708,14 +3761,16 @@ function GalaxyView({
         </FoldSection>
       </section>
       <section className={`galaxy-workspace-grid grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px] ${galaxyPaperInspectionMode === "centered" ? "galaxy-workspace-paper-centered" : ""}`}>
-        <div className={`galaxy-panel galaxy-panel-3d ${galaxyFullscreen ? "galaxy-panel-fullscreen" : ""} ${galaxyPaperPanelState !== "hidden" && galaxyPaperPanelState !== "staged" && galaxyPaperInspectionMode !== "centered" ? "galaxy-panel-paper-docked" : galaxyPaperInspectionMode === "centered" ? "galaxy-panel-paper-centered" : ""}`}>
+        <div className={`galaxy-panel galaxy-panel-3d ${galaxyFullscreen ? "galaxy-panel-fullscreen" : ""} ${visualReviewCapture ? "galaxy-panel-review-capture" : ""} ${galaxyPaperPanelState !== "hidden" && galaxyPaperPanelState !== "staged" && galaxyPaperInspectionMode !== "centered" ? "galaxy-panel-paper-docked" : galaxyPaperInspectionMode === "centered" ? "galaxy-panel-paper-centered" : ""}`}>
           <div className={`galaxy-stage galaxy-stage-3d galaxy-stage-reference galaxy-stage-${visualMode}`}>
             {app17FilteredPayload?.ready ? (
               <App17GalaxyCanvas
                 active={active}
                 payload={app17FilteredPayload}
+                farBackgroundPayload={app17Payload?.ready ? app17Payload : app17FilteredPayload}
                 selectedId={activeSelectedId}
                 visualMode={visualMode}
+                reviewCameraPreset={visualReviewIntent?.preset}
                 command={cameraCommand}
                 representativePapers={representativeGalaxyPapers}
                 selectedPaperId={selectedGalaxyPaperId}
@@ -4341,6 +4396,12 @@ function formatGalaxyPerformanceSummary(snapshot: GalaxyPerformanceSnapshot, evi
     `表面细节/遮挡/辉光: ${Math.round(snapshot.systemStarSurfaceDetailBlend * 100)}% / ${snapshot.systemStarDepthOcclusionActive ? "启用" : "等待近景"} / ${Math.round(snapshot.systemStarSurfaceBloomBlend * 100)}%`,
     `日冕近景保留: ${Math.round(snapshot.systemStarCoronaCloseupBlend * 100)}%`,
     `全景 topic/局部云可见度: ${Math.round(snapshot.overviewSelectedTopicOpacity * 100)}% / ${Math.round(snapshot.systemCloudOpacity * 100)}%`,
+    `远景热点/论文样本/退远/交织淡入: ${snapshot.farBackgroundHotspotCount} / ${snapshot.farBackgroundPaperSampleCount} / ${snapshot.farBackgroundRetreatHotspotCount} / ${snapshot.farBackgroundCrossfadeHotspotCount}`,
+    `远景最近/最远半径: ${snapshot.farBackgroundNearestRadius.toFixed(2)} / ${snapshot.farBackgroundFarthestRadius.toFixed(2)}`,
+    `远景局部向量/重基准误差: ${snapshot.farBackgroundLocalOffsetError.toExponential(2)} / ${snapshot.farBackgroundRebaseProjectionDeltaPx.toFixed(3)}px`,
+    `中央遮罩可见代理/真实概览可见/可拾取: ${snapshot.farBackgroundCentralMaskVisibleCount} / ${snapshot.systemOverviewVisibleObjectCount} / ${snapshot.systemOverviewPickableObjectCount}`,
+    `远景论文呼吸: ${(snapshot.farBackgroundPaperBrightnessMin * 100).toFixed(2)}-${(snapshot.farBackgroundPaperBrightnessMax * 100).toFixed(2)}%`,
+    `远景核心/光晕呼吸: ${(snapshot.farBackgroundHotspotCoreBrightnessMin * 100).toFixed(2)}-${(snapshot.farBackgroundHotspotCoreBrightnessMax * 100).toFixed(2)}% / ${(snapshot.farBackgroundHotspotHaloBrightnessMin * 100).toFixed(2)}-${(snapshot.farBackgroundHotspotHaloBrightnessMax * 100).toFixed(2)}%`,
     `局部唯一论文/去重: ${snapshot.systemUniquePaperCount} / ${snapshot.systemDuplicatePaperCount}`,
     `隐藏代表论文/未匹配: ${snapshot.systemHiddenRepresentativeCount} / ${snapshot.systemUnresolvedRepresentativeCount}`,
     `论文星 LOD/混合/尺寸: ${galaxySystemPaperLodLabel(snapshot.systemPaperLod)} / ${Math.round(snapshot.systemPaperLodBlend * 100)}% / ${snapshot.systemPaperMinPointSize.toFixed(2)}–${snapshot.systemPaperMaxPointSize.toFixed(2)} px`,
@@ -5572,6 +5633,8 @@ function PipelineView({
   onNotice: (value: string) => void;
 }) {
   const [busyStage, setBusyStage] = useState<string>("");
+  const [semanticModeling, setSemanticModeling] = useState<SemanticModelingStatus | null>(null);
+  const semanticModelingRequest = useRef(0);
   const hotspotQuality = useMemo(() => buildHotspotQualitySummary(hotspots), [hotspots]);
   const paperCount = libraryStatus?.paperCount ?? papers.length;
   const modeledHotspotCount = hotspots.filter((hotspot) => (
@@ -5614,6 +5677,75 @@ function PipelineView({
       : currentStepId === "cluster"
         ? clusterState
         : (hasModeledHotspotResult ? "done" : "pending");
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || (clusterState !== "running" && busyStage !== "cluster")) {
+      setSemanticModeling(null);
+      return;
+    }
+    let disposed = false;
+    let timer = 0;
+    const requestId = ++semanticModelingRequest.current;
+    const refresh = async () => {
+      try {
+        const status = await getSemanticModelingStatus(settings.databaseDir, activeProject.id);
+        if (!disposed && requestId === semanticModelingRequest.current) {
+          setSemanticModeling(status ?? null);
+        }
+      } catch {
+        // The cluster command remains the authority for final failures; polling is only progress UI.
+      }
+      if (!disposed) timer = window.setTimeout(() => void refresh(), 650);
+    };
+    void refresh();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeProject.id, busyStage, clusterState, settings.databaseDir]);
+
+  const semanticStageLabel = semanticModeling
+    ? ({
+        preparing: "准备建模",
+        "text-preparation": "准备论文文本",
+        "cache-check": "检查 Embedding 缓存",
+        embedding: semanticModeling.paused ? "Embedding 推理已暂停" : "分批生成 Embedding",
+        projection: "计算语义三维投影",
+        committing: "正在安全提交",
+        complete: "语义快照已完成",
+      } as Record<string, string>)[semanticModeling.stage] ?? semanticModeling.stage
+    : "";
+  const semanticProgress = semanticModeling
+    ? (() => {
+        const ratio = semanticModeling.total > 0
+          ? Math.min(1, semanticModeling.processed / semanticModeling.total)
+          : 0;
+        if (semanticModeling.stage === "preparing") return 3;
+        if (semanticModeling.stage === "text-preparation") return 7;
+        if (semanticModeling.stage === "cache-check") return 10;
+        if (semanticModeling.stage === "embedding") return Math.round(10 + ratio * 78);
+        if (semanticModeling.stage === "projection") return 91;
+        if (semanticModeling.stage === "committing") return 97;
+        if (semanticModeling.stage === "complete") return 100;
+        return Math.round(ratio * 90);
+      })()
+    : currentJob?.progress ?? 0;
+
+  async function controlSemanticTask(action: "pause" | "resume" | "cancel") {
+    try {
+      const status = await controlSemanticModeling(settings.databaseDir, activeProject.id, action);
+      setSemanticModeling(status);
+      onNotice(
+        action === "pause"
+          ? "热点建模将在当前批次边界暂停。"
+          : action === "resume"
+            ? "热点建模已恢复。"
+            : "热点建模将在安全边界取消。",
+      );
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "无法控制当前热点建模任务。");
+    }
+  }
 
   const stepStateLabels: Record<PipelineStepState, string> = {
     pending: "未开始",
@@ -5752,10 +5884,38 @@ function PipelineView({
           {currentState === "running" && currentJob && (
             <div className="pipeline-running-progress">
               <div className="flex items-center justify-between gap-3 text-xs text-ink/45">
-                <span>{currentJob.detail}</span>
-                <span>{currentJob.progress}%</span>
+                <span>{semanticStageLabel || currentJob.detail}</span>
+                <span>{semanticProgress}%</span>
               </div>
-              <div className="progress-track mt-2"><div style={{ width: `${currentJob.progress}%` }} /></div>
+              <div className="progress-track mt-2"><div style={{ width: `${semanticProgress}%` }} /></div>
+              {semanticModeling && (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-ink/45">
+                  <span>
+                    {semanticModeling.processed.toLocaleString()} / {semanticModeling.total.toLocaleString()}
+                    {semanticModeling.cached > 0 ? ` · 缓存 ${semanticModeling.cached.toLocaleString()}` : ""}
+                    {semanticModeling.inferred > 0 ? ` · 推理 ${semanticModeling.inferred.toLocaleString()}` : ""}
+                    {semanticModeling.provider ? ` · ${semanticModeling.provider}` : ""}
+                  </span>
+                  <span className="flex gap-2">
+                    <button
+                      className="secondary-action h-8 gap-1.5"
+                      onClick={() => void controlSemanticTask(semanticModeling.paused ? "resume" : "pause")}
+                      disabled={!semanticModeling.cancellable}
+                    >
+                      {semanticModeling.paused ? <Play size={13} /> : <Pause size={13} />}
+                      {semanticModeling.paused ? "恢复" : "暂停"}
+                    </button>
+                    <button
+                      className="secondary-action h-8 gap-1.5"
+                      onClick={() => void controlSemanticTask("cancel")}
+                      disabled={!semanticModeling.cancellable}
+                    >
+                      <Square size={12} />
+                      取消
+                    </button>
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -6572,9 +6732,29 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [semanticCapabilities, setSemanticCapabilities] = useState<SemanticEmbeddingCapabilities>();
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => {
+    let active = true;
+    void getSemanticEmbeddingCapabilities()
+      .then((value) => {
+        if (!active) return;
+        setSemanticCapabilities(value);
+        if (!value.gpuAvailable) {
+          setDraft((current) => current.semanticEmbeddingDevice === "gpu"
+            ? { ...current, semanticEmbeddingDevice: "cpu" }
+            : current);
+        }
+      })
+      .catch(() => {
+        if (active) setSemanticCapabilities(undefined);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function test() {
     setTesting(true);
@@ -6805,6 +6985,36 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
               <DirField label="导出目录" value={draft.exportDir} onChange={(value) => setDraft({ ...draft, exportDir: value })} onChoose={() => void chooseDir("exportDir")} />
               <DirField label="任务临时目录" value={draft.workerTempDir} onChange={(value) => setDraft({ ...draft, workerTempDir: value })} onChoose={() => void chooseDir("workerTempDir")} />
               <DirField label="备份目录" value={draft.backupDir} onChange={(value) => setDraft({ ...draft, backupDir: value })} onChoose={() => void chooseDir("backupDir")} />
+              <label className="field-label">
+                语义建模设备
+                <SelectControl
+                  className="h-11 text-sm"
+                  value={draft.semanticEmbeddingDevice}
+                  options={[
+                    { value: "cpu", label: "CPU（默认稳定）" },
+                    {
+                      value: "gpu",
+                      label: semanticCapabilities?.gpuAvailable
+                        ? "GPU（DirectML，失败回退 CPU）"
+                        : "GPU（当前安装不可用）",
+                      description: semanticCapabilities?.gpuAvailable
+                        ? "使用 Full 安装包内置的 DirectML 模型。"
+                        : "Lite 仅内置 CPU 模型；安装 Full 后可启用。",
+                      disabled: !semanticCapabilities?.gpuAvailable,
+                    },
+                  ]}
+                  onChange={(value) => setDraft({ ...draft, semanticEmbeddingDevice: value === "gpu" ? "gpu" : "cpu" })}
+                />
+                <span className="text-xs leading-5 text-ink/40">
+                  {semanticCapabilities
+                    ? semanticCapabilities.gpuAvailable
+                      ? "当前安装包含 CPU 与 DirectML GPU 模型。"
+                      : semanticCapabilities.cpuAvailable
+                        ? "当前安装为 CPU 模型版本；GPU 建模仅在 Full 安装包中提供。"
+                        : "未检测到语义模型资源，热点建模前请修复安装。"
+                    : "正在检查本地语义模型资源…"}
+                </span>
+              </label>
             </div>
           </section>
 
@@ -7095,7 +7305,9 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
       });
       onNotice(result.summary);
     } else {
-      const result = activeProject ? await runLibraryClusterWorker(settings.databaseDir, activeProject.id) : await runClusterWorker(papers, settings.workerTempDir);
+      const result = activeProject
+        ? await runLibraryClusterWorker(settings.databaseDir, activeProject.id, settings.semanticEmbeddingDevice)
+        : await runClusterWorker(papers, settings.workerTempDir);
       if (activeProject && isDesktopRuntime()) {
         const snapshot = await getV20HotspotSnapshot({ databaseDir: settings.databaseDir, projectId: activeProject.id });
         if (!snapshot || snapshot.snapshotId !== result.snapshotId) throw new Error("聚类完成后无法读取一致的 V20 活动快照。");

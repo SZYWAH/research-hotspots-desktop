@@ -2,6 +2,12 @@ import type { PipelineJob, V20HotspotSnapshot } from "../types";
 
 export type AnalysisStageState = "pending" | "running" | "done" | "failed";
 
+export const CURRENT_V20_ALGORITHM_VERSION = "v20-semantic-e5-small-3";
+export const CURRENT_V20_LAYOUT_VERSION = "semantic-hierarchical-natural-pca3-v3";
+export const CURRENT_V20_PROJECTION_VERSION = "global-centroid-pca3-local-raw-pca3-v3";
+export const CURRENT_V20_EMBEDDING_MODEL_ID = "intfloat/multilingual-e5-small";
+export const CURRENT_V20_HOTSPOT_IDENTITY_VERSION = "stable-field-key-sha256-v2";
+
 export type AnalysisProgress = {
   cleanState: AnalysisStageState;
   clusterState: AnalysisStageState;
@@ -98,6 +104,16 @@ export function deriveAnalysisProgress({
     && Number.isInteger(snapshot?.currentLibraryRevision);
   const snapshotRevisionMatches = !hasRevisionTruth
     || snapshot?.libraryRevision === snapshot?.currentLibraryRevision;
+  const snapshotLayoutMatches = Boolean(
+    snapshot
+      && snapshot.algorithmVersion === CURRENT_V20_ALGORITHM_VERSION
+      && snapshot.layoutVersion === CURRENT_V20_LAYOUT_VERSION
+      && snapshot.projectionVersion === CURRENT_V20_PROJECTION_VERSION
+      && snapshot.embeddingModelId === CURRENT_V20_EMBEDDING_MODEL_ID
+      && typeof snapshot.embeddingModelRevision === "string"
+      && snapshot.embeddingModelRevision.length > 0
+      && snapshot.hotspotIdentityVersion === CURRENT_V20_HOTSPOT_IDENTITY_VERSION,
+  );
   // v11+ SQLite revision state is authoritative. IndexedDB jobs are retained
   // for history and can belong to a previously selected database, so their
   // timestamps must not invalidate a revision-matched snapshot.
@@ -107,6 +123,7 @@ export function deriveAnalysisProgress({
   const snapshotCurrent = hasSnapshot
     && snapshotCountsMatch
     && snapshotRevisionMatches
+    && snapshotLayoutMatches
     && !cleanCompletedAfterSnapshot;
   const snapshotStale = hasSnapshot && !snapshotCurrent;
 
