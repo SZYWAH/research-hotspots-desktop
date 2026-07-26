@@ -34,9 +34,13 @@ for (const [width, height] of viewports) {
 assert(source.includes("resolveTheorySceneFraming"), "scene bounds are not derived");
 assert(source.includes("resolveTheoryCameraPreset"), "dynamic theory camera is missing");
 assert(source.includes("framing.p95Radius * 0.2"), "inside-volume minimum distance changed");
-assert(source.includes("distanceForCoverage(0.72)"), "initial coverage changed");
 assert(source.includes("distanceForCoverage(0.86)"), "fit coverage changed");
 assert(source.includes("distanceForCoverage(0.45)"), "far coverage changed");
+assert(source.includes("selectDeterministicTheoryView"), "deterministic view search is missing");
+assert(source.includes("framing.viewSelection.distance"), "optimized fit distance is not used");
+assert(source.includes("fitAzimuth: azimuth"), "reset view does not use the selected azimuth");
+assert(source.includes("fitElevation: elevation"), "reset view does not use the selected elevation");
+assert(source.includes("autoRotate: false"), "theory view must not auto-rotate");
 assert(source.includes("zScale: 1"), "theory Z compression remains");
 assert(!source.includes("zScale: 0.42"), "legacy theory Z compression remains");
 assert(source.includes("overviewFramingMode"), "resize/manual zoom preservation is missing");

@@ -1,7 +1,15 @@
 import type { App17GalaxyPayload, HotspotEvidenceBundle, Paper } from "../types";
 import type { App17HotspotEvidenceInput } from "./desktop";
 
-const SNAPSHOT_BASE = "";
+function resolveSnapshotBase() {
+  if (typeof window === "undefined") return "";
+  const variant = new URLSearchParams(window.location.search).get("layout");
+  return variant === "v3" || variant === "a" || variant === "b" || variant === "c"
+    ? `/variants/${variant}`
+    : "";
+}
+
+const SNAPSHOT_BASE = resolveSnapshotBase();
 const SUPPORTED_SCHEMA_VERSION = 1;
 
 export type GalaxyVisualReviewStage = "overview" | "system" | "paper";

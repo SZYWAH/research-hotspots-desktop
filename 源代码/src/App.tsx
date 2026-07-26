@@ -63,6 +63,7 @@ import {
   type GalaxyPaperFocusState,
   type GalaxyPaperDetailCacheState,
   type GalaxyPerformanceSnapshot,
+  type GalaxyReviewCameraPreset,
   type GalaxySystemViewMode,
 } from "./components/App17GalaxyCanvas";
 import { AgentWorkspace } from "./components/AgentWorkspace";
@@ -317,6 +318,7 @@ type GalaxyVisualReviewIntent = {
   topic?: number;
   paperId?: string;
   stage: "overview" | "system" | "paper";
+  preset?: GalaxyReviewCameraPreset;
 };
 
 function readGalaxyVisualReviewIntent(): GalaxyVisualReviewIntent | undefined {
@@ -324,11 +326,20 @@ function readGalaxyVisualReviewIntent(): GalaxyVisualReviewIntent | undefined {
   const params = new URLSearchParams(window.location.search);
   const parsedTopic = Number(params.get("topic"));
   const requestedStage = params.get("stage");
+  const requestedPreset = params.get("preset");
+  const preset: GalaxyReviewCameraPreset | undefined = requestedPreset === "global"
+    || requestedPreset === "interwoven"
+    || requestedPreset === "system-small"
+    || requestedPreset === "system-medium"
+    || requestedPreset === "system-large"
+    ? requestedPreset
+    : undefined;
   return {
     field: params.get("field")?.trim() || undefined,
     topic: params.has("topic") && Number.isFinite(parsedTopic) ? parsedTopic : undefined,
     paperId: params.get("paperId")?.trim() || undefined,
     stage: requestedStage === "system" || requestedStage === "paper" ? requestedStage : "overview",
+    preset,
   };
 }
 
@@ -3021,9 +3032,14 @@ function GalaxyView({
   onOpenPaperList: (hotspot: Hotspot) => void;
   onOpenPaper: (paper: { id: string; title: string; field: string }) => void;
 }) {
+  const visualReviewCapture = visualReview
+    && typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("capture") === "clean";
   const [field, setField] = useState("all");
   const [layoutMode, setLayoutMode] = useState<GalaxyLayoutMode>("semantic");
-  const [visualMode, setVisualMode] = useState<GalaxyVisualMode>("nebula");
+  const [visualMode, setVisualMode] = useState<GalaxyVisualMode>(
+    visualReviewIntent?.preset ? "galaxy" : "nebula",
+  );
   const [minPaperCount, setMinPaperCount] = useState(1);
   const [minConfidence, setMinConfidence] = useState(0);
   const [selectedId, setSelectedId] = useState("");
@@ -3409,6 +3425,7 @@ function GalaxyView({
       visualReviewTargetHotspot.id,
       visualReviewIntent.stage,
       visualReviewIntent.paperId ?? "",
+      visualReviewIntent.preset ?? "",
     ].join("::");
     if (visualReviewAutomationRef.current.key !== automationKey) {
       visualReviewAutomationRef.current = {
@@ -3421,9 +3438,14 @@ function GalaxyView({
     }
     if (visualReviewAutomationRef.current.hotspotSelected) return;
     visualReviewAutomationRef.current.hotspotSelected = true;
-    setField(visualReviewTargetHotspot.field);
+    setField(visualReviewIntent.preset === "global"
+      ? "all"
+      : visualReviewTargetHotspot.field);
     setSelectedId(visualReviewTargetHotspot.id);
-    setSelectionActive(true);
+    setSelectionActive(
+      visualReviewIntent.preset !== "global"
+      && visualReviewIntent.preset !== "interwoven",
+    );
   }, [app17Payload?.generatedAt, visualReview, visualReviewIntent, visualReviewTargetHotspot]);
 
   useEffect(() => {
@@ -3653,6 +3675,20 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="表面细节 / 遮挡" value={galaxyPerformance.systemStarLod === "none" ? "未进入" : `${Math.round(galaxyPerformance.systemStarSurfaceDetailBlend * 100)}% / ${galaxyPerformance.systemStarDepthOcclusionActive ? "启用" : "等待近景"}`} />
                 <GalaxyDiagnosticMetric label="表面辉光 / 日冕近景" value={galaxyPerformance.systemStarLod === "none" ? "未进入" : `${Math.round(galaxyPerformance.systemStarSurfaceBloomBlend * 100)}% / ${Math.round(galaxyPerformance.systemStarCoronaCloseupBlend * 100)}%`} />
                 <GalaxyDiagnosticMetric label="全景 topic / 局部云" value={`${Math.round(galaxyPerformance.overviewSelectedTopicOpacity * 100)}% / ${Math.round(galaxyPerformance.systemCloudOpacity * 100)}%`} />
+                <GalaxyDiagnosticMetric label="非选中论文 / 热点" value={`${Math.round(galaxyPerformance.systemNonSelectedPaperOpacity * 100)}% / ${Math.round(galaxyPerformance.systemNonSelectedHotspotOpacity * 100)}%`} />
+                <GalaxyDiagnosticMetric label="进入位移 / 世界漂移" value={`${galaxyPerformance.systemEntryCameraTravelDistance.toFixed(3)} / ${galaxyPerformance.systemEntryNonSelectedWorldDrift.toExponential(2)}`} />
+                <GalaxyDiagnosticMetric label="入口尺度 / 重基准" value={`${galaxyPerformance.systemEntryScale.toFixed(6)} / ${galaxyPerformance.systemCanonicalRebaseCount}`} />
+                <GalaxyDiagnosticMetric label="重基准像素 / 云直径比" value={`${galaxyPerformance.systemCanonicalRebaseProjectionDeltaPx.toFixed(3)} px / ${galaxyPerformance.systemEntryCloudDiameterRatio.toFixed(4)}`} />
+                <GalaxyDiagnosticMetric label="远景热点 / 论文样本" value={`${galaxyPerformance.farBackgroundHotspotCount} / ${galaxyPerformance.farBackgroundPaperSampleCount}`} />
+                <GalaxyDiagnosticMetric label="远景退远 / 交织淡入" value={`${galaxyPerformance.farBackgroundRetreatHotspotCount} / ${galaxyPerformance.farBackgroundCrossfadeHotspotCount}`} />
+                <GalaxyDiagnosticMetric label="远景最近 / 最远半径" value={`${galaxyPerformance.farBackgroundNearestRadius.toFixed(2)} / ${galaxyPerformance.farBackgroundFarthestRadius.toFixed(2)}`} />
+                <GalaxyDiagnosticMetric label="远景局部向量 / 重基准误差" value={`${galaxyPerformance.farBackgroundLocalOffsetError.toExponential(2)} / ${galaxyPerformance.farBackgroundRebaseProjectionDeltaPx.toFixed(3)} px`} />
+                <GalaxyDiagnosticMetric label="中央遮罩可见代理" value={String(galaxyPerformance.farBackgroundCentralMaskVisibleCount)} />
+                <GalaxyDiagnosticMetric label="远景论文 / 核心呼吸范围" value={`${(galaxyPerformance.farBackgroundPaperBrightnessMin * 100).toFixed(2)}–${(galaxyPerformance.farBackgroundPaperBrightnessMax * 100).toFixed(2)}% / ${(galaxyPerformance.farBackgroundHotspotCoreBrightnessMin * 100).toFixed(2)}–${(galaxyPerformance.farBackgroundHotspotCoreBrightnessMax * 100).toFixed(2)}%`} />
+                <GalaxyDiagnosticMetric label="远景光晕呼吸范围" value={`${(galaxyPerformance.farBackgroundHotspotHaloBrightnessMin * 100).toFixed(2)}–${(galaxyPerformance.farBackgroundHotspotHaloBrightnessMax * 100).toFixed(2)}%`} />
+                <GalaxyDiagnosticMetric label="真实概览可见 / 可拾取" value={`${galaxyPerformance.systemOverviewVisibleObjectCount} / ${galaxyPerformance.systemOverviewPickableObjectCount}`} />
+                <GalaxyDiagnosticMetric label="理论初始视角" value={`${galaxyPerformance.theoryViewAzimuthDegrees.toFixed(1)}° / ${galaxyPerformance.theoryViewElevationDegrees.toFixed(1)}°${galaxyPerformance.theoryViewOptimized ? " · 优化" : " · 基线"}`} />
+                <GalaxyDiagnosticMetric label="构图评分 / 改善" value={`${galaxyPerformance.theoryViewSelectedScore.toFixed(4)} / ${(galaxyPerformance.theoryViewImprovementRatio * 100).toFixed(1)}%`} />
                 <GalaxyDiagnosticMetric label="唯一论文 / 去重" value={`${galaxyPerformance.systemUniquePaperCount.toLocaleString()} / ${galaxyPerformance.systemDuplicatePaperCount.toLocaleString()}`} />
                 <GalaxyDiagnosticMetric label="隐藏代表 / 未匹配" value={`${galaxyPerformance.systemHiddenRepresentativeCount} / ${galaxyPerformance.systemUnresolvedRepresentativeCount}`} />
                 <GalaxyDiagnosticMetric label="论文星 LOD / 混合" value={`${galaxySystemPaperLodLabel(galaxyPerformance.systemPaperLod)} / ${Math.round(galaxyPerformance.systemPaperLodBlend * 100)}%`} />
@@ -3725,14 +3761,16 @@ function GalaxyView({
         </FoldSection>
       </section>
       <section className={`galaxy-workspace-grid grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px] ${galaxyPaperInspectionMode === "centered" ? "galaxy-workspace-paper-centered" : ""}`}>
-        <div className={`galaxy-panel galaxy-panel-3d ${galaxyFullscreen ? "galaxy-panel-fullscreen" : ""} ${galaxyPaperPanelState !== "hidden" && galaxyPaperPanelState !== "staged" && galaxyPaperInspectionMode !== "centered" ? "galaxy-panel-paper-docked" : galaxyPaperInspectionMode === "centered" ? "galaxy-panel-paper-centered" : ""}`}>
+        <div className={`galaxy-panel galaxy-panel-3d ${galaxyFullscreen ? "galaxy-panel-fullscreen" : ""} ${visualReviewCapture ? "galaxy-panel-review-capture" : ""} ${galaxyPaperPanelState !== "hidden" && galaxyPaperPanelState !== "staged" && galaxyPaperInspectionMode !== "centered" ? "galaxy-panel-paper-docked" : galaxyPaperInspectionMode === "centered" ? "galaxy-panel-paper-centered" : ""}`}>
           <div className={`galaxy-stage galaxy-stage-3d galaxy-stage-reference galaxy-stage-${visualMode}`}>
             {app17FilteredPayload?.ready ? (
               <App17GalaxyCanvas
                 active={active}
                 payload={app17FilteredPayload}
+                farBackgroundPayload={app17Payload?.ready ? app17Payload : app17FilteredPayload}
                 selectedId={activeSelectedId}
                 visualMode={visualMode}
+                reviewCameraPreset={visualReviewIntent?.preset}
                 command={cameraCommand}
                 representativePapers={representativeGalaxyPapers}
                 selectedPaperId={selectedGalaxyPaperId}
@@ -4358,6 +4396,12 @@ function formatGalaxyPerformanceSummary(snapshot: GalaxyPerformanceSnapshot, evi
     `表面细节/遮挡/辉光: ${Math.round(snapshot.systemStarSurfaceDetailBlend * 100)}% / ${snapshot.systemStarDepthOcclusionActive ? "启用" : "等待近景"} / ${Math.round(snapshot.systemStarSurfaceBloomBlend * 100)}%`,
     `日冕近景保留: ${Math.round(snapshot.systemStarCoronaCloseupBlend * 100)}%`,
     `全景 topic/局部云可见度: ${Math.round(snapshot.overviewSelectedTopicOpacity * 100)}% / ${Math.round(snapshot.systemCloudOpacity * 100)}%`,
+    `远景热点/论文样本/退远/交织淡入: ${snapshot.farBackgroundHotspotCount} / ${snapshot.farBackgroundPaperSampleCount} / ${snapshot.farBackgroundRetreatHotspotCount} / ${snapshot.farBackgroundCrossfadeHotspotCount}`,
+    `远景最近/最远半径: ${snapshot.farBackgroundNearestRadius.toFixed(2)} / ${snapshot.farBackgroundFarthestRadius.toFixed(2)}`,
+    `远景局部向量/重基准误差: ${snapshot.farBackgroundLocalOffsetError.toExponential(2)} / ${snapshot.farBackgroundRebaseProjectionDeltaPx.toFixed(3)}px`,
+    `中央遮罩可见代理/真实概览可见/可拾取: ${snapshot.farBackgroundCentralMaskVisibleCount} / ${snapshot.systemOverviewVisibleObjectCount} / ${snapshot.systemOverviewPickableObjectCount}`,
+    `远景论文呼吸: ${(snapshot.farBackgroundPaperBrightnessMin * 100).toFixed(2)}-${(snapshot.farBackgroundPaperBrightnessMax * 100).toFixed(2)}%`,
+    `远景核心/光晕呼吸: ${(snapshot.farBackgroundHotspotCoreBrightnessMin * 100).toFixed(2)}-${(snapshot.farBackgroundHotspotCoreBrightnessMax * 100).toFixed(2)}% / ${(snapshot.farBackgroundHotspotHaloBrightnessMin * 100).toFixed(2)}-${(snapshot.farBackgroundHotspotHaloBrightnessMax * 100).toFixed(2)}%`,
     `局部唯一论文/去重: ${snapshot.systemUniquePaperCount} / ${snapshot.systemDuplicatePaperCount}`,
     `隐藏代表论文/未匹配: ${snapshot.systemHiddenRepresentativeCount} / ${snapshot.systemUnresolvedRepresentativeCount}`,
     `论文星 LOD/混合/尺寸: ${galaxySystemPaperLodLabel(snapshot.systemPaperLod)} / ${Math.round(snapshot.systemPaperLodBlend * 100)}% / ${snapshot.systemPaperMinPointSize.toFixed(2)}–${snapshot.systemPaperMaxPointSize.toFixed(2)} px`,

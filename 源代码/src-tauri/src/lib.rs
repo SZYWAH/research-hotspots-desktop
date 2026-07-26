@@ -829,6 +829,8 @@ struct V20GalaxyPayload {
     generated_at: String,
     snapshot_id: Option<String>,
     paper_layout_version: Option<String>,
+    paper_layout_coordinate_space: Option<String>,
+    paper_layout_scale_mode: Option<String>,
     paper_layout_local_p95_radius: Option<f64>,
     paper_layout_shared_scale: Option<f64>,
     embedding_model_id: Option<String>,
@@ -1106,6 +1108,10 @@ struct App17VisualReviewManifest {
     paper_count: usize,
     hotspot_count: usize,
     topic_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coordinate_override_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coordinate_override_sha256: Option<String>,
     topics: Vec<App17VisualReviewTopicEntry>,
 }
 
@@ -1121,6 +1127,41 @@ struct App17VisualReviewTopicEntry {
     paper_count: i64,
     evidence_path: String,
     papers_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct App17CoordinateOverride {
+    schema_version: u32,
+    #[serde(default)]
+    snapshot_id: Option<String>,
+    paper_layout_version: String,
+    projection_version: String,
+    paper_layout_coordinate_space: String,
+    paper_layout_scale_mode: String,
+    paper_layout_local_p95_radius: f64,
+    paper_layout_shared_scale: f64,
+    papers: Vec<App17PaperCoordinateOverride>,
+    hotspots: Vec<App17HotspotCoordinateOverride>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct App17PaperCoordinateOverride {
+    id: String,
+    hotspot_id: String,
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct App17HotspotCoordinateOverride {
+    id: String,
+    x: f64,
+    y: f64,
+    z: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -4410,6 +4451,8 @@ fn build_v20_galaxy_payload(
             generated_at: now_millis_string(),
             snapshot_id: None,
             paper_layout_version: None,
+            paper_layout_coordinate_space: None,
+            paper_layout_scale_mode: None,
             paper_layout_local_p95_radius: None,
             paper_layout_shared_scale: None,
             embedding_model_id: None,
@@ -4440,6 +4483,8 @@ fn build_v20_galaxy_payload(
             generated_at: rows.state.generated_at.clone(),
             snapshot_id: Some(rows.state.active_snapshot_id),
             paper_layout_version: None,
+            paper_layout_coordinate_space: None,
+            paper_layout_scale_mode: None,
             paper_layout_local_p95_radius: None,
             paper_layout_shared_scale: None,
             embedding_model_id: None,
@@ -4545,6 +4590,8 @@ fn build_v20_galaxy_payload(
         generated_at: rows.state.generated_at.clone(),
         snapshot_id: Some(rows.state.active_snapshot_id),
         paper_layout_version: Some(rows.state.layout_version),
+        paper_layout_coordinate_space: Some("hierarchical".to_string()),
+        paper_layout_scale_mode: Some("shared".to_string()),
         paper_layout_local_p95_radius: Some(SEMANTIC_LOCAL_P95_RADIUS),
         paper_layout_shared_scale: Some(1.0),
         embedding_model_id: Some(rows.state.embedding_model_id),
@@ -5346,6 +5393,7 @@ pub fn export_app17_visual_review_snapshot(
     database_path: PathBuf,
     project_id: Option<String>,
     output_dir: PathBuf,
+    coordinate_override_path: Option<PathBuf>,
 ) -> Result<App17VisualReviewExportSummary, String> {
     const SCHEMA_VERSION: u32 = 1;
 
@@ -5369,13 +5417,33 @@ pub fn export_app17_visual_review_snapshot(
                 database_path
             )
         })?;
-    let payload = build_v20_galaxy_payload(&conn, &project_id, "nebula")?;
+    let mut payload = build_v20_galaxy_payload(&conn, &project_id, "nebula")?;
     if !payload.ready || payload.hotspots.is_empty() {
         return Err(format!(
             "V20 semantic visual review snapshot is unavailable: {}",
             payload.message
         ));
     }
+    let coordinate_override = coordinate_override_path
+        .map(|path| {
+            let path = path.canonicalize().map_err(|error| {
+                format!(
+                    "Cannot resolve coordinate override {}: {error}",
+                    path.display()
+                )
+            })?;
+            let bytes = fs::read(&path).map_err(|error| {
+                format!("Cannot read coordinate override {}: {error}", path.display())
+            })?;
+            let sha256 = format!("{:x}", Sha256::digest(&bytes));
+            let coordinate_override = serde_json::from_slice::<App17CoordinateOverride>(&bytes)
+                .map_err(|error| {
+                    format!("Invalid coordinate override {}: {error}", path.display())
+                })?;
+            apply_app17_coordinate_override(&mut payload, coordinate_override)?;
+            Ok::<_, String>((path, sha256))
+        })
+        .transpose()?;
 
     fs::create_dir_all(&output_dir).map_err(|error| {
         format!(
@@ -5473,6 +5541,12 @@ pub fn export_app17_visual_review_snapshot(
         paper_count: payload.paper_count,
         hotspot_count: payload.hotspot_count,
         topic_count: topics.len(),
+        coordinate_override_path: coordinate_override
+            .as_ref()
+            .map(|(path, _)| path.to_string_lossy().to_string()),
+        coordinate_override_sha256: coordinate_override
+            .as_ref()
+            .map(|(_, sha256)| sha256.clone()),
         topics,
     };
     write_visual_review_json(&output_dir.join("payload.json"), &payload)?;
@@ -5488,6 +5562,141 @@ pub fn export_app17_visual_review_snapshot(
         hotspot_count: payload.hotspot_count,
         topic_count: manifest.topic_count,
     })
+}
+
+fn apply_app17_coordinate_override(
+    payload: &mut V20GalaxyPayload,
+    coordinate_override: App17CoordinateOverride,
+) -> Result<(), String> {
+    if coordinate_override.schema_version != 1 {
+        return Err(format!(
+            "Unsupported coordinate override schema version: {}",
+            coordinate_override.schema_version
+        ));
+    }
+    if coordinate_override.paper_layout_coordinate_space != "global"
+        || coordinate_override.paper_layout_scale_mode != "shared"
+    {
+        return Err(
+            "Coordinate override must declare paperLayoutCoordinateSpace=global and paperLayoutScaleMode=shared."
+                .to_string(),
+        );
+    }
+    if coordinate_override.paper_layout_version.trim().is_empty()
+        || coordinate_override.projection_version.trim().is_empty()
+    {
+        return Err("Coordinate override layout and projection versions must be non-empty.".to_string());
+    }
+    if !coordinate_override.paper_layout_local_p95_radius.is_finite()
+        || coordinate_override.paper_layout_local_p95_radius <= 0.0
+        || !coordinate_override.paper_layout_shared_scale.is_finite()
+        || coordinate_override.paper_layout_shared_scale <= 0.0
+    {
+        return Err("Coordinate override scale metadata must be finite and positive.".to_string());
+    }
+    if let Some(expected_snapshot_id) = coordinate_override.snapshot_id.as_deref() {
+        if payload.snapshot_id.as_deref() != Some(expected_snapshot_id) {
+            return Err(format!(
+                "Coordinate override snapshot mismatch: expected {}, payload is {}.",
+                expected_snapshot_id,
+                payload.snapshot_id.as_deref().unwrap_or("<none>")
+            ));
+        }
+    }
+
+    let hotspot_id_by_topic = payload
+        .hotspots
+        .iter()
+        .map(|hotspot| ((hotspot.field.clone(), hotspot.topic_id), hotspot.id.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut paper_coordinates = HashMap::with_capacity(coordinate_override.papers.len());
+    for point in coordinate_override.papers {
+        if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
+            return Err(format!("Coordinate override contains non-finite paper coordinates: {}.", point.id));
+        }
+        let point_id = point.id.clone();
+        if paper_coordinates.insert(point_id.clone(), point).is_some() {
+            return Err(format!("Coordinate override contains duplicate paper id: {point_id}."));
+        }
+    }
+    if paper_coordinates.len() != payload.papers.len() {
+        return Err(format!(
+            "Coordinate override paper count mismatch: expected {}, received {}.",
+            payload.papers.len(),
+            paper_coordinates.len()
+        ));
+    }
+    for paper in &mut payload.papers {
+        let point = paper_coordinates.remove(&paper.raw_paper_id).ok_or_else(|| {
+            format!(
+                "Coordinate override is missing paper id: {}.",
+                paper.raw_paper_id
+            )
+        })?;
+        let expected_hotspot_id = hotspot_id_by_topic
+            .get(&(paper.field.clone(), paper.topic_id))
+            .ok_or_else(|| {
+                format!(
+                    "Payload paper {} references an unknown topic.",
+                    paper.raw_paper_id
+                )
+            })?;
+        if point.hotspot_id != *expected_hotspot_id {
+            return Err(format!(
+                "Coordinate override membership mismatch for paper {}: expected {}, received {}.",
+                paper.raw_paper_id, expected_hotspot_id, point.hotspot_id
+            ));
+        }
+        paper.x = point.x;
+        paper.y = point.y;
+        paper.z = point.z;
+    }
+    if let Some(extra_id) = paper_coordinates.keys().next() {
+        return Err(format!("Coordinate override contains unknown paper id: {extra_id}."));
+    }
+
+    let mut hotspot_coordinates = HashMap::with_capacity(coordinate_override.hotspots.len());
+    for point in coordinate_override.hotspots {
+        if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
+            return Err(format!("Coordinate override contains non-finite hotspot coordinates: {}.", point.id));
+        }
+        let point_id = point.id.clone();
+        if hotspot_coordinates.insert(point_id.clone(), point).is_some() {
+            return Err(format!("Coordinate override contains duplicate hotspot id: {point_id}."));
+        }
+    }
+    if hotspot_coordinates.len() != payload.hotspots.len() {
+        return Err(format!(
+            "Coordinate override hotspot count mismatch: expected {}, received {}.",
+            payload.hotspots.len(),
+            hotspot_coordinates.len()
+        ));
+    }
+    for hotspot in &mut payload.hotspots {
+        let point = hotspot_coordinates.remove(&hotspot.id).ok_or_else(|| {
+            format!("Coordinate override is missing hotspot id: {}.", hotspot.id)
+        })?;
+        hotspot.x = point.x;
+        hotspot.y = point.y;
+        hotspot.z = point.z;
+    }
+    if let Some(extra_id) = hotspot_coordinates.keys().next() {
+        return Err(format!("Coordinate override contains unknown hotspot id: {extra_id}."));
+    }
+
+    payload.paper_layout_version = Some(coordinate_override.paper_layout_version);
+    payload.paper_layout_coordinate_space =
+        Some(coordinate_override.paper_layout_coordinate_space);
+    payload.paper_layout_scale_mode = Some(coordinate_override.paper_layout_scale_mode);
+    payload.paper_layout_local_p95_radius =
+        Some(coordinate_override.paper_layout_local_p95_radius);
+    payload.paper_layout_shared_scale = Some(coordinate_override.paper_layout_shared_scale);
+    payload.projection_version = Some(coordinate_override.projection_version);
+    payload.message = format!(
+        "{} 已应用开发坐标覆盖；业务分组与证据保持不变。",
+        payload.message
+    );
+    Ok(())
 }
 
 fn query_v20_visual_review_hotspot_papers(

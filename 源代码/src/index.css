@@ -1207,6 +1207,23 @@ button:focus-visible {
     box-shadow: none;
   }
 
+  .galaxy-panel-fullscreen.galaxy-panel-review-capture {
+    top: 0;
+    right: auto;
+    bottom: auto;
+    left: 50%;
+    width: 1440px;
+    height: 900px;
+    min-height: 900px;
+    transform: translateX(-50%);
+  }
+
+  .galaxy-panel-fullscreen.galaxy-panel-review-capture .galaxy-hud,
+  .galaxy-panel-fullscreen.galaxy-panel-review-capture .galaxy-legend,
+  .galaxy-panel-fullscreen.galaxy-panel-review-capture .galaxy-evidence-card {
+    display: none;
+  }
+
   .galaxy-panel-fullscreen .galaxy-stage-3d {
     height: 100vh;
   }

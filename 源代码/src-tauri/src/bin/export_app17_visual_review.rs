@@ -10,6 +10,7 @@ struct Args {
     database_path: Option<PathBuf>,
     project_id: Option<String>,
     output_dir: Option<PathBuf>,
+    coordinate_override: Option<PathBuf>,
 }
 
 fn main() {
@@ -25,7 +26,12 @@ fn run() -> Result<(), String> {
     let output_dir = args
         .output_dir
         .ok_or_else(|| "Missing --output-dir <dir>.".to_string())?;
-    let result = export_app17_visual_review_snapshot(database_path, args.project_id, output_dir)?;
+    let result = export_app17_visual_review_snapshot(
+        database_path,
+        args.project_id,
+        output_dir,
+        args.coordinate_override,
+    )?;
     println!(
         "V20 semantic visual review snapshot completed: papers={}, hotspots={}, topics={}",
         result.paper_count, result.hotspot_count, result.topic_count
@@ -60,6 +66,11 @@ fn parse_args() -> Result<Args, String> {
             }
             "--output-dir" => {
                 args.output_dir = Some(PathBuf::from(value_after(&raw, index, "--output-dir")?));
+                index += 2;
+            }
+            "--coordinate-override" => {
+                args.coordinate_override =
+                    Some(PathBuf::from(value_after(&raw, index, "--coordinate-override")?));
                 index += 2;
             }
             value if value.starts_with("--") => return Err(format!("Unsupported argument: {value}")),
@@ -102,6 +113,9 @@ Options:
   --database-path <file> Direct path to research-hotspots-v7.sqlite.
   --project-id <id>      Project id. Defaults to project-default.
   --output-dir <dir>     Snapshot output directory.
+  --coordinate-override <file>
+                         Development-only paper/hotspot XYZ override JSON. Exact IDs and
+                         memberships are validated before any output is written.
 
 The SQLite database is opened read-only. This command never connects to MySQL or writes task logs."#
     );

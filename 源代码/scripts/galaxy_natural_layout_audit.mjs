@@ -22,8 +22,12 @@ assert(!desktop.includes("representative_records"), "ordinary and representative
 assert(desktop.includes("scale_semantic_local_point_sets(&mut local_point_sets)"));
 assert(!desktop.includes("point.x * 9.6"), "fixed local multiplier must be removed");
 assert(desktop.includes("paper_layout_local_p95_radius: Some(SEMANTIC_LOCAL_P95_RADIUS)"));
+assert(desktop.includes('paper_layout_coordinate_space: Some("hierarchical".to_string())'));
+assert(desktop.includes('paper_layout_scale_mode: Some("shared".to_string())'));
 assert(types.includes("paperLayoutLocalP95Radius?: number"));
 assert(types.includes("paperLayoutSharedScale?: number"));
+assert(types.includes('paperLayoutCoordinateSpace?: "hierarchical" | "global"'));
+assert(types.includes('paperLayoutScaleMode?: "shared" | "per-hotspot"'));
 assert(canvas.includes("APP17_NATURAL_LAYOUT_VERSION"));
 assert(canvas.includes("payload.paperLayoutSharedScale ?? 1"));
 assert(canvas.includes("(payload.paperLayoutLocalP95Radius ?? 10.5) * naturalLayoutUnitScale"));
