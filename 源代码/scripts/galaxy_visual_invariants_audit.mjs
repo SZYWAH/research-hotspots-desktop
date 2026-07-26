@@ -54,7 +54,7 @@ for (const [name, hash] of Object.entries(expected)) {
 }
 assert.equal(
   createHash("sha256").update(displayHotspotLayerSource().replace(/\s+/g, "")).digest("hex"),
-  "c02848c04297a9acd876d834397e37eaa3eccc5d09efd3abe538cb7e61ad0717",
+  "e3e4dd2c0dbd157aa08f931c6584893e632c5c8c6f87642179e689d073d7cf86",
   "createHotspotLayer display implementation changed",
 );
 assert(source.includes("const APP17_SYSTEM_INNER_ORBIT_PERIOD_SECONDS = 90;"));

@@ -116,6 +116,7 @@ export type GalaxyPerformanceSnapshot = {
   ambientMotion: GalaxyAmbientMotion;
   ambientTargetFps: number;
   ambientCadenceMisses: number;
+  overviewAmbientDegraded: boolean;
   selectionToFirstFrameMs: number;
   resumeToFirstFrameMs: number;
   focusTransitionMs: number;
@@ -352,6 +353,8 @@ type App17RenderPoint = {
   size: number;
   seed: number;
   glowStrength: number;
+  breathPeriodSeconds: number;
+  breathAmplitudeScale: number;
   importance: number;
   displaySize: number;
   position: THREE.Vector3;
@@ -848,6 +851,12 @@ const APP17_FAR_ORBIT_OPACITY = 0.04;
 const APP17_FAR_ROTATION_RADIANS_PER_SECOND = THREE.MathUtils.degToRad(0.045);
 const APP17_APP14_AMBIENT_FRAME_INTERVAL = 1_000 / 20;
 const APP17_APP15_AMBIENT_FRAME_INTERVAL = 1_000 / 12;
+const APP17_OVERVIEW_AMBIENT_FRAME_INTERVAL = 1_000 / 24;
+// Overview breathing is a comfort animation, not a correctness feature. If the
+// machine cannot hold it, drop back to the still frame budget for the session
+// rather than letting the whole canvas run at a degraded rate.
+const APP17_OVERVIEW_AMBIENT_SLOW_FRAME_MS = 55;
+const APP17_OVERVIEW_AMBIENT_SLOW_WINDOWS_BEFORE_DEGRADE = 3;
 const APP17_ENVIRONMENT_STAR_COUNT = 9_000;
 const APP17_ENVIRONMENT_MICRO_COUNT = 7_560;
 const APP17_ENVIRONMENT_COMPACT_COUNT = 1_260;
@@ -1504,8 +1513,54 @@ export function App17GalaxyCanvas({
       onSystemViewModeChangeRef.current?.(mode);
     };
 
+    // Overview breathing keeps the galaxy alive while nothing is selected. It
+    // stays off whenever the frame budget, the user's motion preference or the
+    // page visibility says it should.
+    let overviewAmbientDegraded = false;
+    let overviewAmbientSlowWindows = 0;
+    let overviewAmbientLastFrameTime = 0;
+    const overviewAmbientFrameDeltas: number[] = [];
+
+    function overviewAmbientActive() {
+      return !reduceMotion
+        && !overviewAmbientDegraded
+        && (exploration.state === "overview" || exploration.state === "preparing");
+    }
+
+    // Watches the real cadence of the overview breathing frames. The diagnostics
+    // samplers only run while the panel is open, so this keeps its own window.
+    function trackOverviewAmbientCadence(now: number) {
+      const previous = overviewAmbientLastFrameTime;
+      overviewAmbientLastFrameTime = now;
+      if (previous <= 0) return;
+      const delta = now - previous;
+      // A frame that arrives after a long gap is a scheduling pause, not a slow
+      // frame; counting it would degrade on tab switches and drag releases.
+      if (delta > APP17_OVERVIEW_AMBIENT_SLOW_FRAME_MS * 4) {
+        overviewAmbientFrameDeltas.length = 0;
+        return;
+      }
+      overviewAmbientFrameDeltas.push(delta);
+      if (overviewAmbientFrameDeltas.length < 24) return;
+      const sorted = overviewAmbientFrameDeltas.slice().sort((first, second) => first - second);
+      const p95 = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+      overviewAmbientFrameDeltas.length = 0;
+      if (p95 <= APP17_OVERVIEW_AMBIENT_SLOW_FRAME_MS) {
+        overviewAmbientSlowWindows = 0;
+        return;
+      }
+      overviewAmbientSlowWindows += 1;
+      if (overviewAmbientSlowWindows < APP17_OVERVIEW_AMBIENT_SLOW_WINDOWS_BEFORE_DEGRADE) return;
+      overviewAmbientDegraded = true;
+      applyAmbientVisuals();
+      invalidate();
+    }
+
     function getAmbientMotion(): GalaxyAmbientMotion {
-      if (reduceMotion || exploration.state === "overview" || exploration.state === "preparing") return "none";
+      if (reduceMotion) return "none";
+      if (exploration.state === "overview" || exploration.state === "preparing") {
+        return overviewAmbientDegraded ? "none" : "breath";
+      }
       return sceneData.kind === "app14" ? "rotation-breath" : "breath";
     }
 
@@ -1537,7 +1592,8 @@ export function App17GalaxyCanvas({
     }
 
     function getAmbientTargetFps() {
-      if (reduceMotion || exploration.state !== "system") return 0;
+      if (reduceMotion) return 0;
+      if (exploration.state !== "system") return overviewAmbientActive() ? 24 : 0;
       return sceneData.kind === "app14" ? 20 : 12;
     }
 
@@ -1788,6 +1844,7 @@ export function App17GalaxyCanvas({
         ambientMotion: getAmbientMotion(),
         ambientTargetFps: getAmbientTargetFps(),
         ambientCadenceMisses: ambientCadenceSamples.reduce((total, sample) => total + sample.value, 0),
+        overviewAmbientDegraded,
         selectionToFirstFrameMs: lastSelectionToFirstFrameMs,
         resumeToFirstFrameMs: lastResumeToFirstFrameMs,
         focusTransitionMs: lastFocusTransitionMs,
@@ -2715,7 +2772,12 @@ export function App17GalaxyCanvas({
       const rotationAngle = sceneData.kind === "app14" ? farRotationAngle : 0;
       const ambientStrength = reduceMotion ? 0 : 1;
       paperLayer.setFarRotation(rotationAngle);
-      hotspotLayer.setAmbientState(ambientTimeSeconds, rotationAngle, ambientStrength);
+      hotspotLayer.setAmbientState(
+        ambientTimeSeconds,
+        rotationAngle,
+        ambientStrength,
+        overviewAmbientActive() ? 1 : 0,
+      );
       systemResources?.farBackgroundLayer?.setAnimation(
         ambientTimeSeconds,
         ambientStrength,
@@ -4355,6 +4417,7 @@ export function App17GalaxyCanvas({
       const fullscreenTransitioningBefore = fullscreenTransition !== null;
       const inspectionTransitioningBefore = paperJourney.isMoving();
       const ambientSteadyActiveBefore = !reduceMotion && exploration.state === "system";
+      const overviewAmbientActiveBefore = overviewAmbientActive();
       const environmentAnimationActiveBefore = !reduceMotion
         && (fullscreenBlend > 0.001 || fullscreenTransition?.to === 1);
       const autoRotateActive =
@@ -4372,9 +4435,11 @@ export function App17GalaxyCanvas({
           ? APP17_OVERVIEW_FRAME_INTERVAL
           : ambientSteadyActiveBefore
             ? sceneData.kind === "app14" ? APP17_APP14_AMBIENT_FRAME_INTERVAL : APP17_APP15_AMBIENT_FRAME_INTERVAL
-            : environmentAnimationActiveBefore
-              ? sceneData.kind === "app14" ? APP17_ENVIRONMENT_APP14_FRAME_INTERVAL : APP17_ENVIRONMENT_APP15_FRAME_INTERVAL
-              : 0;
+            : overviewAmbientActiveBefore
+              ? APP17_OVERVIEW_AMBIENT_FRAME_INTERVAL
+              : environmentAnimationActiveBefore
+                ? sceneData.kind === "app14" ? APP17_ENVIRONMENT_APP14_FRAME_INTERVAL : APP17_ENVIRONMENT_APP15_FRAME_INTERVAL
+                : 0;
 
       if (
         !renderRequested
@@ -4417,8 +4482,10 @@ export function App17GalaxyCanvas({
       let orbitChanged = false;
       let ambientChanged = false;
       const ambientTimelineActive = !reduceMotion
-        && exploration.state !== "overview"
-        && exploration.state !== "preparing";
+        && (
+          (exploration.state !== "overview" && exploration.state !== "preparing")
+          || overviewAmbientActiveBefore
+        );
       const environmentTimelineActive = !reduceMotion
         && (fullscreenBlend > 0.001 || fullscreenTransition?.to === 1);
       if (environmentTimelineActive && ambientElapsedMs > 0) {
@@ -4910,6 +4977,8 @@ export function App17GalaxyCanvas({
           lastMeasuredRenderTime = now;
         }
         lastRenderTime = now;
+        if (overviewAmbientActiveBefore) trackOverviewAmbientCadence(now);
+        else overviewAmbientLastFrameTime = 0;
         if (autoRotateActive || orbit.dragging || orbitChanged) labelDirty = true;
       }
 
@@ -4956,6 +5025,7 @@ export function App17GalaxyCanvas({
       if (
         autoRotateActive
         || ambientSteadyActiveAfter
+        || overviewAmbientActive()
         || environmentAnimationActiveAfter
         || orbit.dragging
         || orbit.transition
@@ -5449,6 +5519,7 @@ function buildApp14ShowScene(payload: App17GalaxyPayload): App17SceneData {
       size: 6 + Math.log1p(hotspot.paperCount || 10) * 5,
       seed: stableHash(hotspot.id) / 4294967295,
       glowStrength: app17GlowStrength(hotspot.trend),
+      ...app17BreathProfile(hotspot.trend, hotspot.id),
       importance: 0,
       displaySize: 0,
       position,
@@ -5542,6 +5613,7 @@ function buildApp15TheoryHotspots(payload: App17GalaxyPayload) {
     size: hotspot.size,
     seed: stableHash(hotspot.id) / 4294967295,
     glowStrength: app17GlowStrength(hotspot.trend),
+    ...app17BreathProfile(hotspot.trend, hotspot.id),
     importance: 0,
     displaySize: 0,
     position: new THREE.Vector3(hotspot.x * APP15_COORD_SCALE, hotspot.y * APP15_COORD_SCALE, hotspot.z * APP15_COORD_SCALE),
@@ -8925,6 +8997,7 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
   const rayStrengths = new Float32Array(count);
   const breathPhases = new Float32Array(count);
   const breathSpeeds = new Float32Array(count);
+  const breathAmplitudes = new Float32Array(count);
   const selectedMasks = new Float32Array(count);
   const crossfadeMasks = new Float32Array(count);
   const topicKeys = hotspots.map((hotspot) => topicKeyFromHotspot(hotspot));
@@ -8952,9 +9025,8 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
     haloStrengths[index] = hotspot.glowStrength * (0.55 + importance * 0.45) * (kind === "app14" ? 1 : 0.72);
     rayStrengths[index] = rayRank === undefined ? 0 : 0.08 + (1 - rayRank / 7) * 0.14;
     breathPhases[index] = hotspot.seed * Math.PI * 2;
-    const breathSeed = stableHash(`${hotspot.id}:breath`) / 4294967295;
-    const periodSeconds = kind === "app14" ? 10 + breathSeed * 6 : 12 + breathSeed * 6;
-    breathSpeeds[index] = (Math.PI * 2) / periodSeconds;
+    breathSpeeds[index] = (Math.PI * 2) / hotspot.breathPeriodSeconds;
+    breathAmplitudes[index] = hotspot.breathAmplitudeScale;
   });
 
   const geometry = new THREE.BufferGeometry();
@@ -8966,6 +9038,7 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
   geometry.setAttribute("rayStrength", new THREE.BufferAttribute(rayStrengths, 1));
   geometry.setAttribute("breathPhase", new THREE.BufferAttribute(breathPhases, 1));
   geometry.setAttribute("breathSpeed", new THREE.BufferAttribute(breathSpeeds, 1));
+  geometry.setAttribute("breathAmplitude", new THREE.BufferAttribute(breathAmplitudes, 1));
   const selectedMaskAttribute = new THREE.BufferAttribute(selectedMasks, 1);
   geometry.setAttribute("selectedMask", selectedMaskAttribute);
   const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);
@@ -8999,10 +9072,11 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
       }
       crossfadeMaskAttribute.needsUpdate = true;
     },
-    setAmbientState: (timeSeconds: number, rotationAngle: number, strength: number) => {
+    setAmbientState: (timeSeconds: number, rotationAngle: number, strength: number, overviewAmbient = 0) => {
       material.uniforms.uAmbientTime.value = timeSeconds;
       material.uniforms.uFarRotationAngle.value = rotationAngle;
       material.uniforms.uAmbientStrength.value = strength;
+      material.uniforms.uOverviewAmbient.value = THREE.MathUtils.clamp(overviewAmbient, 0, 1);
     },
     setOverviewFarBlend: (blend: number) => {
       material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
@@ -9912,6 +9986,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uFarRotationAngle: { value: 0 },
       uAmbientTime: { value: 0 },
       uAmbientStrength: { value: 1 },
+      uOverviewAmbient: { value: 0 },
       uOverviewFarBlend: { value: 0 },
     },
     transparent: true,
@@ -9927,6 +10002,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       attribute float rayStrength;
       attribute float breathPhase;
       attribute float breathSpeed;
+      attribute float breathAmplitude;
       attribute float selectedMask;
       attribute float crossfadeMask;
       uniform float uPixelRatio;
@@ -9937,6 +10013,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uniform float uFarRotationAngle;
       uniform float uAmbientTime;
       uniform float uAmbientStrength;
+      uniform float uOverviewAmbient;
       uniform float uOverviewFarBlend;
       varying vec3 vColor;
       varying float vPointIntensity;
@@ -9979,8 +10056,10 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
         float distantRayVisibility = ${kind === "app15"
           ? "theorySourceVisibility"
           : `mix(1.0, ${APP17_FAR_HOTSPOT_RAY_OPACITY.toFixed(2)}, isolationProgress)`};
-        float ambientMask = (1.0 - selectedMask) * smoothstep(0.7, 1.0, uExplorationProgress) * uAmbientStrength;
-        float breath = sin(uAmbientTime * breathSpeed + breathPhase) * ambientMask;
+        float ambientMask = (1.0 - selectedMask)
+          * max(smoothstep(0.7, 1.0, uExplorationProgress), uOverviewAmbient)
+          * uAmbientStrength;
+        float breath = sin(uAmbientTime * breathSpeed + breathPhase) * ambientMask * breathAmplitude;
         float baseCoreVisibility = mix(distantCoreVisibility, selectedVisibility, selectedMask);
         float baseHaloVisibility = mix(distantHaloVisibility, selectedVisibility, selectedMask);
         vCoreVisibility = uSceneOpacity * mix(1.0, 0.82, uOverviewFarBlend) * ${kind === "app14"
@@ -10360,6 +10439,21 @@ function app17GlowStrength(value: string) {
   if (normalized.includes("stable") || normalized.includes("稳定")) return 0.75;
   if (normalized.includes("declin") || normalized.includes("下降")) return 0.55;
   return 0.65;
+}
+
+function app17BreathProfile(trend: string, id: string) {
+  const normalized = trend.toLowerCase();
+  const seed = stableHash(`${id}:breath`) / 4294967295;
+  const [shortestPeriod, longestPeriod, amplitudeScale] =
+    normalized.includes("surg") || normalized.includes("hot") || normalized.includes("爆")
+      ? [6, 8, 1.8]
+      : normalized.includes("declin") || normalized.includes("下降")
+        ? [16, 20, 0.45]
+        : [9, 12, 1];
+  return {
+    breathPeriodSeconds: shortestPeriod + seed * (longestPeriod - shortestPeriod),
+    breathAmplitudeScale: amplitudeScale,
+  };
 }
 
 function stableHash(value: string) {
