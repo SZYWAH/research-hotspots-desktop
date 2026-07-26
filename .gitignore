@@ -40,3 +40,9 @@ Thumbs.db
 /数据集.sql
 /*.docx
 /*.pptx
+
+# Acceptance-run artifacts, installers, and design references. Large and reproducible.
+/验收临时/
+/验收备份/
+/验收安装/
+/设计参考/
