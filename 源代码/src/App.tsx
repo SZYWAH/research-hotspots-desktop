@@ -3593,7 +3593,7 @@ function GalaxyView({
             </div>
           )}
           <h1>科研星图</h1>
-          <p className="page-subtitle">星图以锐利点阵、星场密度和克制语义光丝呈现科研热点关系，避免大面积光晕和雾化发光团。</p>
+          <p className="page-subtitle">星图以锐利点阵、星场密度和克制的三色温体系呈现科研热点关系，避免大面积光晕和雾化发光团。</p>
         </div>
       </header>
       <section className="panel-card">
@@ -3901,7 +3901,7 @@ function GalaxyView({
                   <span>{visualMode === "nebula" ? "展示星图" : "理论星图"}</span>
                   <span>粒子密度=论文数</span>
                   <span>核心亮度=置信度</span>
-                  <span>光丝=关键词相似度</span>
+                  <span>色系=学科 · 呼吸=趋势</span>
                 </>
               ) : (
                 <>

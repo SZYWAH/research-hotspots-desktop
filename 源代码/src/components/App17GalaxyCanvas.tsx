@@ -747,6 +747,10 @@ const APP17_LABEL_FRAME_INTERVAL = 1_000 / 20;
 const APP17_DEFAULT_LABEL_LIMIT = 20;
 const APP17_ZOOM_LABEL_LIMIT = 35;
 const APP17_ZOOM_LABEL_RADIUS = 7;
+// The leading hotspots stay named at every distance; the rest only earn a label
+// once the camera is close enough to separate them, and anything below that is
+// reachable by hover. A flat wall of names reads as noise, not as a map.
+const APP17_PRIMARY_LABEL_COUNT = 6;
 const APP17_COMMAND_TRANSITION_MS = 450;
 const APP17_FULLSCREEN_TRANSITION_MS = 320;
 const APP17_FULLSCREEN_APP14_ZOOM = 1.13;
@@ -10397,9 +10401,14 @@ function drawLabels(
   const labelLimit = cameraDistance <= APP17_ZOOM_LABEL_RADIUS
     ? APP17_ZOOM_LABEL_LIMIT
     : APP17_DEFAULT_LABEL_LIMIT;
+  const primaryHotspots = rankedHotspots.slice(0, APP17_PRIMARY_LABEL_COUNT);
+  const secondaryHotspots = cameraDistance <= APP17_ZOOM_LABEL_RADIUS
+    ? rankedHotspots.slice(APP17_PRIMARY_LABEL_COUNT, labelLimit)
+    : [];
+  const secondaryIds = new Set(secondaryHotspots.map((hotspot) => hotspot.id));
   const candidates = explorationProgress > 0.08
     ? uniqueHotspots([selected, hovered])
-    : uniqueHotspots([selected, hovered, ...rankedHotspots.slice(0, labelLimit)]);
+    : uniqueHotspots([selected, hovered, ...primaryHotspots, ...secondaryHotspots]);
   const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
   const worldPosition = new THREE.Vector3();
   const screenPosition = new THREE.Vector3();
@@ -10422,10 +10431,21 @@ function drawLabels(
     if (!isPriority && occupied.some((item) => rectsOverlap(item, box))) continue;
     occupied.push(box);
 
-    ctx.font = isPriority ? "700 13px Inter, Microsoft YaHei, system-ui, sans-serif" : sceneData.kind === "app14" ? "700 10px Inter, Microsoft YaHei, system-ui, sans-serif" : "700 11px Inter, system-ui, sans-serif";
+    const isSecondary = !isPriority && secondaryIds.has(hotspot.id);
+    ctx.font = isPriority
+      ? "700 13px Inter, Microsoft YaHei, system-ui, sans-serif"
+      : sceneData.kind === "app14"
+        ? "700 10px Inter, Microsoft YaHei, system-ui, sans-serif"
+        : isSecondary
+          ? "700 11px Inter, system-ui, sans-serif"
+          : "700 12px Inter, system-ui, sans-serif";
     ctx.lineWidth = sceneData.kind === "app14" ? 3.2 : 4;
     ctx.strokeStyle = "rgba(0,0,0,0.94)";
-    ctx.fillStyle = isPriority ? "rgba(255,255,255,0.98)" : "rgba(246,250,255,0.9)";
+    ctx.fillStyle = isPriority
+      ? "rgba(255,255,255,0.98)"
+      : isSecondary
+        ? "rgba(246,250,255,0.72)"
+        : "rgba(246,250,255,0.95)";
     ctx.strokeText(title, x, y);
     ctx.fillText(title, x, y);
 
