@@ -2490,6 +2490,9 @@ export function App17GalaxyCanvas({
         fixedSystemReview ? THREE.MathUtils.degToRad(26) : APP17_SYSTEM_ELEVATION,
         now,
         APP17_SYSTEM_TRANSITION_MS,
+        undefined,
+        undefined,
+        true,
       );
       invalidate(true);
     };
@@ -2980,6 +2983,9 @@ export function App17GalaxyCanvas({
         saved.elevation,
         now,
         Math.max(240, APP17_SYSTEM_TRANSITION_MS * Math.max(0.12, exploration.blend)),
+        undefined,
+        undefined,
+        true,
       );
     };
 
