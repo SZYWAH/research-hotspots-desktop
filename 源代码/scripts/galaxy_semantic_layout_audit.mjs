@@ -37,7 +37,7 @@ assert(app.includes("getSemanticModelingStatus"), "pipeline semantic progress po
 assert(app.includes("controlSemanticModeling"), "pipeline semantic pause/cancel controls are missing");
 assert(app.includes("GPU（当前安装不可用）"), "Lite GPU capability explanation is missing");
 assert(
-  desktop.includes('let payload = build_v20_galaxy_payload(&conn, &project_id, "nebula")?'),
+  desktop.includes('build_v20_galaxy_payload(&conn, &project_id, "nebula")?'),
   "browser visual review must export the active V20 semantic payload",
 );
 assert(
