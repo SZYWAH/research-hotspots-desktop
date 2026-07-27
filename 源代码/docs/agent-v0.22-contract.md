@@ -1,5 +1,11 @@
 # Research Agent v0.22 Contract
 
+> Scope notice (2026-07-27): this is the versioned implementation contract for
+> the supervised v0.22 Agent backend. It remains an important safety and audit
+> baseline, but it is not the final Chat-first product definition. See
+> [Research Agent 最终产品目标](./RESEARCH_AGENT_PRODUCT_GOAL.md) and
+> [Research Agent 分阶段实施路线](./RESEARCH_AGENT_IMPLEMENTATION_ROADMAP.md).
+
 ## Purpose
 
 Version `0.22.0-beta.2` retains the supervised research Agent above the local paper library and adds the schema 12 semantic galaxy layout. The first flagship workflow is:

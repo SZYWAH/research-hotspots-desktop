@@ -1,5 +1,12 @@
 # V20 Final Handoff
 
+> Product-scope notice (2026-07-27): this document is the historical V20
+> infrastructure handoff, not the final product definition. The authoritative
+> product target is [Research Agent 最终产品目标](./RESEARCH_AGENT_PRODUCT_GOAL.md),
+> and its delivery sequence is defined by
+> [Research Agent 分阶段实施路线](./RESEARCH_AGENT_IMPLEMENTATION_ROADMAP.md).
+> V20 remains required infrastructure beneath that product.
+
 Updated: 2026-07-07
 
 This document describes the current V20 delivery state of the local-first research hotspots desktop workstation. It complements `outputs/V20_FINAL_ACCEPTANCE.md`, which records the latest command outputs and screenshots.
