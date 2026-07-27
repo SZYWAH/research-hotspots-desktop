@@ -143,6 +143,8 @@ export type GalaxyPerformanceSnapshot = {
   overviewSelectedTopicOpacity: number;
   systemCloudOpacity: number;
   systemEntryCameraTravelDistance: number;
+  systemEntryCameraRayDeviation: number;
+  systemEntryDistanceMonotonicViolations: number;
   systemEntryNonSelectedWorldDrift: number;
   systemEntryScale: number;
   systemCanonicalRebaseCount: number;
@@ -168,6 +170,14 @@ export type GalaxyPerformanceSnapshot = {
   farBackgroundRebaseProjectionDeltaPx: number;
   systemOverviewVisibleObjectCount: number;
   systemOverviewPickableObjectCount: number;
+  representativeOwnershipBlend: number;
+  representativeStyleBlend: number;
+  representativeOrbitReveal: number;
+  representativeOrbitMotionBlend: number;
+  representativeSemanticOrbitError: number;
+  representativeSafeOrbitCaptureCount: number;
+  representativeHandoffProjectionDeltaPx: number;
+  representativeMaxLuminanceStep: number;
   theoryViewAzimuthDegrees: number;
   theoryViewElevationDegrees: number;
   theoryViewBaselineScore: number;
@@ -426,6 +436,10 @@ type App17OrbitTransition = {
   cameraFrom?: THREE.Vector3;
   cameraTo?: THREE.Vector3;
   cameraControl?: THREE.Vector3;
+  radialCameraTarget?: THREE.Vector3;
+  radialCameraDirection?: THREE.Vector3;
+  radialCameraStartDistance?: number;
+  radialCameraEndDistance?: number;
   logarithmicDistance?: boolean;
 };
 
@@ -473,11 +487,20 @@ type GalaxySystemPaper = {
   year?: number;
   rank: number;
   displaySize: number;
+  ordinaryDisplaySize: number;
+  ordinaryAlpha: number;
   color: string;
   orbit: GalaxySystemOrbit;
   semanticPosition: THREE.Vector3;
   orbitPosition: THREE.Vector3;
   position: THREE.Vector3;
+  transitionDelaySeconds: number;
+  ownershipBlend: number;
+  styleBlend: number;
+  orbitReveal: number;
+  orbitMotionBlend: number;
+  requiresSafeOrbitCapture: boolean;
+  lastCombinedLuminance: number;
 };
 
 type GalaxySystemCloudPaper = {
@@ -531,11 +554,10 @@ type GalaxyCoronaProfile = {
 type GalaxySystemOrbit = {
   majorRadius: number;
   minorRadius: number;
-  inclination: number;
-  nodeAngle: number;
   phase: number;
   angularSpeed: number;
-  rotation: THREE.Quaternion;
+  radialBasis: THREE.Vector3;
+  tangentBasis: THREE.Vector3;
 };
 
 type GalaxySystemResources = {
@@ -556,8 +578,15 @@ type GalaxySystemResources = {
   hiddenRepresentativeCount: number;
   unresolvedRepresentativeCount: number;
   representativeSignature: string;
-  representativeLayoutBlend: number;
-  representativeLayoutTarget: number;
+  representativeOwnershipBlend: number;
+  representativeStyleBlend: number;
+  representativeOrbitReveal: number;
+  representativeOrbitMotionBlend: number;
+  representativeTransitionElapsed: number;
+  representativeTransitionDirection: -1 | 0 | 1;
+  representativeSemanticOrbitError: number;
+  representativeSafeOrbitCaptureCount: number;
+  representativeMaxLuminanceStep: number;
   opacity: number;
   activeTimeSeconds: number;
   entryScale: number;
@@ -568,6 +597,9 @@ type GalaxySystemResources = {
   initialDistance: number;
   minDistance: number;
   maxDistance: number;
+  setRepresentativeEntryProgress: (progress: number) => void;
+  startRepresentativeSettle: () => void;
+  startRepresentativeExit: () => void;
   updateAnimation: (elapsedSeconds: number, motionEnabled: boolean, frozenPaperIds: Set<string>) => boolean;
   dispose: () => void;
 };
@@ -581,6 +613,8 @@ type GalaxySystemRepresentativeBundle = {
   hiddenRepresentativeIds: Set<string>;
   hiddenRepresentativeCount: number;
   unresolvedRepresentativeCount: number;
+  semanticOrbitError: number;
+  safeOrbitCaptureCount: number;
   dispose: () => void;
 };
 
@@ -782,8 +816,11 @@ const APP17_SYSTEM_PAPER_REVEAL_END = 0.82;
 const APP17_SYSTEM_PAPER_FAR_EXPOSURE = 1.4;
 const APP17_SYSTEM_PAPER_MEDIUM_EXPOSURE = 1.35;
 const APP17_SYSTEM_PAPER_NEAR_EXPOSURE = 1.2;
-const APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR = 0.67;
-const APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR = 0.83;
+const APP17_SYSTEM_PAPER_BASE_ALPHA = 0.65;
+const APP17_SYSTEM_PAPER_MINIMUM_SIZE = 2.5;
+const APP17_SYSTEM_PAPER_MAXIMUM_SIZE = 3.9;
+const APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR = 0.82;
+const APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR = 0.9;
 const APP17_SYSTEM_PAPER_PICK_RADIUS_PX = 12;
 const APP17_SYSTEM_ORDINARY_PAPER_PICK_RADIUS_PX = 7;
 const APP17_SYSTEM_PAPER_PICK_INTERVAL_MS = 1_000 / 30;
@@ -812,6 +849,14 @@ const APP17_PAPER_INSPECTION_MOTION_RESUME_MS = 1_000;
 const APP17_PAPER_INSPECTION_WORLD_DIAMETER = 0.08;
 const APP17_PAPER_INSPECTION_ARRIVAL_VIEWPORT_RATIO = 0.62;
 const APP17_REPRESENTATIVE_SYSTEM_SIZE_SCALE = 1.32;
+const APP17_REPRESENTATIVE_OWNERSHIP_START = 0.7;
+const APP17_REPRESENTATIVE_STYLE_DURATION_SECONDS = 0.8;
+const APP17_REPRESENTATIVE_MAX_STYLE_STEP = 0.14;
+const APP17_REPRESENTATIVE_ORBIT_REVEAL_DURATION_SECONDS = 0.96;
+const APP17_REPRESENTATIVE_MOTION_DELAY_SECONDS = 0.24;
+const APP17_REPRESENTATIVE_MOTION_DURATION_SECONDS = 0.72;
+const APP17_REPRESENTATIVE_STAGGER_MAX_SECONDS = 0.24;
+const APP17_REPRESENTATIVE_SAFE_ORBIT_RADIUS = APP17_SYSTEM_PAPER_STAR_EXCLUSION_RADIUS;
 const APP17_REPRESENTATIVE_INSPECTION_SCALE = 1.16;
 const APP17_REPRESENTATIVE_BLOOM_STRENGTH_SCALE = 0.9;
 const APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE = 1.35;
@@ -1287,6 +1332,7 @@ export function App17GalaxyCanvas({
     const paperTraceTargetProjectedPosition = new THREE.Vector3();
     const paperTracePickWorldPosition = new THREE.Vector3();
     const paperTracePickProjectedPosition = new THREE.Vector3();
+    const representativeSemanticProjectedPosition = new THREE.Vector3();
     const recentRepresentativeScreenPositions = new Map<string, Array<{
       timestamp: number;
       x: number;
@@ -1485,6 +1531,10 @@ export function App17GalaxyCanvas({
     let overviewSelectedTopicOpacity = 1;
     let systemCloudOpacity = 0;
     let lastSystemEntryCameraTravelDistance = 0;
+    let lastSystemEntryCameraRayDeviation = 0;
+    let lastSystemEntryDistanceMonotonicViolations = 0;
+    let lastRepresentativeHandoffProjectionDeltaPx = 0;
+    let previousSystemEntryHotspotDistance = Number.POSITIVE_INFINITY;
     let lastSystemEntryNonSelectedWorldDrift = 0;
     let lastSystemEntryScale = 1;
     let systemCanonicalRebaseCount = 0;
@@ -1493,6 +1543,10 @@ export function App17GalaxyCanvas({
     let lastSystemEntrySelectedCenterDeltaPx = 0;
     let lastSystemEntryCloudDiameterRatio = 1;
     const systemEntryCameraStart = new THREE.Vector3();
+    const theoryEntryRayTarget = new THREE.Vector3();
+    const theoryEntryRayDirection = new THREE.Vector3(1, 0, 0);
+    let theoryEntryRayStartDistance = 0;
+    let theoryEntryRayEndDistance = 0;
     let queuedEnterHotspotId = "";
     let theoryWorldReference: Array<{
       kind: "paper" | "hotspot";
@@ -1890,6 +1944,8 @@ export function App17GalaxyCanvas({
         overviewSelectedTopicOpacity,
         systemCloudOpacity,
         systemEntryCameraTravelDistance: lastSystemEntryCameraTravelDistance,
+        systemEntryCameraRayDeviation: lastSystemEntryCameraRayDeviation,
+        systemEntryDistanceMonotonicViolations: lastSystemEntryDistanceMonotonicViolations,
         systemEntryNonSelectedWorldDrift: lastSystemEntryNonSelectedWorldDrift,
         systemEntryScale: lastSystemEntryScale,
         systemCanonicalRebaseCount,
@@ -1924,6 +1980,14 @@ export function App17GalaxyCanvas({
           && !(sceneData.kind === "app15" && exploration.blend >= 0.7)
           ? sceneData.hotspots.length
           : 0,
+        representativeOwnershipBlend: systemResources?.representativeOwnershipBlend ?? 0,
+        representativeStyleBlend: systemResources?.representativeStyleBlend ?? 0,
+        representativeOrbitReveal: systemResources?.representativeOrbitReveal ?? 0,
+        representativeOrbitMotionBlend: systemResources?.representativeOrbitMotionBlend ?? 0,
+        representativeSemanticOrbitError: systemResources?.representativeSemanticOrbitError ?? 0,
+        representativeSafeOrbitCaptureCount: systemResources?.representativeSafeOrbitCaptureCount ?? 0,
+        representativeHandoffProjectionDeltaPx: lastRepresentativeHandoffProjectionDeltaPx,
+        representativeMaxLuminanceStep: systemResources?.representativeMaxLuminanceStep ?? 0,
         theoryViewAzimuthDegrees: theoryViewSelection
           ? THREE.MathUtils.radToDeg(theoryViewSelection.azimuth)
           : THREE.MathUtils.radToDeg(cameraPreset.azimuth),
@@ -2531,11 +2595,7 @@ export function App17GalaxyCanvas({
       exploration.toBlend = 1;
       exploration.canonicalRebased = false;
       if (sceneData.kind === "app15") {
-        systemResources.representativeLayoutBlend = 0;
-        systemResources.representativeLayoutTarget = 0;
-        systemResources.representativePapers.forEach((paper) => {
-          paper.position.copy(paper.semanticPosition);
-        });
+        systemResources.setRepresentativeEntryProgress(0);
         const positions = systemResources.representativePapers.map((paper) => paper.position);
         systemResources.representativeLayer?.setPointPositions(positions);
         systemResources.representativeBloomLayer?.setPointPositions(positions);
@@ -2548,8 +2608,19 @@ export function App17GalaxyCanvas({
       lastSystemEntrySelectedCenterDeltaPx = 0;
       lastSystemEntryCloudDiameterRatio = 1;
       lastSystemEntryNonSelectedWorldDrift = 0;
+      lastSystemEntryCameraRayDeviation = 0;
+      lastSystemEntryDistanceMonotonicViolations = 0;
+      lastRepresentativeHandoffProjectionDeltaPx = 0;
+      systemResources.representativeMaxLuminanceStep = 0;
       applyCameraOrbit(camera, orbit);
       systemEntryCameraStart.copy(camera.position);
+      theoryEntryRayTarget.copy(exploration.focusWorld);
+      theoryEntryRayDirection.copy(camera.position).sub(theoryEntryRayTarget);
+      theoryEntryRayStartDistance = Math.max(0.001, theoryEntryRayDirection.length());
+      if (theoryEntryRayDirection.lengthSq() < 1e-12) theoryEntryRayDirection.set(1, 0, 0);
+      else theoryEntryRayDirection.normalize();
+      theoryEntryRayEndDistance = exploration.systemDistance;
+      previousSystemEntryHotspotDistance = theoryEntryRayStartDistance;
       captureTheoryWorldReference();
       orbit.viewMode = "system";
       clearAutoResumeTimer();
@@ -2557,18 +2628,33 @@ export function App17GalaxyCanvas({
       lastTransitionRenderTime = 0;
       beginTransitionLayoutDiagnostics();
       setExplorationState("entering");
+      const directTheoryEntry = sceneData.kind === "app15";
+      const entryAzimuth = directTheoryEntry
+        ? Math.atan2(theoryEntryRayDirection.y, theoryEntryRayDirection.x)
+        : fixedSystemReview ? Math.PI / 4 : orbit.azimuth;
+      const entryElevation = directTheoryEntry
+        ? Math.asin(THREE.MathUtils.clamp(theoryEntryRayDirection.z, -1, 1))
+        : fixedSystemReview ? THREE.MathUtils.degToRad(26) : APP17_SYSTEM_ELEVATION;
       startOrbitTransition(
         orbit,
         "enter-system",
         exploration.focusWorld,
         exploration.systemDistance,
-        fixedSystemReview ? Math.PI / 4 : orbit.azimuth,
-        fixedSystemReview ? THREE.MathUtils.degToRad(26) : APP17_SYSTEM_ELEVATION,
+        entryAzimuth,
+        entryElevation,
         now,
         APP17_SYSTEM_TRANSITION_MS,
         undefined,
         undefined,
         true,
+        directTheoryEntry
+          ? {
+              target: theoryEntryRayTarget,
+              direction: theoryEntryRayDirection,
+              startDistance: theoryEntryRayStartDistance,
+              endDistance: theoryEntryRayEndDistance,
+            }
+          : undefined,
       );
       invalidate(true);
     };
@@ -2714,7 +2800,12 @@ export function App17GalaxyCanvas({
       lastRepresentativeCommitMs = Math.max(0, performance.now() - commitStartedAt);
       pendingRepresentativeUpdate = false;
       if (changed) {
-        if (systemResources === prepared.resources) applyExplorationBlend(exploration.blend);
+        if (systemResources === prepared.resources) {
+          applyExplorationBlend(exploration.blend);
+          if (sceneData.kind === "app15" && exploration.state === "system") {
+            prepared.resources.startRepresentativeSettle();
+          }
+        }
         hoveredSystemPaperId = "";
         invalidate(true);
       }
@@ -2975,6 +3066,9 @@ export function App17GalaxyCanvas({
       hotspotLayer.setExplorationProgress(retreatProgress);
       applyAmbientVisuals();
       if (systemResources) {
+        if (theoryMode && exploration.state === "entering") {
+          systemResources.setRepresentativeEntryProgress(exploration.blend);
+        }
         systemResources.farBackgroundLayer?.setProgress(exploration.blend);
         if (theoryMode) {
           const systemScale = exploration.canonicalRebased
@@ -3026,6 +3120,9 @@ export function App17GalaxyCanvas({
 
     const beginExitSystem = (now: number) => {
       if (exploration.state === "overview") return;
+      const reversingTheoryEntry = sceneData.kind === "app15"
+        && exploration.state === "entering"
+        && orbit.transition?.kind === "enter-system";
       if (exploration.state === "preparing") {
         cancelScheduledPreparation(true);
         invalidate(true);
@@ -3040,7 +3137,7 @@ export function App17GalaxyCanvas({
         performTheoryCanonicalRebase(false);
       }
       if (sceneData.kind === "app15" && systemResources) {
-        systemResources.representativeLayoutTarget = 0;
+        systemResources.startRepresentativeExit();
       }
       const saved = exploration.savedOverviewPose ?? {
         center: cameraPreset.center.clone(),
@@ -3050,6 +3147,24 @@ export function App17GalaxyCanvas({
       };
       exploration.fromBlend = exploration.blend;
       exploration.toBlend = 0;
+      applyCameraOrbit(camera, orbit);
+      const currentCameraPosition = camera.position.clone();
+      const savedCameraPosition = orbitPoseCameraPosition(saved);
+      const directExitCameraPath = sceneData.kind === "app15" && !reversingTheoryEntry
+        ? {
+            from: currentCameraPosition,
+            to: savedCameraPosition,
+            control: currentCameraPosition.clone().lerp(savedCameraPosition, 0.5),
+          }
+        : undefined;
+      const reverseEntryRayPath = reversingTheoryEntry
+        ? {
+            target: theoryEntryRayTarget,
+            direction: theoryEntryRayDirection,
+            startDistance: Math.max(0.001, currentCameraPosition.distanceTo(theoryEntryRayTarget)),
+            endDistance: theoryEntryRayStartDistance,
+          }
+        : undefined;
       orbit.viewMode = "overview";
       transitionFrameTimes.length = 0;
       lastTransitionRenderTime = 0;
@@ -3065,8 +3180,9 @@ export function App17GalaxyCanvas({
         now,
         Math.max(240, APP17_SYSTEM_TRANSITION_MS * Math.max(0.12, exploration.blend)),
         undefined,
-        undefined,
+        directExitCameraPath,
         true,
+        reverseEntryRayPath,
       );
     };
 
@@ -4575,6 +4691,28 @@ export function App17GalaxyCanvas({
           applyExplorationBlend(THREE.MathUtils.lerp(exploration.fromBlend, exploration.toBlend, eased));
         }
         const completed = advanceOrbitTransition(orbit, now);
+        if (sceneData.kind === "app15" && activeTransition.kind === "enter-system") {
+          const cameraPosition = orbitPoseCameraPosition({
+            center: orbit.center,
+            distance: orbit.distance,
+            azimuth: orbit.azimuth,
+            elevation: orbit.elevation,
+          });
+          const hotspotOffset = cameraPosition.sub(theoryEntryRayTarget);
+          const hotspotDistance = hotspotOffset.length();
+          const rayProjection = hotspotOffset.dot(theoryEntryRayDirection);
+          const rayDeviation = hotspotOffset
+            .addScaledVector(theoryEntryRayDirection, -rayProjection)
+            .length();
+          lastSystemEntryCameraRayDeviation = Math.max(
+            lastSystemEntryCameraRayDeviation,
+            rayDeviation,
+          );
+          if (hotspotDistance > previousSystemEntryHotspotDistance + 1e-9) {
+            lastSystemEntryDistanceMonotonicViolations += 1;
+          }
+          previousSystemEntryHotspotDistance = hotspotDistance;
+        }
         orbitChanged = true;
         if (completed && activeTransition.kind === "enter-system") {
           lastFocusTransitionMs = Math.max(0, now - activeTransition.startedAt);
@@ -4588,7 +4726,7 @@ export function App17GalaxyCanvas({
           measureTheoryWorldDrift();
           performTheoryCanonicalRebase(true);
           if (sceneData.kind === "app15" && systemResources) {
-            systemResources.representativeLayoutTarget = 1;
+            systemResources.startRepresentativeSettle();
           }
           setExplorationState("system", true);
           flushDeferredRepresentativeUpdate();
@@ -4676,6 +4814,28 @@ export function App17GalaxyCanvas({
         systemResources?.root.updateMatrixWorld();
         updateTheoryFarBackgroundMask();
         if (systemResources) {
+          if (systemResources.visualMode === "theory") {
+            for (const paper of systemResources.representativePapers) {
+              if (paper.ownershipBlend <= 1e-6 || paper.ownershipBlend >= 1 - 1e-6) continue;
+              paperTracePickProjectedPosition
+                .copy(paper.position)
+                .applyMatrix4(systemResources.root.matrixWorld)
+                .project(camera);
+              representativeSemanticProjectedPosition
+                .copy(paper.semanticPosition)
+                .applyMatrix4(systemResources.root.matrixWorld)
+                .project(camera);
+              lastRepresentativeHandoffProjectionDeltaPx = Math.max(
+                lastRepresentativeHandoffProjectionDeltaPx,
+                Math.hypot(
+                  (paperTracePickProjectedPosition.x - representativeSemanticProjectedPosition.x)
+                    * width * 0.5,
+                  (paperTracePickProjectedPosition.y - representativeSemanticProjectedPosition.y)
+                    * height * 0.5,
+                ),
+              );
+            }
+          }
           if (paperJourneyFrame.state !== "idle") {
             const historyCutoff = now - 600;
             for (const paper of systemResources.representativePapers) {
@@ -5258,6 +5418,12 @@ function startOrbitTransition(
   centerControl?: THREE.Vector3,
   cameraPath?: { from: THREE.Vector3; to: THREE.Vector3; control: THREE.Vector3 },
   logarithmicDistance = false,
+  radialCameraPath?: {
+    target: THREE.Vector3;
+    direction: THREE.Vector3;
+    startDistance: number;
+    endDistance: number;
+  },
 ) {
   orbit.transition = {
     kind,
@@ -5279,6 +5445,10 @@ function startOrbitTransition(
     cameraFrom: cameraPath?.from.clone(),
     cameraTo: cameraPath?.to.clone(),
     cameraControl: cameraPath?.control.clone(),
+    radialCameraTarget: radialCameraPath?.target.clone(),
+    radialCameraDirection: radialCameraPath?.direction.clone().normalize(),
+    radialCameraStartDistance: radialCameraPath?.startDistance,
+    radialCameraEndDistance: radialCameraPath?.endDistance,
     logarithmicDistance,
   };
   orbit.targetDistance = distance;
@@ -5467,22 +5637,39 @@ function advanceOrbitTransition(orbit: App17OrbitState, now: number) {
   } else {
     orbit.center.lerpVectors(transition.from.center, transition.to.center, eased);
   }
-  if (transition.cameraFrom && transition.cameraTo && transition.cameraControl) {
+  if (
+    transition.radialCameraTarget
+    && transition.radialCameraDirection
+    && transition.radialCameraStartDistance !== undefined
+    && transition.radialCameraEndDistance !== undefined
+  ) {
+    const distanceFromTarget = transition.logarithmicDistance
+      ? Math.exp(THREE.MathUtils.lerp(
+          Math.log(Math.max(0.001, transition.radialCameraStartDistance)),
+          Math.log(Math.max(0.001, transition.radialCameraEndDistance)),
+          eased,
+        ))
+      : THREE.MathUtils.lerp(
+          transition.radialCameraStartDistance,
+          transition.radialCameraEndDistance,
+          eased,
+        );
+    const cameraPosition = transition.radialCameraTarget.clone()
+      .addScaledVector(transition.radialCameraDirection, distanceFromTarget);
+    const direction = cameraPosition.sub(orbit.center);
+    orbit.distance = Math.max(0.0001, direction.length());
+    direction.normalize();
+    orbit.azimuth = Math.atan2(direction.y, direction.x);
+    orbit.elevation = Math.asin(THREE.MathUtils.clamp(direction.z, -1, 1));
+  } else if (transition.cameraFrom && transition.cameraTo && transition.cameraControl) {
     const inverse = 1 - eased;
     const cameraPosition = transition.cameraFrom.clone().multiplyScalar(inverse * inverse)
       .addScaledVector(transition.cameraControl, 2 * inverse * eased)
       .addScaledVector(transition.cameraTo, eased * eased);
     const direction = cameraPosition.sub(orbit.center);
     if (direction.lengthSq() < 0.000001) direction.set(1, 0, 0);
+    orbit.distance = Math.max(0.0001, direction.length());
     direction.normalize();
-    const distance = transition.logarithmicDistance
-      ? Math.exp(THREE.MathUtils.lerp(
-          Math.log(Math.max(0.001, transition.from.distance)),
-          Math.log(Math.max(0.001, transition.to.distance)),
-          eased,
-        ))
-      : THREE.MathUtils.lerp(transition.from.distance, transition.to.distance, eased);
-    orbit.distance = distance;
     orbit.azimuth = Math.atan2(direction.y, direction.x);
     orbit.elevation = Math.asin(THREE.MathUtils.clamp(direction.z, -1, 1));
   } else {
@@ -5918,8 +6105,12 @@ function buildGalaxySystemResources(
         z: position.z,
         color: representativeYearColor(item.paper.year, minimumTopicYear, maximumTopicYear),
         haloColor: app17HotspotFamilyColor(hotspot),
-        size: THREE.MathUtils.clamp(item.paper.size || 2.2, 2.2, 3.4),
-        alpha: 0.48,
+        size: THREE.MathUtils.clamp(
+          item.paper.size || APP17_SYSTEM_PAPER_MINIMUM_SIZE,
+          APP17_SYSTEM_PAPER_MINIMUM_SIZE,
+          APP17_SYSTEM_PAPER_MAXIMUM_SIZE,
+        ),
+        alpha: APP17_SYSTEM_PAPER_BASE_ALPHA,
         year: item.paper.year,
         ...paperVisualVariation(paperId),
       };
@@ -5960,8 +6151,15 @@ function buildGalaxySystemResources(
     hiddenRepresentativeCount: 0,
     unresolvedRepresentativeCount: 0,
     representativeSignature: "",
-    representativeLayoutBlend: visualMode === "theory" ? 0 : 1,
-    representativeLayoutTarget: visualMode === "theory" ? 0 : 1,
+    representativeOwnershipBlend: visualMode === "theory" ? 0 : 1,
+    representativeStyleBlend: visualMode === "theory" ? 0 : 1,
+    representativeOrbitReveal: visualMode === "theory" ? 0 : 1,
+    representativeOrbitMotionBlend: visualMode === "theory" ? 0 : 1,
+    representativeTransitionElapsed: 0,
+    representativeTransitionDirection: 0,
+    representativeSemanticOrbitError: 0,
+    representativeSafeOrbitCaptureCount: 0,
+    representativeMaxLuminanceStep: 0,
     opacity: 0,
     activeTimeSeconds: 0,
     entryScale: 1,
@@ -5972,44 +6170,166 @@ function buildGalaxySystemResources(
     initialDistance,
     minDistance,
     maxDistance,
+    setRepresentativeEntryProgress: (progress) => {
+      if (resources.visualMode !== "theory") return;
+      const ownership = smootherStep(smoothStepRange(
+        APP17_REPRESENTATIVE_OWNERSHIP_START,
+        1,
+        progress,
+      ));
+      resources.representativeTransitionDirection = 0;
+      resources.representativeTransitionElapsed = 0;
+      resources.representativePapers.forEach((paper) => {
+        paper.ownershipBlend = ownership;
+        paper.styleBlend = 0;
+        paper.orbitReveal = 0;
+        paper.orbitMotionBlend = 0;
+        paper.orbit.phase = 0;
+        paper.position.copy(paper.semanticPosition);
+      });
+      applyRepresentativeTransitionVisuals(resources);
+    },
+    startRepresentativeSettle: () => {
+      if (resources.visualMode !== "theory") return;
+      resources.representativeTransitionElapsed = 0;
+      resources.representativeTransitionDirection = 1;
+      resources.representativePapers.forEach((paper) => {
+        paper.ownershipBlend = 1;
+      });
+      applyRepresentativeTransitionVisuals(resources);
+    },
+    startRepresentativeExit: () => {
+      if (resources.visualMode !== "theory") return;
+      resources.representativeTransitionElapsed = 0;
+      resources.representativeTransitionDirection = -1;
+    },
     updateAnimation: (elapsedSeconds, motionEnabled, frozenPaperIds) => {
       const elapsed = THREE.MathUtils.clamp(elapsedSeconds, 0, 0.12);
       let positionsChanged = false;
-      const previousLayoutBlend = resources.representativeLayoutBlend;
-      if (resources.representativeLayoutTarget > resources.representativeLayoutBlend) {
-        resources.representativeLayoutBlend = Math.min(
-          resources.representativeLayoutTarget,
-          resources.representativeLayoutBlend + elapsed / 0.3,
-        );
-      } else if (resources.representativeLayoutTarget < resources.representativeLayoutBlend) {
-        resources.representativeLayoutBlend = Math.max(
-          resources.representativeLayoutTarget,
-          resources.representativeLayoutBlend - elapsed / 0.3,
-        );
-      }
-      const layoutChanged = Math.abs(previousLayoutBlend - resources.representativeLayoutBlend) > 1e-9;
-      if (layoutChanged) {
-        resources.orbitLayer?.setOpacity(resources.opacity * smootherStep(resources.representativeLayoutBlend));
-      }
-      if ((motionEnabled || layoutChanged) && elapsed > 0) {
+      const transitionChanged = resources.representativeTransitionDirection !== 0 && elapsed > 0;
+      if ((motionEnabled || transitionChanged) && elapsed > 0) {
         resources.activeTimeSeconds += elapsed;
+        if (transitionChanged) resources.representativeTransitionElapsed += elapsed;
         resources.representativePapers.forEach((paper) => {
-          if (!layoutChanged && frozenPaperIds.has(paper.id)) return;
-          if (
+          if (resources.representativeTransitionDirection > 0) {
+            const localTime = Math.max(
+              0,
+              resources.representativeTransitionElapsed - paper.transitionDelaySeconds,
+            );
+            const targetStyleBlend = smootherStep(THREE.MathUtils.clamp(
+              localTime / APP17_REPRESENTATIVE_STYLE_DURATION_SECONDS,
+              0,
+              1,
+            ));
+            paper.styleBlend = Math.min(
+              targetStyleBlend,
+              paper.styleBlend + APP17_REPRESENTATIVE_MAX_STYLE_STEP,
+            );
+            paper.orbitReveal = smootherStep(THREE.MathUtils.clamp(
+              localTime / APP17_REPRESENTATIVE_ORBIT_REVEAL_DURATION_SECONDS,
+              0,
+              1,
+            ));
+            paper.orbitMotionBlend = smootherStep(THREE.MathUtils.clamp(
+              (localTime - APP17_REPRESENTATIVE_MOTION_DELAY_SECONDS)
+                / APP17_REPRESENTATIVE_MOTION_DURATION_SECONDS,
+              0,
+              1,
+            ));
+            if (
+              motionEnabled
+              && !frozenPaperIds.has(paper.id)
+              && !paper.requiresSafeOrbitCapture
+            ) {
+              paper.orbit.phase = (
+                paper.orbit.phase
+                + paper.orbit.angularSpeed * elapsed * paper.orbitMotionBlend
+              ) % (Math.PI * 2);
+            }
+          } else if (resources.representativeTransitionDirection < 0) {
+            paper.orbitMotionBlend = Math.max(
+              0,
+              paper.orbitMotionBlend - elapsed / APP17_REPRESENTATIVE_MOTION_DURATION_SECONDS,
+            );
+            paper.orbitReveal = Math.max(
+              0,
+              paper.orbitReveal - elapsed / APP17_REPRESENTATIVE_ORBIT_REVEAL_DURATION_SECONDS,
+            );
+            paper.styleBlend = Math.max(
+              0,
+              paper.styleBlend - Math.min(
+                APP17_REPRESENTATIVE_MAX_STYLE_STEP,
+                elapsed / APP17_REPRESENTATIVE_STYLE_DURATION_SECONDS,
+              ),
+            );
+            if (
+              paper.orbitMotionBlend <= 1e-6
+              && paper.orbitReveal <= 1e-6
+              && paper.styleBlend <= 1e-6
+            ) {
+              paper.ownershipBlend = Math.max(0, paper.ownershipBlend - elapsed / 0.6);
+            }
+          } else if (
             motionEnabled
+            && paper.orbitMotionBlend > 0.999
             && !frozenPaperIds.has(paper.id)
-            && resources.representativeLayoutBlend > 0.999
           ) {
-            paper.orbit.phase = (paper.orbit.phase + paper.orbit.angularSpeed * elapsed) % (Math.PI * 2);
+            paper.orbit.phase = (
+              paper.orbit.phase + paper.orbit.angularSpeed * elapsed
+            ) % (Math.PI * 2);
           }
           galaxySystemOrbitPoint(paper.orbit, paper.orbit.phase, paper.orbitPosition);
-          paper.position.lerpVectors(
-            paper.semanticPosition,
-            paper.orbitPosition,
-            smootherStep(resources.representativeLayoutBlend),
-          );
+          if (paper.requiresSafeOrbitCapture && resources.representativeTransitionDirection > 0) {
+            const captureProgress = smootherStep(THREE.MathUtils.clamp(
+              (resources.representativeTransitionElapsed - paper.transitionDelaySeconds) / 1.2,
+              0,
+              1,
+            ));
+            hermiteRepresentativeCapturePoint(
+              paper.semanticPosition,
+              paper.orbitPosition,
+              paper.orbit.tangentBasis,
+              paper.orbit.minorRadius,
+              captureProgress,
+              paper.position,
+            );
+          } else if (resources.representativeTransitionDirection < 0) {
+            paper.position.lerpVectors(
+              paper.semanticPosition,
+              paper.orbitPosition,
+              smootherStep(paper.orbitMotionBlend),
+            );
+          } else if (paper.orbitMotionBlend > 1e-6 || resources.visualMode === "display") {
+            paper.position.copy(paper.orbitPosition);
+          } else {
+            paper.position.copy(paper.semanticPosition);
+          }
           positionsChanged = true;
         });
+        if (
+          resources.representativeTransitionDirection > 0
+          && resources.representativeTransitionElapsed
+            >= APP17_REPRESENTATIVE_ORBIT_REVEAL_DURATION_SECONDS
+              + APP17_REPRESENTATIVE_STAGGER_MAX_SECONDS
+          && resources.representativePapers.every((paper) => paper.styleBlend >= 1 - 1e-6)
+        ) {
+          resources.representativeTransitionDirection = 0;
+          resources.representativePapers.forEach((paper) => {
+            paper.styleBlend = 1;
+            paper.orbitReveal = 1;
+            paper.orbitMotionBlend = 1;
+            paper.ownershipBlend = 1;
+          });
+        } else if (
+          resources.representativeTransitionDirection < 0
+          && resources.representativePapers.every((paper) => paper.ownershipBlend <= 1e-6)
+        ) {
+          resources.representativeTransitionDirection = 0;
+          resources.representativePapers.forEach((paper) => {
+            paper.position.copy(paper.semanticPosition);
+          });
+        }
+        applyRepresentativeTransitionVisuals(resources);
         if (positionsChanged) {
           const positions = resources.representativePapers.map((paper) => paper.position);
           resources.representativeLayer?.setPointPositions(positions);
@@ -6035,7 +6355,7 @@ function buildGalaxySystemResources(
       const orbitHighlightChanged = resources.orbitLayer?.advanceHighlight(elapsed, !motionEnabled) ?? false;
       star.setAnimation(resources.activeTimeSeconds, motionEnabled ? 1 : 0);
       return positionsChanged
-        || layoutChanged
+        || transitionChanged
         || orbitHighlightChanged
         || cloudFocusChanged
         || representativeFocusChanged
@@ -6085,8 +6405,11 @@ function buildSystemRepresentativeBundle(
   const orbitColors: number[] = [];
   const orbitRanks: number[] = [];
   const orbitAlphas: number[] = [];
+  const orbitArcDistances: number[] = [];
   const representativePoints: App17ParticlePoint[] = [];
   const systemPapers: GalaxySystemPaper[] = [];
+  let semanticOrbitError = 0;
+  let safeOrbitCaptureCount = 0;
   const knownYears = representatives
     .map(({ paper }) => paper.year)
     .filter((year): year is number => Number.isFinite(year));
@@ -6094,29 +6417,19 @@ function buildSystemRepresentativeBundle(
   const maximumYear = knownYears.length > 0 ? Math.max(...knownYears) : 0;
   representatives.forEach(({ paper, rank, canonicalId }) => {
     const count = Math.max(1, representatives.length);
-    const radius = count === 1 ? 1.35 : 0.82 + (rank / Math.max(1, count - 1)) * 2.18;
+    const cloudPaper = resources.cloudLayer.getPaperById(canonicalId);
+    const semanticPosition = cloudPaper?.position.clone() ?? new THREE.Vector3(1.35, 0, 0);
     const random = seededRandom(stableHash(paper.id));
-    const minorRadius = radius * (0.76 + random() * 0.16);
-    const inclination = resources.visualMode === "display"
-      ? 0
-      : THREE.MathUtils.degToRad(-18 + random() * 36);
-    const nodeAngle = random() * Math.PI * 2;
-    const phase = random() * Math.PI * 2;
-    const normalizedRadius = THREE.MathUtils.clamp((radius - 0.82) / 2.18, 0, 1);
-    const periodSeconds = THREE.MathUtils.lerp(
-      APP17_SYSTEM_INNER_ORBIT_PERIOD_SECONDS,
-      APP17_SYSTEM_OUTER_ORBIT_PERIOD_SECONDS,
-      Math.pow(normalizedRadius, 1.25),
-    );
-    const orbit: GalaxySystemOrbit = {
-      majorRadius: radius,
-      minorRadius,
-      inclination,
-      nodeAngle,
-      phase,
-      angularSpeed: (Math.PI * 2) / periodSeconds,
-      rotation: new THREE.Quaternion().setFromEuler(new THREE.Euler(inclination, 0, nodeAngle, "XYZ")),
-    };
+    const requiresSafeOrbitCapture = resources.visualMode === "theory"
+      && semanticPosition.length() < APP17_REPRESENTATIVE_SAFE_ORBIT_RADIUS;
+    const orbit = resources.visualMode === "theory"
+      ? createSemanticGalaxySystemOrbit(
+          semanticPosition,
+          paper.id,
+          resources.cloudP95Radius,
+        )
+      : createDisplayGalaxySystemOrbit(rank, count, random);
+    if (requiresSafeOrbitCapture) safeOrbitCaptureCount += 1;
     const orbitColor = new THREE.Color(sourceOrbitColor(paper.source));
     const orbitAlpha = rank < 3
       ? [0.22, 0.19, 0.17][rank]
@@ -6131,10 +6444,20 @@ function buildSystemRepresentativeBundle(
       );
       orbitRanks.push(rank, rank);
       orbitAlphas.push(orbitAlpha, orbitAlpha);
+      const startProgress = segment / APP17_SYSTEM_ORBIT_SEGMENTS;
+      const endProgress = (segment + 1) / APP17_SYSTEM_ORBIT_SEGMENTS;
+      orbitArcDistances.push(
+        Math.min(startProgress, 1 - startProgress) * 2,
+        Math.min(endProgress, 1 - endProgress) * 2,
+      );
     }
-    const orbitPosition = galaxySystemOrbitPoint(orbit, phase);
-    const semanticPosition = resources.cloudLayer.getPaperById(canonicalId)?.position.clone()
-      ?? orbitPosition.clone();
+    const orbitPosition = galaxySystemOrbitPoint(orbit, orbit.phase);
+    if (!requiresSafeOrbitCapture && resources.visualMode === "theory") {
+      semanticOrbitError = Math.max(
+        semanticOrbitError,
+        orbitPosition.distanceTo(semanticPosition),
+      );
+    }
     const position = resources.visualMode === "theory"
       ? semanticPosition.clone()
       : orbitPosition.clone();
@@ -6162,11 +6485,24 @@ function buildSystemRepresentativeBundle(
       year: paper.year,
       rank,
       displaySize,
+      ordinaryDisplaySize: cloudPaper?.displaySize ?? APP17_SYSTEM_PAPER_MINIMUM_SIZE,
+      ordinaryAlpha: APP17_SYSTEM_PAPER_BASE_ALPHA,
       color: representativeYearColor(paper.year, minimumYear, maximumYear),
       orbit,
       semanticPosition,
       orbitPosition,
       position,
+      transitionDelaySeconds: (
+        stableHash(`${paper.id}:representative-transition-delay`) / 4294967295
+      ) * APP17_REPRESENTATIVE_STAGGER_MAX_SECONDS,
+      ownershipBlend: resources.visualMode === "theory" ? 0 : 1,
+      styleBlend: resources.visualMode === "theory" ? 0 : 1,
+      orbitReveal: resources.visualMode === "theory" ? 0 : 1,
+      orbitMotionBlend: resources.visualMode === "theory" ? 0 : 1,
+      requiresSafeOrbitCapture,
+      lastCombinedLuminance: resources.visualMode === "theory"
+        ? APP17_SYSTEM_PAPER_BASE_ALPHA
+        : 0.98,
     });
   });
 
@@ -6182,6 +6518,7 @@ function buildSystemRepresentativeBundle(
         new Float32Array(orbitColors),
         new Float32Array(orbitRanks),
         new Float32Array(orbitAlphas),
+        new Float32Array(orbitArcDistances),
       )
     : undefined;
   return {
@@ -6193,6 +6530,8 @@ function buildSystemRepresentativeBundle(
     hiddenRepresentativeIds,
     hiddenRepresentativeCount: hiddenRepresentativeIds.size,
     unresolvedRepresentativeCount,
+    semanticOrbitError,
+    safeOrbitCaptureCount,
     dispose: () => {
       representativeLayer?.dispose();
       representativeBloomLayer?.dispose();
@@ -6229,18 +6568,32 @@ function commitSystemRepresentativeBundle(
   resources.representativePapers = bundle.representativePapers;
   resources.hiddenRepresentativeCount = bundle.hiddenRepresentativeCount;
   resources.unresolvedRepresentativeCount = bundle.unresolvedRepresentativeCount;
+  resources.representativeSemanticOrbitError = bundle.semanticOrbitError;
+  resources.representativeSafeOrbitCaptureCount = bundle.safeOrbitCaptureCount;
+  resources.representativeMaxLuminanceStep = 0;
   resources.representativeSignature = bundle.signature;
   if (resources.visualMode === "theory") {
-    resources.representativeLayoutBlend = 0;
-    resources.representativeLayoutTarget = 0;
+    resources.representativeTransitionDirection = 0;
+    resources.representativeTransitionElapsed = 0;
+    resources.representativePapers.forEach((paper) => {
+      paper.ownershipBlend = 0;
+      paper.styleBlend = 0;
+      paper.orbitReveal = 0;
+      paper.orbitMotionBlend = 0;
+      paper.position.copy(paper.semanticPosition);
+    });
   } else {
-    resources.representativeLayoutBlend = 1;
-    resources.representativeLayoutTarget = 1;
+    resources.representativePapers.forEach((paper) => {
+      paper.ownershipBlend = 1;
+      paper.styleBlend = 1;
+      paper.orbitReveal = 1;
+      paper.orbitMotionBlend = 1;
+    });
   }
-  resources.cloudLayer.setHiddenPaperIds(bundle.hiddenRepresentativeIds);
   if (resources.representativeLayer) resources.root.add(resources.representativeLayer.object);
   if (resources.representativeBloomLayer) resources.root.add(resources.representativeBloomLayer.object);
   if (resources.orbitLayer) resources.root.add(resources.orbitLayer.object);
+  applyRepresentativeTransitionVisuals(resources);
   return true;
 }
 
@@ -6269,6 +6622,7 @@ function createSystemPaperLayer(
   const sizes = new Float32Array(count);
   const alphas = new Float32Array(count);
   const originalAlphas = new Float32Array(count);
+  const transitionStyles = new Float32Array(count);
   const representativeRanks = new Float32Array(count);
   const visualSeeds = new Float32Array(count);
   const rayAngles = new Float32Array(count);
@@ -6295,8 +6649,8 @@ function createSystemPaperLayer(
   let lodBlend = 0.5;
   let farBlend = 0;
   let nearBlend = 0;
-  let minimumPointSize = 2.2;
-  let maximumPointSize = 3.4;
+  let minimumPointSize = APP17_SYSTEM_PAPER_MINIMUM_SIZE;
+  let maximumPointSize = APP17_SYSTEM_PAPER_MAXIMUM_SIZE;
   let revealProgress = 0;
   let targetExposure = APP17_SYSTEM_PAPER_MEDIUM_EXPOSURE;
   let focusMode: GalaxySystemPaperFocusMode = "none";
@@ -6336,6 +6690,7 @@ function createSystemPaperLayer(
     alphas[index] = paper.alpha;
     originalAlphas[index] = paper.alpha;
     representativeRanks[index] = paper.representativeRank ?? -1;
+    transitionStyles[index] = (paper.representativeRank ?? -1) >= 0 ? 1 : 0;
     visualSeeds[index] = paper.visualSeed;
     rayAngles[index] = paper.rayAngle;
     sizeVariations[index] = paper.visualSizeVariation;
@@ -6351,8 +6706,12 @@ function createSystemPaperLayer(
       ordinaryBaseSizes.push(paper.size * paper.visualSizeVariation);
     }
   });
-  const ordinaryBaseMinimum = ordinaryBaseSizes.length > 0 ? Math.min(...ordinaryBaseSizes) : 2.2;
-  const ordinaryBaseMaximum = ordinaryBaseSizes.length > 0 ? Math.max(...ordinaryBaseSizes) : 3.4;
+  const ordinaryBaseMinimum = ordinaryBaseSizes.length > 0
+    ? Math.min(...ordinaryBaseSizes)
+    : APP17_SYSTEM_PAPER_MINIMUM_SIZE;
+  const ordinaryBaseMaximum = ordinaryBaseSizes.length > 0
+    ? Math.max(...ordinaryBaseSizes)
+    : APP17_SYSTEM_PAPER_MAXIMUM_SIZE;
 
   const geometry = new THREE.BufferGeometry();
   const positionAttribute = new THREE.BufferAttribute(positions, 3);
@@ -6360,9 +6719,15 @@ function createSystemPaperLayer(
   geometry.setAttribute("position", positionAttribute);
   geometry.setAttribute("coreColor", new THREE.BufferAttribute(coreColors, 3));
   geometry.setAttribute("haloColor", new THREE.BufferAttribute(haloColors, 3));
-  geometry.setAttribute("pointSize", new THREE.BufferAttribute(sizes, 1));
+  const pointSizeAttribute = new THREE.BufferAttribute(sizes, 1);
+  if (dynamicPositions) pointSizeAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("pointSize", pointSizeAttribute);
   const alphaAttribute = new THREE.BufferAttribute(alphas, 1);
+  if (dynamicPositions) alphaAttribute.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute("pointAlpha", alphaAttribute);
+  const transitionStyleAttribute = new THREE.BufferAttribute(transitionStyles, 1);
+  if (dynamicPositions) transitionStyleAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("transitionStyle", transitionStyleAttribute);
   geometry.setAttribute("representativeRank", new THREE.BufferAttribute(representativeRanks, 1));
   geometry.setAttribute("visualSeed", new THREE.BufferAttribute(visualSeeds, 1));
   geometry.setAttribute("rayAngle", new THREE.BufferAttribute(rayAngles, 1));
@@ -6427,16 +6792,16 @@ function createSystemPaperLayer(
       currentLod = nextFarBlend >= 0.5 ? "far" : nextNearBlend >= 0.5 ? "near" : "medium";
       const sizeScale = THREE.MathUtils.lerp(1, 0.88, nextFarBlend) * THREE.MathUtils.lerp(1, 1.05, nextNearBlend);
       const shaderMinimum = THREE.MathUtils.lerp(
-        THREE.MathUtils.lerp(2.15, 2.05, nextFarBlend),
-        2.35,
+        THREE.MathUtils.lerp(2.6, 2.5, nextFarBlend),
+        2.8,
         nextNearBlend,
       );
       minimumPointSize = THREE.MathUtils.clamp(
-        Math.max(shaderMinimum, ordinaryBaseMinimum * sizeScale * 0.92),
-        2.05,
-        4.2,
+        Math.max(shaderMinimum, ordinaryBaseMinimum * sizeScale * 0.96),
+        2.5,
+        4.6,
       );
-      maximumPointSize = THREE.MathUtils.clamp(ordinaryBaseMaximum * sizeScale * 1.18, minimumPointSize, 4.2);
+      maximumPointSize = THREE.MathUtils.clamp(ordinaryBaseMaximum * sizeScale * 1.12, minimumPointSize, 4.6);
     },
     setEnergyTime: (timeSeconds: number, motionStrength: number) => {
       material.uniforms.uEnergyTime.value = timeSeconds;
@@ -6560,6 +6925,26 @@ function createSystemPaperLayer(
       return paperRecords[index];
     },
     getPaperById: (paperId: string) => paperRecordById.get(paperId),
+    setRepresentativeOwnership: (ownershipByPaperId: Map<string, number>) => {
+      for (let index = 0; index < alphas.length; index += 1) {
+        const ownership = ownershipByPaperId.get(paperIds[index]) ?? 0;
+        alphas[index] = originalAlphas[index] * (1 - THREE.MathUtils.clamp(ownership, 0, 1));
+      }
+      alphaAttribute.needsUpdate = true;
+    },
+    setPointPresentation: (
+      presentations: Array<{ alpha: number; size: number; style: number }>,
+    ) => {
+      const updateCount = Math.min(presentations.length, count);
+      for (let index = 0; index < updateCount; index += 1) {
+        alphas[index] = presentations[index].alpha;
+        sizes[index] = presentations[index].size;
+        transitionStyles[index] = presentations[index].style;
+      }
+      alphaAttribute.needsUpdate = true;
+      pointSizeAttribute.needsUpdate = true;
+      transitionStyleAttribute.needsUpdate = true;
+    },
     setHiddenPaperIds: (hiddenPaperIds: Set<string>) => {
       for (let index = 0; index < alphas.length; index += 1) {
         alphas[index] = hiddenPaperIds.has(paperIds[index]) ? 0 : originalAlphas[index];
@@ -6594,6 +6979,7 @@ function createSystemRepresentativeBloomLayer(papers: App17ParticlePoint[], pixe
   const colors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
   const strengths = new Float32Array(count);
+  const baseStrengths = new Float32Array(count);
   const representativeRanks = new Float32Array(count);
   const focusValues = new Float32Array(count).fill(1);
   const focusTargets = new Float32Array(count).fill(1);
@@ -6607,10 +6993,11 @@ function createSystemRepresentativeBloomLayer(papers: App17ParticlePoint[], pixe
     colors[index * 3 + 1] = color.g;
     colors[index * 3 + 2] = color.b;
     sizes[index] = paper.size;
-    strengths[index] = (index < 3
+    baseStrengths[index] = (index < 3
       ? [0.22, 0.18, 0.15][index]
       : THREE.MathUtils.lerp(0.12, 0.05, THREE.MathUtils.clamp((index - 3) / 6, 0, 1)))
       * APP17_REPRESENTATIVE_BLOOM_STRENGTH_SCALE;
+    strengths[index] = baseStrengths[index];
     representativeRanks[index] = paper.representativeRank ?? index;
   });
   const geometry = new THREE.BufferGeometry();
@@ -6618,7 +7005,8 @@ function createSystemRepresentativeBloomLayer(papers: App17ParticlePoint[], pixe
   geometry.setAttribute("position", positionAttribute);
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geometry.setAttribute("pointSize", new THREE.BufferAttribute(sizes, 1));
-  geometry.setAttribute("bloomStrength", new THREE.BufferAttribute(strengths, 1));
+  const bloomStrengthAttribute = new THREE.BufferAttribute(strengths, 1).setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("bloomStrength", bloomStrengthAttribute);
   geometry.setAttribute("representativeRank", new THREE.BufferAttribute(representativeRanks, 1));
   const focusAttribute = new THREE.BufferAttribute(focusValues, 1).setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute("focusIntensity", focusAttribute);
@@ -6668,6 +7056,15 @@ function createSystemRepresentativeBloomLayer(papers: App17ParticlePoint[], pixe
       }
       positionAttribute.needsUpdate = true;
     },
+    setTransitionStyles: (styles: Array<{ ownership: number; style: number }>) => {
+      const updateCount = Math.min(styles.length, count);
+      for (let index = 0; index < updateCount; index += 1) {
+        strengths[index] = baseStrengths[index]
+          * THREE.MathUtils.clamp(styles[index].ownership, 0, 1)
+          * THREE.MathUtils.clamp(styles[index].style, 0, 1);
+      }
+      bloomStrengthAttribute.needsUpdate = true;
+    },
     dispose: () => {
       geometry.dispose();
       material.dispose();
@@ -6680,19 +7077,23 @@ function createSystemOrbitLayer(
   colors: Float32Array,
   orbitRanks: Float32Array,
   baseAlphas: Float32Array,
+  arcDistances: Float32Array,
 ) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geometry.setAttribute("orbitRank", new THREE.BufferAttribute(orbitRanks, 1));
   geometry.setAttribute("baseAlpha", new THREE.BufferAttribute(baseAlphas, 1));
+  geometry.setAttribute("arcDistance", new THREE.BufferAttribute(arcDistances, 1));
   const emphasisValues = new Float32Array(10);
   const emphasisTargets = new Float32Array(10);
+  const revealValues = new Float32Array(10).fill(1);
   let paperInspectionBlend = 0;
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uSceneOpacity: { value: 1 },
       uEmphasis: { value: emphasisValues },
+      uReveal: { value: revealValues },
       uSystemCenterViewDepth: { value: 0 },
       uSystemDepthRange: { value: APP17_SYSTEM_RADIUS },
       uDepthStrength: { value: 0 },
@@ -6713,16 +7114,19 @@ function createSystemOrbitLayer(
       attribute vec3 color;
       attribute float orbitRank;
       attribute float baseAlpha;
+      attribute float arcDistance;
       uniform float uSystemCenterViewDepth;
       uniform float uSystemDepthRange;
       varying vec3 vColor;
       varying float vOrbitRank;
       varying float vBaseAlpha;
       varying float vRelativeDepth;
+      varying float vArcDistance;
       void main() {
         vColor = color;
         vOrbitRank = orbitRank;
         vBaseAlpha = baseAlpha;
+        vArcDistance = arcDistance;
         vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
         vRelativeDepth = ((-viewPosition.z) - uSystemCenterViewDepth) / max(0.001, uSystemDepthRange);
         gl_Position = projectionMatrix * viewPosition;
@@ -6736,10 +7140,12 @@ function createSystemOrbitLayer(
       uniform float uPaperFocusTargetRank;
       uniform float uPaperInspectionBlend;
       uniform float uEmphasis[10];
+      uniform float uReveal[10];
       varying vec3 vColor;
       varying float vOrbitRank;
       varying float vBaseAlpha;
       varying float vRelativeDepth;
+      varying float vArcDistance;
       float emphasisForRank(float rank) {
         if (rank < 0.5) return uEmphasis[0];
         if (rank < 1.5) return uEmphasis[1];
@@ -6752,8 +7158,24 @@ function createSystemOrbitLayer(
         if (rank < 8.5) return uEmphasis[8];
         return uEmphasis[9];
       }
+      float revealForRank(float rank) {
+        if (rank < 0.5) return uReveal[0];
+        if (rank < 1.5) return uReveal[1];
+        if (rank < 2.5) return uReveal[2];
+        if (rank < 3.5) return uReveal[3];
+        if (rank < 4.5) return uReveal[4];
+        if (rank < 5.5) return uReveal[5];
+        if (rank < 6.5) return uReveal[6];
+        if (rank < 7.5) return uReveal[7];
+        if (rank < 8.5) return uReveal[8];
+        return uReveal[9];
+      }
       void main() {
         float emphasis = emphasisForRank(vOrbitRank);
+        float reveal = revealForRank(vOrbitRank);
+        float revealThreshold = mix(0.04, 1.02, reveal);
+        float revealAlpha = (1.0 - smoothstep(revealThreshold, revealThreshold + 0.05, vArcDistance))
+          * smoothstep(0.0, 0.04, reveal);
         float depthPosition = smoothstep(-0.72, 0.72, vRelativeDepth);
         float depthFactor = mix(1.15, 0.55, depthPosition);
         depthFactor = mix(1.0, depthFactor, uDepthStrength * (1.0 - emphasis));
@@ -6766,6 +7188,7 @@ function createSystemOrbitLayer(
         inspectionAttenuation = mix(1.0, inspectionAttenuation, inspectionProgress);
         float alpha = mix(vBaseAlpha * depthFactor, highlightedAlpha, emphasis)
           * uSceneOpacity
+          * revealAlpha
           * closeupFactor
           * inspectionAttenuation;
         vec3 color = mix(vColor, vec3(0.94, 0.98, 1.0), emphasis * 0.32);
@@ -6785,6 +7208,11 @@ function createSystemOrbitLayer(
     setHighlight: (selectedRank: number, hoveredRank: number) => {
       for (let rank = 0; rank < emphasisTargets.length; rank += 1) {
         emphasisTargets[rank] = rank === selectedRank ? 1 : rank === hoveredRank ? 0.72 : 0;
+      }
+    },
+    setReveal: (reveals: number[]) => {
+      for (let rank = 0; rank < revealValues.length; rank += 1) {
+        revealValues[rank] = THREE.MathUtils.clamp(reveals[rank] ?? 0, 0, 1);
       }
     },
     advanceHighlight: (elapsedSeconds: number, immediate = false) => {
@@ -6895,14 +7323,153 @@ function representativeYearColor(year: number | undefined, minimumYear: number, 
   return `#${color.getHexString()}`;
 }
 
+function createDisplayGalaxySystemOrbit(
+  rank: number,
+  count: number,
+  random: () => number,
+): GalaxySystemOrbit {
+  const radius = count === 1 ? 1.35 : 0.82 + (rank / Math.max(1, count - 1)) * 2.18;
+  const minorRadius = radius * (0.76 + random() * 0.16);
+  const nodeAngle = random() * Math.PI * 2;
+  const phase = random() * Math.PI * 2;
+  const normalizedRadius = THREE.MathUtils.clamp((radius - 0.82) / 2.18, 0, 1);
+  const periodSeconds = THREE.MathUtils.lerp(
+    APP17_SYSTEM_INNER_ORBIT_PERIOD_SECONDS,
+    APP17_SYSTEM_OUTER_ORBIT_PERIOD_SECONDS,
+    Math.pow(normalizedRadius, 1.25),
+  );
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, nodeAngle, "XYZ"));
+  return {
+    majorRadius: radius,
+    minorRadius,
+    phase,
+    angularSpeed: (Math.PI * 2) / periodSeconds,
+    radialBasis: new THREE.Vector3(1, 0, 0).applyQuaternion(rotation),
+    tangentBasis: new THREE.Vector3(0, 1, 0).applyQuaternion(rotation),
+  };
+}
+
+function createSemanticGalaxySystemOrbit(
+  semanticPosition: THREE.Vector3,
+  paperId: string,
+  cloudP95Radius: number,
+): GalaxySystemOrbit {
+  const semanticRadius = semanticPosition.length();
+  const majorRadius = Math.max(APP17_REPRESENTATIVE_SAFE_ORBIT_RADIUS, semanticRadius);
+  const random = seededRandom(stableHash(`${paperId}:semantic-orbit`));
+  const radialBasis = semanticRadius > 1e-9
+    ? semanticPosition.clone().normalize()
+    : new THREE.Vector3(random() - 0.5, random() - 0.5, random() - 0.5).normalize();
+  if (radialBasis.lengthSq() < 1e-12) radialBasis.set(1, 0, 0);
+  const tangentSeed = new THREE.Vector3(random() - 0.5, random() - 0.5, random() - 0.5);
+  tangentSeed.addScaledVector(radialBasis, -tangentSeed.dot(radialBasis));
+  if (tangentSeed.lengthSq() < 1e-12) {
+    const fallbackAxis = Math.abs(radialBasis.z) < 0.8
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(0, 1, 0);
+    tangentSeed.crossVectors(fallbackAxis, radialBasis);
+  }
+  const tangentBasis = tangentSeed.normalize();
+  const minorRadius = majorRadius * THREE.MathUtils.lerp(0.82, 0.94, random());
+  const normalizedRadius = THREE.MathUtils.clamp(
+    majorRadius / Math.max(APP17_REPRESENTATIVE_SAFE_ORBIT_RADIUS, cloudP95Radius),
+    0,
+    1,
+  );
+  const periodSeconds = THREE.MathUtils.lerp(
+    APP17_SYSTEM_INNER_ORBIT_PERIOD_SECONDS,
+    APP17_SYSTEM_OUTER_ORBIT_PERIOD_SECONDS,
+    Math.pow(normalizedRadius, 1.25),
+  );
+  const direction = random() < 0.5 ? -1 : 1;
+  return {
+    majorRadius,
+    minorRadius,
+    phase: 0,
+    angularSpeed: direction * (Math.PI * 2) / periodSeconds,
+    radialBasis,
+    tangentBasis,
+  };
+}
+
 function galaxySystemOrbitPoint(orbit: GalaxySystemOrbit, angle: number, target = new THREE.Vector3()) {
-  return target
-    .set(
-      orbit.majorRadius * Math.cos(angle),
-      orbit.minorRadius * Math.sin(angle),
-      0,
-    )
-    .applyQuaternion(orbit.rotation);
+  return target.copy(orbit.radialBasis)
+    .multiplyScalar(orbit.majorRadius * Math.cos(angle))
+    .addScaledVector(orbit.tangentBasis, orbit.minorRadius * Math.sin(angle));
+}
+
+function hermiteRepresentativeCapturePoint(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  endTangentDirection: THREE.Vector3,
+  orbitMinorRadius: number,
+  progress: number,
+  target: THREE.Vector3,
+) {
+  const t = THREE.MathUtils.clamp(progress, 0, 1);
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const startWeight = 2 * t3 - 3 * t2 + 1;
+  const endWeight = -2 * t3 + 3 * t2;
+  const endTangentWeight = t3 - t2;
+  return target.copy(start)
+    .multiplyScalar(startWeight)
+    .addScaledVector(end, endWeight)
+    .addScaledVector(endTangentDirection, endTangentWeight * orbitMinorRadius * 0.35);
+}
+
+function applyRepresentativeTransitionVisuals(resources: GalaxySystemResources) {
+  const ownershipByCanonicalId = new Map<string, number>();
+  const presentations: Array<{ alpha: number; size: number; style: number }> = [];
+  const bloomStyles: Array<{ ownership: number; style: number }> = [];
+  const orbitReveals = new Array<number>(10).fill(0);
+  let ownershipTotal = 0;
+  let styleTotal = 0;
+  let revealTotal = 0;
+  let motionTotal = 0;
+  resources.representativePapers.forEach((paper) => {
+    const canonicalId = resources.canonicalPaperIdById.get(paper.id) ?? paper.id;
+    ownershipByCanonicalId.set(canonicalId, paper.ownershipBlend);
+    const representativeLuminance = THREE.MathUtils.lerp(
+      paper.ordinaryAlpha,
+      0.98,
+      paper.styleBlend,
+    );
+    const combinedLuminance = paper.ordinaryAlpha * (1 - paper.ownershipBlend)
+      + representativeLuminance * paper.ownershipBlend;
+    resources.representativeMaxLuminanceStep = Math.max(
+      resources.representativeMaxLuminanceStep,
+      Math.abs(combinedLuminance - paper.lastCombinedLuminance),
+    );
+    paper.lastCombinedLuminance = combinedLuminance;
+    presentations.push({
+      alpha: representativeLuminance * paper.ownershipBlend,
+      size: THREE.MathUtils.lerp(
+        paper.ordinaryDisplaySize,
+        paper.displaySize,
+        paper.styleBlend,
+      ),
+      style: paper.styleBlend,
+    });
+    bloomStyles.push({
+      ownership: paper.ownershipBlend,
+      style: paper.styleBlend,
+    });
+    orbitReveals[paper.rank] = paper.orbitReveal;
+    ownershipTotal += paper.ownershipBlend;
+    styleTotal += paper.styleBlend;
+    revealTotal += paper.orbitReveal;
+    motionTotal += paper.orbitMotionBlend;
+  });
+  const count = Math.max(1, resources.representativePapers.length);
+  resources.representativeOwnershipBlend = ownershipTotal / count;
+  resources.representativeStyleBlend = styleTotal / count;
+  resources.representativeOrbitReveal = revealTotal / count;
+  resources.representativeOrbitMotionBlend = motionTotal / count;
+  resources.cloudLayer.setRepresentativeOwnership(ownershipByCanonicalId);
+  resources.representativeLayer?.setPointPresentation(presentations);
+  resources.representativeBloomLayer?.setTransitionStyles(bloomStyles);
+  resources.orbitLayer?.setReveal(orbitReveals);
 }
 
 function setGalaxySystemOpacity(resources: GalaxySystemResources, opacity: number) {
@@ -6911,7 +7478,7 @@ function setGalaxySystemOpacity(resources: GalaxySystemResources, opacity: numbe
   resources.cloudLayer.setOpacity(opacity);
   resources.representativeLayer?.setOpacity(opacity);
   resources.representativeBloomLayer?.setOpacity(opacity);
-  resources.orbitLayer?.setOpacity(opacity * smootherStep(resources.representativeLayoutBlend));
+  resources.orbitLayer?.setOpacity(opacity);
   resources.star.setOpacity(opacity);
 }
 
@@ -9572,6 +10139,7 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
       attribute vec3 haloColor;
       attribute float pointSize;
       attribute float pointAlpha;
+      attribute float transitionStyle;
       attribute float representativeRank;
       attribute float visualSeed;
       attribute float rayAngle;
@@ -9608,6 +10176,7 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
       varying float vFlightStrength;
       varying float vFlightAngle;
       varying float vRepresentativeRank;
+      varying float vRepresentativeStyle;
       varying float vEnergyDetailBlend;
       varying float vEnergyTime;
       void main() {
@@ -9616,7 +10185,7 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         float relativeDepth = ((-viewPosition.z) - uSystemCenterViewDepth) / max(0.001, uSystemDepthRange);
         float deepPosition = clamp(max(relativeDepth, 0.0), 0.0, 1.0);
         float distanceScale = clamp(10.0 / max(1.0, -viewPosition.z), 0.78, 1.18);
-        float representativeMask = step(-0.5, representativeRank);
+        float representativeMask = step(-0.5, representativeRank) * transitionStyle;
         float ordinaryMask = 1.0 - representativeMask;
         float depthBrightnessFloor = mix(0.55, ${APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR.toFixed(2)}, ordinaryMask);
         float depthSizeFloor = mix(0.78, ${APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR.toFixed(2)}, ordinaryMask);
@@ -9646,14 +10215,15 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         vVisualSeed = visualSeed;
         vRayAngle = rayAngle;
         vRepresentativeRank = representativeRank;
+        vRepresentativeStyle = transitionStyle;
         float depthScale = mix(1.0, depthSize, uSystemDepthStrength);
         float ordinaryScale = mix(1.0, 0.88, uPaperFarBlend) * mix(1.0, 1.05, uPaperNearBlend);
-        float ordinaryMinimum = mix(2.15, 2.05, uPaperFarBlend);
-        ordinaryMinimum = mix(ordinaryMinimum, 2.35, uPaperNearBlend);
+        float ordinaryMinimum = mix(2.6, 2.5, uPaperFarBlend);
+        ordinaryMinimum = mix(ordinaryMinimum, 2.8, uPaperNearBlend);
         float ordinarySize = clamp(
           pointSize * sizeVariation * distanceScale * depthScale * ordinaryScale,
           ordinaryMinimum,
-          4.2
+          4.6
         );
         float representativeSize = pointSize * distanceScale * depthScale;
         float baseSize = mix(ordinarySize, representativeSize, representativeMask);
@@ -9680,6 +10250,7 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
       varying vec3 vHaloColor;
       varying float vAlpha;
       varying float vRepresentativeRank;
+      varying float vRepresentativeStyle;
       varying float vVisualSeed;
       varying float vRayAngle;
       varying float vEnergyDetailBlend;
@@ -9746,8 +10317,17 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         float readableInnerGlow = exp(-opticalRadius * opticalRadius * 12.0)
           * (1.0 - smoothstep(0.58, 0.96, opticalRadius));
         float readableEnergy = readableCore * 0.92 + readableInnerGlow * 0.13;
-        float alpha = max(energy, readableEnergy) * vAlpha * rankStrength
+        float ordinaryRadius = length(point);
+        float ordinaryEdge = 1.0 - smoothstep(0.72, 1.0, ordinaryRadius);
+        float ordinaryCore = exp(-ordinaryRadius * ordinaryRadius * 34.0);
+        float ordinaryHalo = exp(-ordinaryRadius * ordinaryRadius * 2.6) * ordinaryEdge;
+        float ordinaryEnergy = max(
+          ordinaryCore * 1.05,
+          (1.0 - smoothstep(0.12, 0.28, ordinaryRadius)) * 0.58
+        ) + ordinaryHalo * 0.085;
+        float representativeAlpha = max(energy, readableEnergy) * rankStrength
           * representativeCarrierEnvelope(opticalRadius);
+        float alpha = mix(ordinaryEnergy, representativeAlpha, vRepresentativeStyle) * vAlpha;
         if (opticalRadius > 1.32 || alpha < 0.00025) discard;
         vec3 warmWhite = vec3(1.0, 0.985, 0.95);
         vec3 color = mix(vHaloColor, vCoreColor, clamp(thermal * 0.78 + innerGlow * 0.1, 0.0, 1.0));
@@ -9757,6 +10337,9 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
           clamp(max(core * 0.72 + thermal * 0.16, readableCore * 0.88), 0.0, 0.88)
         );
         color = min(vec3(1.0), color + vHaloColor * wisps * 0.12);
+        vec3 ordinaryColor = mix(vHaloColor, vCoreColor, clamp(ordinaryCore * 0.72, 0.0, 1.0));
+        ordinaryColor = mix(ordinaryColor, warmWhite, ordinaryCore * 0.67);
+        color = mix(ordinaryColor, color, vRepresentativeStyle);
         gl_FragColor = vec4(color, alpha);
       }
     ` : `
@@ -9781,6 +10364,7 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         haloTightness = mix(haloTightness, 3.45, uPaperNearBlend);
         haloTightness *= mix(0.95, 1.05, vVisualSeed);
         float core = exp(-radius * radius * coreTightness);
+        float stableCore = (1.0 - smoothstep(0.12, 0.28, radius)) * vOrdinaryMask;
         float innerGlow = exp(-radius * radius * 8.0);
         float halo = exp(-radius * radius * haloTightness) * edge;
         float rayCos = cos(vRayAngle);
@@ -9800,10 +10384,16 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         float coreWeight = mix(0.9, 1.05, vOrdinaryMask);
         float innerGlowWeight = mix(0.24, 0.27, vOrdinaryMask);
         float haloWeight = mix(0.08, 0.085, vOrdinaryMask);
-        float alpha = (core * coreWeight + innerGlow * innerGlowWeight + halo * haloWeight + rays + flightStreak) * vAlpha;
+        float alpha = (
+          max(core * coreWeight, stableCore * 0.58)
+          + innerGlow * innerGlowWeight
+          + halo * haloWeight
+          + rays
+          + flightStreak
+        ) * vAlpha;
         vec3 color = mix(vHaloColor, vCoreColor, clamp(core + innerGlow * 0.72, 0.0, 1.0));
         float whiteCoreMix = mix(0.55, 0.67, vOrdinaryMask);
-        color = mix(color, vec3(1.0, 0.985, 0.95), core * whiteCoreMix);
+        color = mix(color, vec3(1.0, 0.985, 0.95), max(core, stableCore) * whiteCoreMix);
         if (alpha < 0.0015) discard;
         gl_FragColor = vec4(color, min(alpha, 1.0));
       }

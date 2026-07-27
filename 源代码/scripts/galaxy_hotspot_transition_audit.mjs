@@ -27,13 +27,66 @@ import {
 
 const source = await readFile("src/components/App17GalaxyCanvas.tsx", "utf8");
 const samples = Array.from({ length: 121 }, (_, index) => index / 120);
-const enterDistances = samples.map((progress) => 180 + (24 - 180) * progress);
+const smootherStep = (value) => {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * t * (t * (t * 6 - 15) + 10);
+};
+const hotspot = [4.5, -2.25, 1.5];
+const cameraStart = [180, 32, 48];
+const startOffset = cameraStart.map((value, index) => value - hotspot[index]);
+const startDistance = Math.hypot(...startOffset);
+const rayDirection = startOffset.map((value) => value / startDistance);
+const endDistance = 24;
+const enterDistances = samples.map((progress) => Math.exp(
+  Math.log(startDistance)
+    + (Math.log(endDistance) - Math.log(startDistance)) * smootherStep(progress),
+));
 const exitDistances = enterDistances.slice().reverse();
+let maximumRayDeviation = 0;
 
 for (let index = 1; index < samples.length; index += 1) {
   assert(enterDistances[index] <= enterDistances[index - 1], "enter distance is not monotonic");
   assert(exitDistances[index] >= exitDistances[index - 1], "exit distance is not monotonic");
 }
+for (const distance of enterDistances) {
+  const position = hotspot.map((value, index) => value + rayDirection[index] * distance);
+  const offset = position.map((value, index) => value - hotspot[index]);
+  const projection = offset.reduce((total, value, index) => total + value * rayDirection[index], 0);
+  const rejection = offset.map((value, index) => value - rayDirection[index] * projection);
+  maximumRayDeviation = Math.max(maximumRayDeviation, Math.hypot(...rejection));
+}
+assert(maximumRayDeviation <= 1e-9, `radial camera path deviated by ${maximumRayDeviation}`);
+
+const semanticPosition = [2.4, -1.7, 0.5];
+const semanticRadius = Math.hypot(...semanticPosition);
+const radialBasis = semanticPosition.map((value) => value / semanticRadius);
+const semanticOrbitStart = radialBasis.map((value) => value * semanticRadius);
+assert(
+  Math.hypot(...semanticOrbitStart.map((value, index) => value - semanticPosition[index])) <= 1e-12,
+  "semantic orbit does not start at the paper position",
+);
+
+let previousStyle = 0;
+let previousReveal = 0;
+let previousMotion = 0;
+let previousLuminance = 0.65;
+let maximumLuminanceStep = 0;
+for (let frame = 0; frame <= 72; frame += 1) {
+  const elapsed = frame / 60;
+  const style = smootherStep(elapsed / 0.8);
+  const reveal = smootherStep(elapsed / 0.96);
+  const motion = smootherStep((elapsed - 0.24) / 0.72);
+  const luminance = 0.65 + (0.98 - 0.65) * style;
+  assert(style + 1e-12 >= previousStyle, "representative style is not monotonic");
+  assert(reveal + 1e-12 >= previousReveal, "orbit reveal is not monotonic");
+  assert(motion + 1e-12 >= previousMotion, "orbit motion is not monotonic");
+  maximumLuminanceStep = Math.max(maximumLuminanceStep, Math.abs(luminance - previousLuminance));
+  previousStyle = style;
+  previousReveal = reveal;
+  previousMotion = motion;
+  previousLuminance = luminance;
+}
+assert(maximumLuminanceStep <= 0.98 * 0.05, "representative luminance changes too abruptly");
 
 const beforeFade = resolveTheorySystemVisibility(0.7);
 const completedFade = resolveTheorySystemVisibility(1);
@@ -69,8 +122,19 @@ assert(source.includes("captureTheoryWorldReference"), "world-coordinate drift c
 assert(source.includes("measureTheoryWorldDrift"), "world-coordinate drift measurement is missing");
 assert(source.includes("performTheoryCanonicalRebase(true)"), "canonical entry rebase is missing");
 assert(source.includes("performTheoryCanonicalRebase(false)"), "canonical exit rebase is missing");
-assert(source.includes("representativeLayoutBlend"), "representative semantic/orbit interpolation is missing");
-assert(source.includes("elapsed / 0.3"), "representative interpolation is not 300ms");
+assert(source.includes("radialCameraTarget"), "radial theory camera path is missing");
+assert(source.includes("theoryEntryRayDirection"), "theory entry ray diagnostics are missing");
+assert(source.includes("createSemanticGalaxySystemOrbit"), "semantic representative orbit builder is missing");
+assert(source.includes("paper.position.copy(paper.semanticPosition)"), "semantic handoff origin is missing");
+assert(source.includes("representativeOwnershipBlend"), "representative ownership handoff is missing");
+assert(source.includes("representativeStyleBlend"), "representative style handoff is missing");
+assert(source.includes("representativeOrbitReveal"), "representative orbit reveal is missing");
+assert(source.includes("representativeOrbitMotionBlend"), "representative orbit acceleration is missing");
+assert(source.includes("APP17_REPRESENTATIVE_STAGGER_MAX_SECONDS = 0.24"), "stable representative stagger changed");
+assert(source.includes("APP17_REPRESENTATIVE_STYLE_DURATION_SECONDS = 0.8"), "representative style duration changed");
+assert(source.includes("APP17_REPRESENTATIVE_MAX_STYLE_STEP = 0.14"), "low-FPS luminance guard changed");
+assert(source.includes("APP17_REPRESENTATIVE_ORBIT_REVEAL_DURATION_SECONDS = 0.96"), "orbit reveal duration changed");
+assert(!source.includes("resources.cloudLayer.setHiddenPaperIds(bundle.hiddenRepresentativeIds)"), "representative ownership still jumps");
 assert(source.includes("queuedEnterHotspotId"), "queued hotspot selection is missing");
 assert(source.includes("APP17_SYSTEM_TRANSITION_MS"), "system transition duration is missing");
 assert(
@@ -177,6 +241,7 @@ console.log(JSON.stringify({
   cameraDistance: {
     enterMonotonic: true,
     exitMonotonic: true,
+    maximumRayDeviation,
   },
   nonSelectedWorldCoordinateDriftTarget: 1e-9,
   finalVisibility: {
@@ -214,5 +279,12 @@ console.log(JSON.stringify({
     reversible: true,
     projectionDelta,
   },
-  representativeSemanticOrbitInterpolationMs: 300,
+  representativeTransition: {
+    semanticOrbitError: 0,
+    ownershipHandoffStartsAt: 0.7,
+    styleDurationMs: 800,
+    orbitRevealDurationMs: 960,
+    motionDelayMs: 240,
+    maximumLuminanceStep,
+  },
 }, null, 2));

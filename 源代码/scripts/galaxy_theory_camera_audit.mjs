@@ -50,6 +50,14 @@ assert(source.includes("uOverviewFarBlend"), "theory far-distance LOD is missing
 assert(source.includes("mix(1.0, 0.62, uOverviewFarBlend)"), "paper far LOD changed");
 assert(source.includes("mix(1.0, 0.68, uOverviewFarBlend)"), "hotspot core-size far LOD changed");
 assert(source.includes("mix(1.0, 0.45, uOverviewFarBlend)"), "hotspot halo/ray far LOD changed");
+assert(source.includes("radialCameraTarget"), "theory system entry does not use a radial camera path");
+assert(source.includes("directTheoryEntry"), "theory entry mode switch is missing");
+assert(source.includes("theoryEntryRayDirection"), "theory entry direction is not preserved");
+assert(
+  source.includes("systemEntryCameraRayDeviation")
+    && source.includes("systemEntryDistanceMonotonicViolations"),
+  "theory entry path diagnostics are missing",
+);
 
 console.log(JSON.stringify({
   pass: true,
@@ -60,4 +68,5 @@ console.log(JSON.stringify({
   nearestP95Ratio: 0.20,
   zScale: 1,
   picking: "screen-space",
+  systemEntryPath: "hotspot-radial-logarithmic",
 }, null, 2));

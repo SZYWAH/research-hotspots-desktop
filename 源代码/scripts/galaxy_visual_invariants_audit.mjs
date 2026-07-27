@@ -44,7 +44,7 @@ function displayHotspotLayerSource() {
 }
 
 const expected = {
-  createSystemPaperLayer: "d6470352fcf7fb175e2359a7606677879b3707c3cb9f773c91c8d8f8632111f5",
+  createSystemPaperLayer: "2e8ffa4060c803bee5ec4d92852024e487e88721b6813a44df9fe0671c003819",
   createRepresentativeEnergyProfile: "788952322d7bd39a265de1d5b76ec24ebd384e43c64bb5601e9591dca8ec5b05",
   createEnvironmentStarLayer: "adac17bf6579840c85472102b2215a9e348eac86c30d71f0970cb49e679f4f88",
 };
@@ -59,6 +59,12 @@ assert.equal(
 );
 assert(source.includes("const APP17_SYSTEM_INNER_ORBIT_PERIOD_SECONDS = 90;"));
 assert(source.includes("const APP17_SYSTEM_OUTER_ORBIT_PERIOD_SECONDS = 210;"));
+assert(source.includes("const APP17_SYSTEM_PAPER_BASE_ALPHA = 0.65;"));
+assert(source.includes("const APP17_SYSTEM_PAPER_MINIMUM_SIZE = 2.5;"));
+assert(source.includes("const APP17_SYSTEM_PAPER_MAXIMUM_SIZE = 3.9;"));
+assert(source.includes("const APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR = 0.82;"));
+assert(source.includes("const APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR = 0.9;"));
+assert(source.includes("float stableCore = (1.0 - smoothstep(0.12, 0.28, radius)) * vOrdinaryMask;"));
 assert(source.includes("const APP17_FAR_ROTATION_RADIANS_PER_SECOND = THREE.MathUtils.degToRad(0.045);"));
 assert(source.includes("resources.representativePapers.forEach((paper) => {"));
 assert(source.includes("uOverviewFarBlend"), "theory overview distance LOD is missing");
@@ -98,7 +104,7 @@ assert(
 console.log(JSON.stringify({
   pass: true,
   preserved: [
-    "ordinary-paper shader and breathing",
+    "ordinary-paper stable core and non-temporal visibility",
     "representative energy profile and orbit update",
     "environment star twinkle",
     "distant hotspot material and slow rotation",

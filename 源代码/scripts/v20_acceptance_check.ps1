@@ -122,12 +122,7 @@ Set-Content -LiteralPath $LogPath -Value ("V20 acceptance check started at {0}" 
 Write-Step "Project root: $Root"
 Write-Step "Cargo home: $CargoHome"
 
-$pkg = Get-Content -LiteralPath (Join-Path $Root "package.json") -Raw | ConvertFrom-Json
-$tauri = Get-Content -LiteralPath (Join-Path $Root "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
-if ($pkg.version -ne "0.20.0" -or $tauri.version -ne "0.20.0") {
-  throw "Version mismatch. package.json=$($pkg.version), tauri.conf.json=$($tauri.version)"
-}
-Write-Step "Version check passed: 0.20.0"
+Invoke-NativeLogged "version alignment" "node.exe" @((Join-Path $Root "scripts\version_alignment.mjs"), "--current-only")
 
 Invoke-NativeLogged "pnpm build" "pnpm.cmd" @("build")
 

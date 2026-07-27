@@ -3706,6 +3706,7 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="全景 topic / 局部云" value={`${Math.round(galaxyPerformance.overviewSelectedTopicOpacity * 100)}% / ${Math.round(galaxyPerformance.systemCloudOpacity * 100)}%`} />
                 <GalaxyDiagnosticMetric label="非选中论文 / 热点" value={`${Math.round(galaxyPerformance.systemNonSelectedPaperOpacity * 100)}% / ${Math.round(galaxyPerformance.systemNonSelectedHotspotOpacity * 100)}%`} />
                 <GalaxyDiagnosticMetric label="进入位移 / 世界漂移" value={`${galaxyPerformance.systemEntryCameraTravelDistance.toFixed(3)} / ${galaxyPerformance.systemEntryNonSelectedWorldDrift.toExponential(2)}`} />
+                <GalaxyDiagnosticMetric label="进入射线偏差 / 距离违规" value={`${galaxyPerformance.systemEntryCameraRayDeviation.toExponential(2)} / ${galaxyPerformance.systemEntryDistanceMonotonicViolations}`} />
                 <GalaxyDiagnosticMetric label="入口尺度 / 重基准" value={`${galaxyPerformance.systemEntryScale.toFixed(6)} / ${galaxyPerformance.systemCanonicalRebaseCount}`} />
                 <GalaxyDiagnosticMetric label="重基准像素 / 云直径比" value={`${galaxyPerformance.systemCanonicalRebaseProjectionDeltaPx.toFixed(3)} px / ${galaxyPerformance.systemEntryCloudDiameterRatio.toFixed(4)}`} />
                 <GalaxyDiagnosticMetric label="远景热点 / 论文样本" value={`${galaxyPerformance.farBackgroundHotspotCount} / ${galaxyPerformance.farBackgroundPaperSampleCount}`} />
@@ -3720,6 +3721,10 @@ function GalaxyView({
                 <GalaxyDiagnosticMetric label="构图评分 / 改善" value={`${galaxyPerformance.theoryViewSelectedScore.toFixed(4)} / ${(galaxyPerformance.theoryViewImprovementRatio * 100).toFixed(1)}%`} />
                 <GalaxyDiagnosticMetric label="唯一论文 / 去重" value={`${galaxyPerformance.systemUniquePaperCount.toLocaleString()} / ${galaxyPerformance.systemDuplicatePaperCount.toLocaleString()}`} />
                 <GalaxyDiagnosticMetric label="隐藏代表 / 未匹配" value={`${galaxyPerformance.systemHiddenRepresentativeCount} / ${galaxyPerformance.systemUnresolvedRepresentativeCount}`} />
+                <GalaxyDiagnosticMetric label="代表交接 所有权 / 外观" value={`${Math.round(galaxyPerformance.representativeOwnershipBlend * 100)}% / ${Math.round(galaxyPerformance.representativeStyleBlend * 100)}%`} />
+                <GalaxyDiagnosticMetric label="代表交接 轨道 / 运动" value={`${Math.round(galaxyPerformance.representativeOrbitReveal * 100)}% / ${Math.round(galaxyPerformance.representativeOrbitMotionBlend * 100)}%`} />
+                <GalaxyDiagnosticMetric label="语义轨道 / 交接投影" value={`${galaxyPerformance.representativeSemanticOrbitError.toExponential(2)} / ${galaxyPerformance.representativeHandoffProjectionDeltaPx.toFixed(3)} px`} />
+                <GalaxyDiagnosticMetric label="安全轨道 / 最大亮度步进" value={`${galaxyPerformance.representativeSafeOrbitCaptureCount} / ${galaxyPerformance.representativeMaxLuminanceStep.toFixed(4)}`} />
                 <GalaxyDiagnosticMetric label="论文星 LOD / 混合" value={`${galaxySystemPaperLodLabel(galaxyPerformance.systemPaperLod)} / ${Math.round(galaxyPerformance.systemPaperLodBlend * 100)}%`} />
                 <GalaxyDiagnosticMetric label="普通论文星尺寸" value={galaxyPerformance.systemPaperLod === "none" ? "未进入" : `${galaxyPerformance.systemPaperMinPointSize.toFixed(2)}–${galaxyPerformance.systemPaperMaxPointSize.toFixed(2)} px`} />
                 <GalaxyDiagnosticMetric label="论文云显现 / 曝光" value={`${Math.round(galaxyPerformance.systemPaperRevealProgress * 100)}% / ${galaxyPerformance.systemPaperExposure.toFixed(2)}×（目标 ${galaxyPerformance.systemPaperTargetExposure.toFixed(2)}×）`} />
@@ -3955,7 +3960,9 @@ function GalaxyView({
                   <span title="能量光核只用于区分前十篇代表论文，不表示引用量、影响力或真实能量">代表论文=能量光核</span>
                   <span>论文星大小=代表顺序</span>
                   <span>色温=年份 · 轨道色=来源</span>
-                  <span title="轨道和极慢公转仅用于区分代表论文，不表示真实时间演化或引用关系">轨道=代表性排序</span>
+                  <span title="轨道和极慢公转仅用于区分代表论文，不表示真实时间演化或引用关系">
+                    {visualMode === "nebula" ? "轨道=代表性排序" : "轨道=语义原位成轨"}
+                  </span>
                   <span title="日冕、磁场弧线和 Bloom 仅用于增强空间与能量层次，不表示额外科研数据">辉光=视觉增强</span>
                 </>
               )}

@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { evaluateVersionAlignment } from "./version_alignment.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, "..");
@@ -22,8 +23,13 @@ await mkdir(path.dirname(mdOutput), { recursive: true });
 const packageJson = await readJson(path.join(root, "package.json"));
 const tauriConf = await readJson(path.join(root, "src-tauri", "tauri.conf.json"));
 const cargoToml = await readTextIfExists(path.join(root, "src-tauri", "Cargo.toml"));
-const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? "unknown";
 const appVersion = packageJson.version;
+const versionAlignment = evaluateVersionAlignment({
+  packageVersion: appVersion,
+  tauriVersion: tauriConf.version,
+  cargoToml,
+});
+const cargoVersion = versionAlignment.cargoVersion;
 
 const artifacts = {
   finalAcceptance: await readTextIfExists(path.join(root, "outputs", "V20_FINAL_ACCEPTANCE.md")),
@@ -59,7 +65,7 @@ const artifacts = {
 
 const releaseExePath = path.join(root, "src-tauri", "target", "release", "research-hotspots-desktop.exe");
 const releaseExe = await fileSummary(releaseExePath);
-const versionUnified = appVersion === "0.20.0" && tauriConf.version === "0.20.0" && cargoVersion === "0.20.0";
+const versionUnified = versionAlignment.aligned;
 const acceptanceCorePassed = /V20 acceptance (?:core checks|check) completed/.test(artifacts.acceptanceLog);
 const defaultAcceptancePassed = acceptanceCorePassed && !/Command failed|throw|failed:/i.test(stripExpectedWords(artifacts.acceptanceLog));
 const heavyPressureDocumented = /rows=100000[\s\S]*hotspots=20[\s\S]*cleaned=true/.test(artifacts.finalAcceptance);
