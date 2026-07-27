@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "agent-galaxy-focus-fixtures-v1",
+  "sourceSnapshotId": "project-default:v20:1784975696989",
+  "sampledPapers": [
+    {
+      "id": "project-default:openalex:W4386693657",
+      "hotspotId": "project-default:sqlite-cluster:v2:3d8848d49b2ecac2adf0d74857f2130fbb8fe339631ef1f9c1880f50867e739c",
+      "membership": "sampled",
+      "expectedBehavior": "Focus the resident proxy without creating a replacement object."
+    },
+    {
+      "id": "project-default:openalex:W2582012066",
+      "hotspotId": "project-default:sqlite-cluster:v2:1a20cf92037336a1050d9e1f342f53f2bd64f776e0c9f19d81f101b1edbb9459",
+      "membership": "sampled",
+      "expectedBehavior": "Focus the resident proxy without creating a replacement object."
+    }
+  ],
+  "snapshotUnsampledPapers": [
+    {
+      "id": "project-default:openalex:W4391468387",
+      "hotspotId": "project-default:sqlite-cluster:v2:3d8848d49b2ecac2adf0d74857f2130fbb8fe339631ef1f9c1880f50867e739c",
+      "membership": "snapshot-unsampled",
+      "expectedBehavior": "Condense in the assigned hotspot flow lane without a new-signal label."
+    },
+    {
+      "id": "project-default:arxiv:2411.07798v1",
+      "hotspotId": "project-default:sqlite-cluster:v2:44a3539e2e6c06bc2fe24d931732078fe2857352f70596517380dbf1c27ca17e",
+      "membership": "snapshot-unsampled",
+      "expectedBehavior": "Condense in the assigned hotspot flow lane without a new-signal label."
+    }
+  ],
+  "activeOnlyPaper": {
+    "id": "fixture:active-only:paper-001",
+    "hotspotId": "project-default:sqlite-cluster:v2:3d8848d49b2ecac2adf0d74857f2130fbb8fe339631ef1f9c1880f50867e739c",
+    "membership": "active-only",
+    "semanticOffset": [
+      0.8,
+      0.2,
+      -0.4
+    ],
+    "fixtureOnly": true,
+    "notForEvidence": true,
+    "expectedBehavior": "Enter as a labeled new signal and remain session-local."
+  },
+  "missingPaper": {
+    "id": "fixture:missing:paper-does-not-exist",
+    "membership": "missing",
+    "fixtureOnly": true,
+    "notForEvidence": true,
+    "expectedBehavior": "Return an explicit missing result and never fabricate a position."
+  },
+  "hotspotsByScale": {
+    "small": [
+      {
+        "id": "project-default:sqlite-cluster:v2:44a3539e2e6c06bc2fe24d931732078fe2857352f70596517380dbf1c27ca17e",
+        "field": "Computational Biology",
+        "topicId": 138,
+        "paperCount": 15
+      },
+      {
+        "id": "project-default:sqlite-cluster:v2:a1ed158c0054a7d9ff4c3b4889908ec565f37b85870356351e15b78a335a3fca",
+        "field": "Computational Biology",
+        "topicId": 96,
+        "paperCount": 19
+      }
+    ],
+    "medium": [
+      {
+        "id": "project-default:sqlite-cluster:v2:3d8848d49b2ecac2adf0d74857f2130fbb8fe339631ef1f9c1880f50867e739c",
+        "field": "Artificial Intelligence",
+        "topicId": 78,
+        "paperCount": 22
+      },
+      {
+        "id": "project-default:sqlite-cluster:v2:1e273651bb556672b6e0cecb3f0bf7834db4b21999db83c59a619da855ddd66e",
+        "field": "Statistics",
+        "topicId": 8,
+        "paperCount": 76
+      }
+    ],
+    "large": [
+      {
+        "id": "project-default:sqlite-cluster:v2:1a20cf92037336a1050d9e1f342f53f2bd64f776e0c9f19d81f101b1edbb9459",
+        "field": "Quantum Physics",
+        "topicId": 1,
+        "paperCount": 395
+      },
+      {
+        "id": "project-default:sqlite-cluster:v2:2a8239c68f2e6db4004d495364e75f5e83bf9ba0a4c8313e8c2ce094f377e9d8",
+        "field": "Algebraic Geometry",
+        "topicId": 2,
+        "paperCount": 327
+      }
+    ]
+  },
+  "multiEntityGroups": {
+    "sameHotspot": {
+      "entityIds": [
+        "project-default:openalex:W4386693657",
+        "project-default:openalex:W4391468387",
+        "project-default:openalex:W4385071300"
+      ],
+      "expectedBehavior": "Highlight together in one flow neighborhood without camera cycling."
+    },
+    "crossHotspot": {
+      "entityIds": [
+        "project-default:openalex:W4386693657",
+        "project-default:openalex:W2582012066",
+        "project-default:arxiv:1811.12144v2"
+      ],
+      "expectedBehavior": "Highlight all related flow regions and wait for an explicit single-entity focus."
+    }
+  }
+}

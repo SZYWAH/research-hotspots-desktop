@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-07-27T22:20:29.6249852+08:00",
+  "sourceBranch": "codex/galaxy-immersion",
+  "sourceHead": "33d97d45a952d489de4d08e941d14277d2c71f08",
+  "preparationBranch": "codex/agent-galaxy-flow-engine",
+  "workingTreeCleanAtCapture": true,
+  "runtime": {
+    "node": "v24.14.1",
+    "pnpm": "11.11.0",
+    "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+    "packageVersion": "0.22.0-beta.2",
+    "threeDeclared": "^0.185.1",
+    "threeInstalled": "0.185.1"
+  },
+  "payload": {
+    "path": ".visual-review/app17/agent-background.json",
+    "sha256": "cba42b19b4caccf00d0ef22bccef108906c5937101ef4d968e41aa912384d80f",
+    "sizeBytes": 914210,
+    "manifestSha256": "c3a7baf3b65b07c344b2d9b188096ac1e5d514f4c77b0d4fb88dc511cb46bdec",
+    "sourcePaperCount": 25463,
+    "sourceHotspotCount": 160,
+    "sampledPaperCount": 3840,
+    "hotspotCount": 160,
+    "sourceSnapshotId": "project-default:v20:1784975696989",
+    "paperLayoutVersion": "semantic-hierarchical-natural-pca3-v3",
+    "coordinateSpace": "hierarchical",
+    "visualConfigVersion": "agent-galaxy-immersion-v1"
+  },
+  "candidateAssessment": {
+    "infrastructure": "PASS",
+    "visualAcceptance": "FAIL",
+    "presets": [
+      "voyage",
+      "breath",
+      "signal"
+    ],
+    "decision": "Retain in Git history and acceptance evidence only."
+  },
+  "boundaries": {
+    "defaultHomepageChanged": false,
+    "databaseMigrationAllowed": false,
+    "productionUmapAllowed": false,
+    "theoryGalaxyChangeAllowed": false,
+    "displayGalaxyChangeAllowed": false
+  }
+}

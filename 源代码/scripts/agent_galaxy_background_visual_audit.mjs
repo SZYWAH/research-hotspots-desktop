@@ -60,6 +60,10 @@ for (const [name, pass] of Object.entries(checks)) {
 
 console.log(JSON.stringify({
   pass: true,
+  scope: "legacy-infrastructure-only",
+  productVisualAcceptance: "FAIL",
+  candidateDecision: "rejected-retained-for-history",
+  replacementAudit: "audit:agent-galaxy-flow-preparation",
   checks,
   presets: ["voyage", "breath", "signal"],
   motionStates: ["idle", "input", "answer", "reading"],

@@ -1,14 +1,16 @@
 # 科研 Agent 最终产品目标
 
-状态：最终产品目标（Authoritative）
+状态：最终产品详细定义
 
 更新时间：2026-07-27
+
+权威事实入口：[科研 Agent 项目目标](./PROJECT.md)
 
 配套实施文档：[科研 Agent 分阶段实施路线](./RESEARCH_AGENT_IMPLEMENTATION_ROADMAP.md)
 
 ## 1. 文档地位
 
-本文定义本项目的最终产品形态、用户体验、能力边界和完成标准。出现范围或优先级冲突时，以本文和配套实施路线为准。
+本文详细定义本项目的最终产品形态、用户体验、能力边界和完成标准。范围、当前阶段和优先级以 `PROJECT.md`、`ROADMAP.md`、`STATUS.md`、`ARCHITECTURE.md` 和 `DECISIONS.md` 为事实入口；本文作为产品细节来源。
 
 下列文档继续有效，但其地位调整为基础设施或历史版本说明：
 
