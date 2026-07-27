@@ -36,6 +36,10 @@ fn run() -> Result<(), String> {
         "V20 semantic visual review snapshot completed: papers={}, hotspots={}, topics={}",
         result.paper_count, result.hotspot_count, result.topic_count
     );
+    println!(
+        "Agent background snapshot: papers={}, bytes={}",
+        result.agent_background_paper_count, result.agent_background_size_bytes
+    );
     println!("Database: {}", result.database_path);
     println!("Snapshot: {}", result.output_dir);
     Ok(())

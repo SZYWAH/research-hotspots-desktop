@@ -1094,6 +1094,8 @@ pub struct App17VisualReviewExportSummary {
     pub paper_count: usize,
     pub hotspot_count: usize,
     pub topic_count: usize,
+    pub agent_background_paper_count: usize,
+    pub agent_background_size_bytes: usize,
 }
 
 #[derive(Serialize)]
@@ -1105,6 +1107,9 @@ struct App17VisualReviewManifest {
     database_size_bytes: u64,
     project_id: String,
     payload_path: String,
+    agent_background_path: String,
+    agent_background_sha256: String,
+    agent_background_size_bytes: usize,
     paper_count: usize,
     hotspot_count: usize,
     topic_count: usize,
@@ -1113,6 +1118,55 @@ struct App17VisualReviewManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     coordinate_override_sha256: Option<String>,
     topics: Vec<App17VisualReviewTopicEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGalaxyBackgroundPayloadV1 {
+    schema_version: u32,
+    payload_kind: String,
+    generated_at: String,
+    library_instance_id: String,
+    project_id: String,
+    source_snapshot_id: String,
+    active_snapshot_id: String,
+    paper_layout_version: String,
+    projection_version: String,
+    coordinate_space: String,
+    sampling_version: String,
+    visual_config_version: String,
+    stale: bool,
+    source_paper_count: usize,
+    source_hotspot_count: usize,
+    hotspot_p95_radius: f64,
+    isotropic_scale: f64,
+    source_centroid: [f64; 3],
+    hotspots: Vec<AgentGalaxyBackgroundHotspotV1>,
+    papers: Vec<AgentGalaxyBackgroundPaperV1>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGalaxyBackgroundHotspotV1 {
+    id: String,
+    position: [f64; 3],
+    field: String,
+    color: String,
+    trend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<f64>,
+    paper_count: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGalaxyBackgroundPaperV1 {
+    id: String,
+    hotspot_id: String,
+    offset: [f64; 3],
+    color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    year: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -5389,6 +5443,273 @@ fn build_app17_galaxy_payload(
     })
 }
 
+const AGENT_BACKGROUND_SCHEMA_VERSION: u32 = 1;
+const AGENT_BACKGROUND_MAX_PAPERS_PER_HOTSPOT: usize = 24;
+const AGENT_BACKGROUND_HOTSPOT_P95_RADIUS: f64 = 46.0;
+const AGENT_BACKGROUND_SAMPLING_VERSION: &str = "fnv1a32-snapshot-hotspot-paper-v1";
+const AGENT_BACKGROUND_VISUAL_CONFIG_VERSION: &str = "agent-galaxy-immersion-v1";
+const AGENT_BACKGROUND_MAX_SIZE_BYTES: usize = 1024 * 1024;
+
+fn agent_background_topic_key(field: &str, topic_id: i64) -> String {
+    format!("{field}\0{topic_id}")
+}
+
+fn agent_background_coordinate(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn agent_background_sample_hash(snapshot_id: &str, hotspot_id: &str, paper_id: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+    for (index, value) in [snapshot_id, hotspot_id, paper_id].into_iter().enumerate() {
+        if index > 0 {
+            hash = hash.wrapping_mul(0x01000193);
+        }
+        for byte in value.as_bytes() {
+            hash ^= u32::from(*byte);
+            hash = hash.wrapping_mul(0x01000193);
+        }
+    }
+    hash
+}
+
+fn read_agent_background_library_instance_id(
+    conn: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    snapshot_id: &str,
+) -> Result<String, String> {
+    let has_agent_meta = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_meta')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?
+        != 0;
+    if has_agent_meta {
+        let stored = conn
+            .query_row(
+                "SELECT value FROM agent_meta WHERE key='libraryInstanceId'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if let Some(value) = stored.filter(|value| !value.trim().is_empty()) {
+            return Ok(value);
+        }
+    }
+
+    // Legacy databases may predate agent_meta. Keep this exporter read-only
+    // and derive a non-reversible local identity instead of inserting metadata.
+    let mut digest = Sha256::new();
+    digest.update(b"agent-background-library-fallback-v1\0");
+    digest.update(database_path.to_string_lossy().as_bytes());
+    digest.update(b"\0");
+    digest.update(project_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(snapshot_id.as_bytes());
+    Ok(format!("legacy-{:x}", digest.finalize()))
+}
+
+fn build_agent_galaxy_background_payload(
+    conn: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    payload: &V20GalaxyPayload,
+) -> Result<AgentGalaxyBackgroundPayloadV1, String> {
+    let source_snapshot_id = payload
+        .snapshot_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Agent background source snapshot id is missing.".to_string())?;
+    let paper_layout_version = payload
+        .paper_layout_version
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Agent background paper layout version is missing.".to_string())?;
+    let projection_version = payload
+        .projection_version
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Agent background projection version is missing.".to_string())?;
+    let coordinate_space = payload
+        .paper_layout_coordinate_space
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Agent background coordinate space is missing.".to_string())?;
+    if payload.hotspots.is_empty() {
+        return Err("Agent background requires at least one hotspot.".to_string());
+    }
+
+    let hotspot_count = payload.hotspots.len() as f64;
+    let centroid_sum = payload.hotspots.iter().fold([0.0; 3], |mut sum, hotspot| {
+        sum[0] += hotspot.x;
+        sum[1] += hotspot.y;
+        sum[2] += hotspot.z;
+        sum
+    });
+    let source_centroid = [
+        centroid_sum[0] / hotspot_count,
+        centroid_sum[1] / hotspot_count,
+        centroid_sum[2] / hotspot_count,
+    ];
+    let mut hotspot_radii = payload
+        .hotspots
+        .iter()
+        .map(|hotspot| {
+            let dx = hotspot.x - source_centroid[0];
+            let dy = hotspot.y - source_centroid[1];
+            let dz = hotspot.z - source_centroid[2];
+            (dx * dx + dy * dy + dz * dz).sqrt()
+        })
+        .collect::<Vec<_>>();
+    hotspot_radii.sort_by(f64::total_cmp);
+    let p95_index = ((hotspot_radii.len() as f64 * 0.95).ceil() as usize)
+        .saturating_sub(1)
+        .min(hotspot_radii.len() - 1);
+    let source_p95 = hotspot_radii[p95_index];
+    if !source_p95.is_finite() || source_p95 <= f64::EPSILON {
+        return Err("Agent background hotspot P95 radius is invalid.".to_string());
+    }
+    let isotropic_scale = AGENT_BACKGROUND_HOTSPOT_P95_RADIUS / source_p95;
+
+    let confidence_by_id = payload
+        .hotspot_records
+        .iter()
+        .map(|record| (record.id.as_str(), record.confidence))
+        .collect::<HashMap<_, _>>();
+    let mut source_hotspots = payload.hotspots.iter().collect::<Vec<_>>();
+    source_hotspots.sort_by(|left, right| left.id.cmp(&right.id));
+    let source_hotspot_by_id = source_hotspots
+        .iter()
+        .map(|hotspot| (hotspot.id.as_str(), *hotspot))
+        .collect::<HashMap<_, _>>();
+    let hotspot_id_by_topic = source_hotspots
+        .iter()
+        .map(|hotspot| {
+            (
+                agent_background_topic_key(&hotspot.field, hotspot.topic_id),
+                hotspot.id.as_str(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    let hotspots = source_hotspots
+        .iter()
+        .map(|hotspot| AgentGalaxyBackgroundHotspotV1 {
+            id: hotspot.id.clone(),
+            position: [
+                agent_background_coordinate(
+                    (hotspot.x - source_centroid[0]) * isotropic_scale,
+                ),
+                agent_background_coordinate(
+                    (hotspot.y - source_centroid[1]) * isotropic_scale,
+                ),
+                agent_background_coordinate(
+                    (hotspot.z - source_centroid[2]) * isotropic_scale,
+                ),
+            ],
+            field: hotspot.field.clone(),
+            color: hotspot.color.clone(),
+            trend: hotspot.trend.clone(),
+            confidence: confidence_by_id.get(hotspot.id.as_str()).copied(),
+            paper_count: hotspot.paper_count,
+        })
+        .collect::<Vec<_>>();
+
+    let mut candidates_by_hotspot =
+        HashMap::<String, Vec<&App17GalaxyPaperPoint>>::with_capacity(hotspots.len());
+    for paper in &payload.papers {
+        let topic_key = agent_background_topic_key(&paper.field, paper.topic_id);
+        let hotspot_id = hotspot_id_by_topic.get(&topic_key).ok_or_else(|| {
+            format!(
+                "Agent background paper {} has no hotspot for {} / {}.",
+                paper.raw_paper_id, paper.field, paper.topic_id
+            )
+        })?;
+        candidates_by_hotspot
+            .entry((*hotspot_id).to_string())
+            .or_default()
+            .push(paper);
+    }
+
+    let mut papers =
+        Vec::with_capacity(hotspots.len() * AGENT_BACKGROUND_MAX_PAPERS_PER_HOTSPOT);
+    for hotspot in &hotspots {
+        let source_hotspot = source_hotspot_by_id
+            .get(hotspot.id.as_str())
+            .ok_or_else(|| format!("Agent background hotspot source is missing: {}.", hotspot.id))?;
+        let mut candidates = candidates_by_hotspot
+            .remove(&hotspot.id)
+            .unwrap_or_default();
+        candidates.sort_by(|left, right| {
+            agent_background_sample_hash(
+                &source_snapshot_id,
+                &hotspot.id,
+                &left.raw_paper_id,
+            )
+            .cmp(&agent_background_sample_hash(
+                &source_snapshot_id,
+                &hotspot.id,
+                &right.raw_paper_id,
+            ))
+            .then_with(|| left.raw_paper_id.cmp(&right.raw_paper_id))
+        });
+        for paper in candidates
+            .into_iter()
+            .take(AGENT_BACKGROUND_MAX_PAPERS_PER_HOTSPOT)
+        {
+            papers.push(AgentGalaxyBackgroundPaperV1 {
+                id: paper.raw_paper_id.clone(),
+                hotspot_id: hotspot.id.clone(),
+                offset: [
+                    agent_background_coordinate(
+                        (paper.x - source_hotspot.x) * isotropic_scale,
+                    ),
+                    agent_background_coordinate(
+                        (paper.y - source_hotspot.y) * isotropic_scale,
+                    ),
+                    agent_background_coordinate(
+                        (paper.z - source_hotspot.z) * isotropic_scale,
+                    ),
+                ],
+                color: paper.color.clone(),
+                year: paper.year,
+            });
+        }
+    }
+
+    let library_instance_id = read_agent_background_library_instance_id(
+        conn,
+        database_path,
+        project_id,
+        &source_snapshot_id,
+    )?;
+    Ok(AgentGalaxyBackgroundPayloadV1 {
+        schema_version: AGENT_BACKGROUND_SCHEMA_VERSION,
+        payload_kind: "agent-galaxy-background".to_string(),
+        generated_at: payload.generated_at.clone(),
+        library_instance_id,
+        project_id: project_id.to_string(),
+        source_snapshot_id: source_snapshot_id.clone(),
+        active_snapshot_id: source_snapshot_id,
+        paper_layout_version,
+        projection_version,
+        coordinate_space,
+        sampling_version: AGENT_BACKGROUND_SAMPLING_VERSION.to_string(),
+        visual_config_version: AGENT_BACKGROUND_VISUAL_CONFIG_VERSION.to_string(),
+        stale: false,
+        source_paper_count: payload.paper_count,
+        source_hotspot_count: payload.hotspot_count,
+        hotspot_p95_radius: AGENT_BACKGROUND_HOTSPOT_P95_RADIUS,
+        isotropic_scale,
+        source_centroid,
+        hotspots,
+        papers,
+    })
+}
+
 pub fn export_app17_visual_review_snapshot(
     database_path: PathBuf,
     project_id: Option<String>,
@@ -5444,6 +5765,20 @@ pub fn export_app17_visual_review_snapshot(
             Ok::<_, String>((path, sha256))
         })
         .transpose()?;
+    let agent_background =
+        build_agent_galaxy_background_payload(&conn, &database_path, &project_id, &payload)?;
+    let mut agent_background_bytes =
+        serde_json::to_vec(&agent_background).map_err(|error| error.to_string())?;
+    agent_background_bytes.push(b'\n');
+    if agent_background_bytes.len() > AGENT_BACKGROUND_MAX_SIZE_BYTES {
+        return Err(format!(
+            "Agent background payload is {} bytes; the limit is {} bytes.",
+            agent_background_bytes.len(),
+            AGENT_BACKGROUND_MAX_SIZE_BYTES
+        ));
+    }
+    let agent_background_sha256 =
+        format!("{:x}", Sha256::digest(&agent_background_bytes));
 
     fs::create_dir_all(&output_dir).map_err(|error| {
         format!(
@@ -5538,6 +5873,9 @@ pub fn export_app17_visual_review_snapshot(
         database_size_bytes: database_metadata.len(),
         project_id: project_id.clone(),
         payload_path: "payload.json".to_string(),
+        agent_background_path: "agent-background.json".to_string(),
+        agent_background_sha256,
+        agent_background_size_bytes: agent_background_bytes.len(),
         paper_count: payload.paper_count,
         hotspot_count: payload.hotspot_count,
         topic_count: topics.len(),
@@ -5550,6 +5888,16 @@ pub fn export_app17_visual_review_snapshot(
         topics,
     };
     write_visual_review_json(&output_dir.join("payload.json"), &payload)?;
+    fs::write(
+        output_dir.join("agent-background.json"),
+        &agent_background_bytes,
+    )
+    .map_err(|error| {
+        format!(
+            "Cannot write {}: {error}",
+            output_dir.join("agent-background.json").display()
+        )
+    })?;
     write_visual_review_json(&output_dir.join("manifest.json"), &manifest)?;
 
     Ok(App17VisualReviewExportSummary {
@@ -5561,6 +5909,8 @@ pub fn export_app17_visual_review_snapshot(
         paper_count: payload.paper_count,
         hotspot_count: payload.hotspot_count,
         topic_count: manifest.topic_count,
+        agent_background_paper_count: agent_background.papers.len(),
+        agent_background_size_bytes: agent_background_bytes.len(),
     })
 }
 

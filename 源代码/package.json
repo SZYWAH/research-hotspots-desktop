@@ -14,6 +14,8 @@
     "audit:galaxy-theory-view": "node --experimental-strip-types scripts/galaxy_theory_view_audit.mjs",
     "audit:galaxy-hotspot-transition": "node --experimental-strip-types scripts/galaxy_hotspot_transition_audit.mjs",
     "audit:galaxy-far-background-payload": "node --experimental-strip-types scripts/galaxy_far_background_payload_audit.mjs",
+    "audit:agent-galaxy-background": "node scripts/agent_galaxy_background_payload_audit.mjs",
+    "audit:agent-galaxy-background-visual": "node scripts/agent_galaxy_background_visual_audit.mjs",
     "experiment:galaxy-global-umap": "D:\\yingyong\\venvs\\galaxy_umap_py312\\Scripts\\python.exe scripts/generate_global_umap_overrides.py",
     "audit:galaxy-global-umap": "node scripts/galaxy_umap_ab_audit.mjs",
     "report:galaxy-umap-multiscale": "node scripts/galaxy_umap_multiscale_report.mjs",
@@ -103,6 +105,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.13.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/three": "^0.163.0",

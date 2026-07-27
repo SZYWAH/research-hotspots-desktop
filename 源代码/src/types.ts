@@ -441,6 +441,47 @@ export type App17GalaxyPayload = {
   hotspotRecords?: Hotspot[];
 };
 
+export type AgentGalaxyBackgroundHotspotV1 = {
+  id: string;
+  position: [number, number, number];
+  field: string;
+  color: string;
+  trend: string;
+  confidence?: number;
+  paperCount: number;
+};
+
+export type AgentGalaxyBackgroundPaperV1 = {
+  id: string;
+  hotspotId: string;
+  offset: [number, number, number];
+  color: string;
+  year?: number;
+};
+
+export type AgentGalaxyBackgroundPayloadV1 = {
+  schemaVersion: 1;
+  payloadKind: "agent-galaxy-background";
+  generatedAt: string;
+  libraryInstanceId: string;
+  projectId: string;
+  sourceSnapshotId: string;
+  activeSnapshotId: string;
+  paperLayoutVersion: string;
+  projectionVersion: string;
+  coordinateSpace: "hierarchical" | "global" | string;
+  samplingVersion: string;
+  visualConfigVersion: string;
+  stale: boolean;
+  sourcePaperCount: number;
+  sourceHotspotCount: number;
+  hotspotP95Radius: number;
+  isotropicScale: number;
+  sourceCentroid: [number, number, number];
+  hotspots: AgentGalaxyBackgroundHotspotV1[];
+  papers: AgentGalaxyBackgroundPaperV1[];
+};
+
 export type V20AnalysisState = {
   projectId: string;
   activeSnapshotId: string;

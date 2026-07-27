@@ -122,6 +122,10 @@ function snapshotIsCurrent(database, force) {
   const manifest = readJson(manifestPath);
   const saved = readJson(configPath);
   if (!manifest || manifest.schemaVersion !== 1) return false;
+  if (
+    manifest.agentBackgroundPath !== "agent-background.json"
+    || !existsSync(join(snapshotDir, manifest.agentBackgroundPath))
+  ) return false;
   const databaseStat = statSync(database.databasePath);
   return saved?.databasePath
     && comparablePath(saved.databasePath) === comparablePath(database.databasePath)

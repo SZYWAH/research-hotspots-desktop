@@ -40,6 +40,9 @@ export type GalaxyVisualReviewManifest = {
   databaseSizeBytes: number;
   projectId: string;
   payloadPath: string;
+  agentBackgroundPath: string;
+  agentBackgroundSha256: string;
+  agentBackgroundSizeBytes: number;
   paperCount: number;
   hotspotCount: number;
   topicCount: number;
