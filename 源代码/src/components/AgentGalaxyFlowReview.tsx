@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentGalaxyBackgroundPayloadV1 } from "../types";
+import type { AgentGalaxyFocusIntent } from "../lib/agentGalaxyFlowContract";
 import { loadAgentGalaxyBackgroundPayload } from "../lib/agentGalaxyBackgroundReview";
 import {
   readAgentGalaxyFlowReviewConfig,
@@ -10,6 +11,14 @@ import {
   runGravitationalWeaveGpuParityAudit,
   type GravitationalWeaveGpuParityResult,
 } from "../lib/gravitationalWeaveGpuParity";
+import {
+  runAgentGalaxyFocusFieldGpuParityAudit,
+  type AgentGalaxyFocusFieldGpuParityResult,
+} from "../lib/agentGalaxyFocusFieldGpuParity";
+import type {
+  AgentGalaxyFocusRuntimeSnapshot,
+  AgentGalaxyFocusMode,
+} from "../lib/agentGalaxyResidentFocus";
 import AgentGalaxyFlowCanvas, {
   AGENT_GALAXY_FLOW_SNAPSHOT_SIZE,
   AGENT_GALAXY_FLOW_STAR_CROP,
@@ -27,6 +36,7 @@ type AgentGalaxyFlowReviewWindow = Window & {
     config: AgentGalaxyFlowReviewConfig;
     metrics?: AgentGalaxyFlowMetrics;
     gpuParity?: GravitationalWeaveGpuParityResult;
+    focusFieldGpuParity?: AgentGalaxyFocusFieldGpuParityResult;
     sourceSnapshotId?: string;
     recordingState: RecordingState;
     recordingSavedPath?: string;
@@ -36,11 +46,19 @@ type AgentGalaxyFlowReviewWindow = Window & {
     snapshotSavedPath?: string;
     snapshotByteLength: number;
     snapshotError?: string;
+    focus?: AgentGalaxyFocusRuntimeSnapshot;
+    commands: {
+      focusPaper: (entityId: string, mode?: AgentGalaxyFocusMode) => void;
+      releaseFocus: () => void;
+      answerEnded: () => void;
+    };
   };
 };
 
 const MIN_RECORDING_BYTES = 1024;
 const MIN_SNAPSHOT_BYTES = 1024;
+const VISIBLE_RESIDENT_PAPER_ID = "project-default:openalex:W2582012066";
+const PROMOTED_RESIDENT_PAPER_ID = "project-default:openalex:W4386693657";
 
 function useReducedMotionPreference() {
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -59,6 +77,12 @@ function useReducedMotionPreference() {
 function formatMetric(value: number | undefined, digits = 1) {
   if (value === undefined || !Number.isFinite(value) || value <= 0) return "待采样";
   return value.toFixed(digits);
+}
+
+function formatBlend(value: number | undefined) {
+  return value === undefined || !Number.isFinite(value)
+    ? "—"
+    : value.toFixed(2);
 }
 
 function recordingFilename(config: AgentGalaxyFlowReviewConfig) {
@@ -82,6 +106,8 @@ export default function AgentGalaxyFlowReview() {
   const [error, setError] = useState("");
   const [metrics, setMetrics] = useState<AgentGalaxyFlowMetrics>();
   const [gpuParity, setGpuParity] = useState<GravitationalWeaveGpuParityResult>();
+  const [focusFieldGpuParity, setFocusFieldGpuParity] =
+    useState<AgentGalaxyFocusFieldGpuParityResult>();
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [recordingUrl, setRecordingUrl] = useState("");
   const [recordingSavedPath, setRecordingSavedPath] = useState("");
@@ -93,6 +119,15 @@ export default function AgentGalaxyFlowReview() {
   const [snapshotByteLength, setSnapshotByteLength] = useState(0);
   const [snapshotError, setSnapshotError] = useState("");
   const snapshotStartedRef = useRef(false);
+  const [focusIntent, setFocusIntent] = useState<AgentGalaxyFocusIntent>();
+  const [focusSnapshot, setFocusSnapshot] =
+    useState<AgentGalaxyFocusRuntimeSnapshot>();
+  const [selectedPaperId, setSelectedPaperId] = useState(
+    config.focusPaper ?? VISIBLE_RESIDENT_PAPER_ID,
+  );
+  const [selectedFocusMode, setSelectedFocusMode] =
+    useState<AgentGalaxyFocusMode>(config.focusMode);
+  const answerReleaseTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -110,6 +145,79 @@ export default function AgentGalaxyFlowReview() {
 
   const handleMetrics = useCallback((nextMetrics: AgentGalaxyFlowMetrics) => {
     setMetrics(nextMetrics);
+  }, []);
+
+  const handleFocusSnapshot = useCallback(
+    (nextSnapshot: AgentGalaxyFocusRuntimeSnapshot) => {
+      setFocusSnapshot(nextSnapshot);
+    },
+    [],
+  );
+
+  const focusPaper = useCallback((
+    entityId: string,
+    mode: AgentGalaxyFocusMode = config.focusMode,
+  ) => {
+    if (answerReleaseTimerRef.current !== undefined) {
+      window.clearTimeout(answerReleaseTimerRef.current);
+      answerReleaseTimerRef.current = undefined;
+    }
+    setSelectedPaperId(entityId);
+    setSelectedFocusMode(mode);
+    setFocusIntent({
+      kind: "paper",
+      entityId,
+      mode,
+      reason: mode === "full-focus"
+        ? "citation-click"
+        : mode === "soft-focus"
+          ? "reading"
+          : "query",
+    });
+  }, [config.focusMode]);
+
+  const releaseFocus = useCallback(() => {
+    if (answerReleaseTimerRef.current !== undefined) {
+      window.clearTimeout(answerReleaseTimerRef.current);
+      answerReleaseTimerRef.current = undefined;
+    }
+    setFocusIntent(undefined);
+  }, []);
+
+  const answerEnded = useCallback(() => {
+    if (focusIntent?.mode !== "soft-focus") return;
+    if (answerReleaseTimerRef.current !== undefined) {
+      window.clearTimeout(answerReleaseTimerRef.current);
+    }
+    answerReleaseTimerRef.current = window.setTimeout(() => {
+      setFocusIntent(undefined);
+      answerReleaseTimerRef.current = undefined;
+    }, 2000);
+  }, [focusIntent?.mode]);
+
+  useEffect(() => {
+    const initialPaperId = config.focusPaper ?? VISIBLE_RESIDENT_PAPER_ID;
+    const delayMs = config.fixedTimeSeconds !== undefined
+      ? 0
+      : config.focusPaper
+        ? config.focusDelaySeconds * 1000
+        : 120;
+    const timer = window.setTimeout(() => {
+      focusPaper(initialPaperId, config.focusMode);
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [
+    config.fixedTimeSeconds,
+    config.focusDelaySeconds,
+    config.focusMode,
+    config.focusPaper,
+    focusPaper,
+  ]);
+
+  useEffect(() => () => {
+    if (answerReleaseTimerRef.current !== undefined) {
+      window.clearTimeout(answerReleaseTimerRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -137,6 +245,20 @@ export default function AgentGalaxyFlowReview() {
   }, [config, payload]);
 
   useEffect(() => {
+    if (!payload) return;
+    let active = true;
+    setFocusFieldGpuParity(undefined);
+    const timer = window.setTimeout(() => {
+      const result = runAgentGalaxyFocusFieldGpuParityAudit();
+      if (active) setFocusFieldGpuParity(result);
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [payload]);
+
+  useEffect(() => {
     const reviewWindow = window as AgentGalaxyFlowReviewWindow;
     reviewWindow.__AGENT_GALAXY_FLOW_REVIEW__ = {
       ready: Boolean(
@@ -144,12 +266,15 @@ export default function AgentGalaxyFlowReview() {
         && metrics?.webglAvailable
         && gpuParity
         && gpuParity.status !== "FAIL"
+        && focusFieldGpuParity
+        && focusFieldGpuParity.status !== "FAIL"
         && !error
       ),
       error: error || undefined,
       config,
       metrics,
       gpuParity,
+      focusFieldGpuParity,
       sourceSnapshotId: payload?.sourceSnapshotId,
       recordingState,
       recordingSavedPath: recordingSavedPath || undefined,
@@ -159,10 +284,20 @@ export default function AgentGalaxyFlowReview() {
       snapshotSavedPath: snapshotSavedPath || undefined,
       snapshotByteLength,
       snapshotError: snapshotError || undefined,
+      focus: focusSnapshot,
+      commands: {
+        focusPaper,
+        releaseFocus,
+        answerEnded,
+      },
     };
   }, [
+    answerEnded,
     config,
     error,
+    focusPaper,
+    focusSnapshot,
+    focusFieldGpuParity,
     gpuParity,
     metrics,
     payload,
@@ -174,6 +309,7 @@ export default function AgentGalaxyFlowReview() {
     snapshotError,
     snapshotSavedPath,
     snapshotState,
+    releaseFocus,
   ]);
 
   useEffect(() => {
@@ -395,29 +531,104 @@ export default function AgentGalaxyFlowReview() {
         metrics?.webglAvailable
         && gpuParity
         && gpuParity.status !== "FAIL"
+        && focusFieldGpuParity
+        && focusFieldGpuParity.status !== "FAIL"
           ? "true"
           : "false"
       }
       data-gpu-parity={gpuParity?.status ?? "PREPARING"}
+      data-focus-field-gpu-parity={
+        focusFieldGpuParity?.status ?? "PREPARING"
+      }
       data-review-model={config.model}
       data-review-camera={config.camera}
       data-review-quality={metrics?.quality ?? config.quality}
       data-source-snapshot={payload.sourceSnapshotId}
       data-snapshot-state={snapshotState}
+      data-focus-phase={focusSnapshot?.phase ?? "idle"}
+      data-focus-target-visible={
+        focusSnapshot?.baseVisible === undefined
+          ? "unknown"
+          : focusSnapshot.baseVisible
+            ? "true"
+            : "false"
+      }
     >
       <AgentGalaxyFlowCanvas
         payload={payload}
         config={config}
+        focusIntent={focusIntent}
         reducedMotion={reducedMotion}
         onMetrics={handleMetrics}
+        onFocusSnapshot={handleFocusSnapshot}
       />
 
       {config.showHud ? (
         <>
           <header className="agent-flow-review__identity">
             <h1>引力织场</h1>
-            <p>固定相机。观察知识空间自身的拉伸、压缩与恢复。</p>
+            <p>知识空间持续流动。聚焦只改变局部关系与观察位置。</p>
           </header>
+
+          <section
+            className="agent-flow-review__focus-controls"
+            aria-label="常驻论文聚焦评审"
+          >
+            <div className="agent-flow-review__focus-targets">
+              <button
+                type="button"
+                aria-pressed={
+                  selectedPaperId === VISIBLE_RESIDENT_PAPER_ID
+                  && focusSnapshot?.phase !== "idle"
+                }
+                onClick={() => focusPaper(
+                  VISIBLE_RESIDENT_PAPER_ID,
+                  selectedFocusMode,
+                )}
+              >
+                常驻可见
+              </button>
+              <button
+                type="button"
+                aria-pressed={
+                  selectedPaperId === PROMOTED_RESIDENT_PAPER_ID
+                  && focusSnapshot?.phase !== "idle"
+                }
+                onClick={() => focusPaper(
+                  PROMOTED_RESIDENT_PAPER_ID,
+                  selectedFocusMode,
+                )}
+              >
+                预算外常驻
+              </button>
+            </div>
+            <div className="agent-flow-review__focus-modes">
+              {([
+                ["signal", "信号"],
+                ["soft-focus", "柔焦"],
+                ["full-focus", "完整聚焦"],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={
+                    selectedFocusMode === mode
+                    && focusSnapshot?.phase !== "idle"
+                  }
+                  onClick={() => focusPaper(selectedPaperId, mode)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="agent-flow-review__focus-actions">
+              <button type="button" onClick={answerEnded}>回答结束</button>
+              <button type="button" onClick={releaseFocus}>释放聚焦</button>
+              <output aria-live="polite">
+                {focusSnapshot?.phase ?? "idle"}
+              </output>
+            </div>
+          </section>
 
           <section className="agent-flow-review__telemetry" aria-label="引力织场实时指标">
             <dl>
@@ -437,6 +648,46 @@ export default function AgentGalaxyFlowReview() {
                 <dt>P95</dt>
                 <dd>{formatMetric(metrics?.p95FrameMs)} ms</dd>
               </div>
+              <div>
+                <dt>捕获 / 场 / 材质</dt>
+                <dd>
+                  {formatBlend(focusSnapshot?.acquisitionBlend)}
+                  {" / "}
+                  {formatBlend(focusSnapshot?.fieldBlend)}
+                  {" / "}
+                  {formatBlend(focusSnapshot?.materialBlend)}
+                </dd>
+              </div>
+              <div>
+                <dt>相机 / 释放</dt>
+                <dd>
+                  {formatBlend(focusSnapshot?.cameraBlend)}
+                  {" / "}
+                  {formatBlend(focusSnapshot?.releaseBlend)}
+                </dd>
+              </div>
+              <div>
+                <dt>目标光球</dt>
+                <dd>
+                  {formatMetric(focusSnapshot?.targetCssPixels, 2)} px
+                  {" · LOD "}
+                  {formatMetric(focusSnapshot?.targetPhotosphereMix, 2)}
+                </dd>
+              </div>
+              <div>
+                <dt>局部织场</dt>
+                <dd>
+                  {formatMetric(
+                    focusSnapshot?.fieldMaximumScreenDisplacementPx,
+                    2,
+                  )} px
+                  {" · "}
+                  {formatMetric(
+                    (focusSnapshot?.fieldAffectedVisibleRatio ?? 0) * 100,
+                    1,
+                  )}%
+                </dd>
+              </div>
             </dl>
           </section>
 
@@ -446,6 +697,19 @@ export default function AgentGalaxyFlowReview() {
             <span>twist {config.twist.toFixed(2)}</span>
             <span>speed {config.speed.toFixed(2)}</span>
             <span>calm {config.calm.toFixed(2)}</span>
+            <span>material {config.starMaterial}</span>
+            <span>field {config.focusField ? "on" : "off"}</span>
+            <span>camera {config.focusCamera ? "on" : "off"}</span>
+            <span>
+              draws {focusSnapshot?.semanticCoreDrawCalls ?? 0}
+              {" + "}
+              {focusSnapshot?.semanticSurfaceDrawCalls ?? 0}
+            </span>
+            <span>
+              color {focusSnapshot?.semanticPaperColor ?? "—"}
+              {" / "}
+              {focusSnapshot?.semanticHotspotColor ?? "—"}
+            </span>
             <span>
               {config.fixedTimeSeconds === undefined ? "realtime" : `t ${config.fixedTimeSeconds.toFixed(2)}s`}
             </span>
@@ -461,12 +725,16 @@ export default function AgentGalaxyFlowReview() {
       ) : null}
 
       <output className="agent-flow-review__readiness" aria-live="polite">
-        {!metrics?.webglAvailable || !gpuParity
+        {!metrics?.webglAvailable || !gpuParity || !focusFieldGpuParity
           ? "PREPARING"
           : gpuParity.status === "FAIL"
             ? "GPU PARITY FAIL"
+            : focusFieldGpuParity.status === "FAIL"
+              ? "FOCUS FIELD GPU PARITY FAIL"
             : gpuParity.status === "UNVERIFIED"
               ? "READY · GPU PARITY UNVERIFIED"
+              : focusFieldGpuParity.status === "UNVERIFIED"
+                ? "READY · FOCUS FIELD GPU PARITY UNVERIFIED"
               : "READY"}
       </output>
 
@@ -475,9 +743,12 @@ export default function AgentGalaxyFlowReview() {
           config,
           metrics,
           gpuParity,
+          focusFieldGpuParity,
           sourceSnapshotId: payload.sourceSnapshotId,
           sourcePaperCount: payload.sourcePaperCount,
           sourceHotspotCount: payload.sourceHotspotCount,
+          focusIntent,
+          focusSnapshot,
           recordingState,
           recordingSavedPath: recordingSavedPath || undefined,
           recordingByteLength,

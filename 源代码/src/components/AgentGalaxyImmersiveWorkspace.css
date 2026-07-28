@@ -1,0 +1,476 @@
+.agent-immersive-workspace {
+  --agent-immersive-focus: #b8c2c8;
+  position: fixed;
+  inset: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+  overflow: hidden;
+  color: rgba(238, 242, 244, 0.92);
+  background: #000;
+  font-family:
+    "Segoe UI Variable",
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    sans-serif;
+}
+
+.agent-immersive-canvas,
+.agent-immersive-canvas .agent-galaxy-flow,
+.agent-immersive-canvas .agent-galaxy-flow__canvas,
+.agent-immersive-canvas .agent-galaxy-flow__fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.agent-immersive-view,
+.agent-immersive-theory,
+.agent-immersive-theory__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.agent-immersive-view {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-immersive-view.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.agent-immersive-theory {
+  display: grid;
+  place-items: center;
+  color: rgba(210, 218, 222, 0.54);
+  background: #000;
+  font-size: 11px;
+}
+
+.agent-immersive-theory__canvas {
+  display: block;
+}
+
+.agent-immersive-view-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: #000;
+  pointer-events: none;
+  animation: agent-immersive-coordinate-mask 400ms ease both;
+}
+
+@keyframes agent-immersive-coordinate-mask {
+  0%,
+  100% {
+    opacity: 0;
+  }
+
+  48%,
+  52% {
+    opacity: 0.82;
+  }
+}
+
+.agent-immersive-canvas .agent-galaxy-flow__canvas {
+  display: block;
+  outline: none;
+}
+
+.agent-immersive-canvas .agent-galaxy-flow__fallback {
+  display: grid;
+  place-items: center;
+  color: rgba(220, 226, 230, 0.56);
+  background: #000;
+  font-size: 12px;
+}
+
+.agent-immersive-workspace__overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.agent-immersive-dialog,
+.agent-immersive-context {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-top-color: rgba(255, 255, 255, 0.19);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0.012)
+    ),
+    rgba(3, 5, 6, 0.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 24px 70px rgba(0, 0, 0, 0.42);
+  -webkit-backdrop-filter: blur(16px) saturate(108%);
+  backdrop-filter: blur(16px) saturate(108%);
+}
+
+.agent-immersive-dialog {
+  position: relative;
+  z-index: 3;
+  width: min(85vw, 448px);
+  padding: 20px;
+  border-radius: 16px;
+  pointer-events: auto;
+}
+
+.agent-immersive-dialog header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.agent-immersive-dialog__signal {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--agent-immersive-focus);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--agent-immersive-focus) 44%, transparent);
+  transition:
+    transform 500ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 500ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-immersive-workspace[data-agent-state="thinking"]
+  .agent-immersive-dialog__signal {
+  transform: scale(1.24);
+}
+
+.agent-immersive-workspace[data-agent-state="focus"]
+  .agent-immersive-dialog__signal {
+  transform: scale(1.42);
+}
+
+.agent-immersive-dialog h1,
+.agent-immersive-dialog p,
+.agent-immersive-context h2,
+.agent-immersive-context p {
+  margin: 0;
+}
+
+.agent-immersive-dialog h1 {
+  color: rgba(247, 249, 250, 0.94);
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.agent-immersive-dialog header p {
+  margin-top: 2px;
+  color: rgba(190, 199, 204, 0.54);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.agent-immersive-dialog__answer {
+  min-height: 78px;
+  padding: 16px 2px 14px;
+  color: rgba(215, 222, 226, 0.82);
+  font-size: 12px;
+  font-weight: 380;
+  line-height: 1.75;
+}
+
+.agent-immersive-dialog__answer span {
+  display: block;
+  max-width: 100%;
+  margin-top: 9px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--agent-immersive-focus) 72%, white);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-immersive-dialog__controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.agent-immersive-dialog button {
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  color: rgba(194, 202, 207, 0.68);
+  background: rgba(255, 255, 255, 0.035);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    color 220ms ease,
+    border-color 220ms ease,
+    background-color 220ms ease,
+    transform 120ms ease;
+}
+
+.agent-immersive-dialog button:hover {
+  color: rgba(248, 250, 251, 0.94);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.agent-immersive-dialog button:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--agent-immersive-focus) 70%, white);
+  outline-offset: 2px;
+}
+
+.agent-immersive-dialog button:active {
+  transform: translateY(1px);
+}
+
+.agent-immersive-dialog button[aria-pressed="true"] {
+  color: color-mix(in srgb, var(--agent-immersive-focus) 76%, white);
+  border-color: color-mix(in srgb, var(--agent-immersive-focus) 34%, transparent);
+  background: color-mix(in srgb, var(--agent-immersive-focus) 9%, transparent);
+}
+
+.agent-immersive-dialog__next {
+  width: 100%;
+  margin-top: 7px;
+  background: transparent !important;
+}
+
+.agent-immersive-dialog__return {
+  width: 100%;
+}
+
+.agent-immersive-context {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: min(288px, calc(100vw - 48px));
+  padding: 18px;
+  border-radius: 16px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 650ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 650ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-immersive-context--left {
+  left: clamp(24px, 5.5vw, 80px);
+  transform: translate(-28px, -50%);
+}
+
+.agent-immersive-context--right {
+  right: clamp(24px, 5.5vw, 80px);
+  transform: translate(28px, -50%);
+}
+
+.agent-immersive-context.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+
+.agent-immersive-context__kind {
+  display: block;
+  margin-bottom: 10px;
+  color: color-mix(in srgb, var(--agent-immersive-focus) 72%, white);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+
+.agent-immersive-context h2 {
+  color: rgba(244, 247, 248, 0.93);
+  font-size: 14px;
+  font-weight: 590;
+  line-height: 1.35;
+}
+
+.agent-immersive-context__entity {
+  margin-top: 7px !important;
+  overflow: hidden;
+  color: rgba(183, 192, 197, 0.62);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-immersive-context dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0 13px;
+  padding: 13px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.agent-immersive-context dl div {
+  min-width: 0;
+}
+
+.agent-immersive-context dt {
+  color: rgba(161, 171, 177, 0.46);
+  font-size: 9px;
+}
+
+.agent-immersive-context dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: rgba(229, 233, 235, 0.83);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-immersive-context__note {
+  color: rgba(188, 197, 202, 0.58);
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.agent-immersive-context__theory {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  color: rgba(210, 218, 222, 0.72);
+  background: rgba(255, 255, 255, 0.035);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.agent-immersive-workspace__review-tools {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 8;
+  display: flex;
+  max-width: min(720px, calc(100vw - 28px));
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.agent-immersive-workspace__review-tools button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: rgba(194, 202, 207, 0.58);
+  background: rgba(0, 0, 0, 0.62);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.agent-immersive-workspace__hud {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  z-index: 5;
+  display: flex;
+  gap: 12px;
+  color: rgba(186, 195, 200, 0.48);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  pointer-events: none;
+}
+
+.agent-immersive-review-message {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+  color: rgba(224, 229, 232, 0.7);
+  background: #000;
+  font-family:
+    "Segoe UI Variable",
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    sans-serif;
+  font-size: 12px;
+}
+
+.agent-immersive-review-message pre {
+  max-width: min(720px, 90vw);
+  overflow: auto;
+  color: rgba(205, 212, 216, 0.58);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1080px) {
+  .agent-immersive-context {
+    top: auto;
+    right: 24px;
+    bottom: 24px;
+    left: 24px;
+    width: auto;
+    max-width: 448px;
+    margin: 0 auto;
+    transform: translateY(22px);
+  }
+
+  .agent-immersive-context.is-visible {
+    transform: translateY(0);
+  }
+
+  .agent-immersive-dialog {
+    transform: translateY(-72px);
+  }
+}
+
+@media (max-width: 640px) {
+  .agent-immersive-dialog {
+    width: calc(100vw - 32px);
+    padding: 17px;
+    transform: translateY(-84px);
+  }
+
+  .agent-immersive-context {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+  }
+
+  .agent-immersive-context dl {
+    gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-immersive-dialog__signal,
+  .agent-immersive-view,
+  .agent-immersive-view-mask,
+  .agent-immersive-context,
+  .agent-immersive-dialog button {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .agent-immersive-dialog,
+  .agent-immersive-context {
+    background: rgba(8, 10, 11, 0.96);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

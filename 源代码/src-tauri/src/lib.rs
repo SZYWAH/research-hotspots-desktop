@@ -868,6 +868,44 @@ struct V20HotspotSnapshot {
     hotspots: Vec<HotspotRecord>,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGalaxyEntityResolveItem {
+    kind: String,
+    entity_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGalaxyEntityResolveInput {
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    source_snapshot_id: String,
+    source_centroid: [f64; 3],
+    isotropic_scale: f64,
+    #[serde(default)]
+    sampled_entity_ids: Vec<String>,
+    entities: Vec<AgentGalaxyEntityResolveItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGalaxyResolvedEntity {
+    kind: String,
+    entity_id: String,
+    hotspot_id: Option<String>,
+    membership: String,
+    semantic_position: Option<[f64; 3]>,
+    hotspot_position: Option<[f64; 3]>,
+    semantic_offset: Option<[f64; 3]>,
+    source_snapshot_id: Option<String>,
+    title: Option<String>,
+    field: Option<String>,
+    year: Option<i64>,
+    color: Option<String>,
+    placement_rule: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct App17GalaxyPaperPoint {
@@ -4489,6 +4527,261 @@ fn get_v20_galaxy_payload(
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
     build_v20_galaxy_payload(&conn, &project_id, &mode)
+}
+
+#[tauri::command]
+fn resolve_agent_galaxy_entities(
+    app: tauri::AppHandle,
+    input: AgentGalaxyEntityResolveInput,
+) -> Result<Vec<AgentGalaxyResolvedEntity>, String> {
+    if input.entities.len() > 32 {
+        return Err("AGENT_GALAXY_RESOLVE_LIMIT_EXCEEDED".to_string());
+    }
+    if !input.isotropic_scale.is_finite() || input.isotropic_scale <= 0.0 {
+        return Err("AGENT_GALAXY_RESOLVE_SCALE_INVALID".to_string());
+    }
+    if input
+        .source_centroid
+        .iter()
+        .any(|component| !component.is_finite())
+    {
+        return Err("AGENT_GALAXY_RESOLVE_CENTROID_INVALID".to_string());
+    }
+    let database_dir = resolve_database_dir(&app, input.database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let conn = Connection::open_with_flags(
+        &database_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| {
+        format!(
+            "Cannot open agent galaxy database read-only {:?}: {error}",
+            database_path
+        )
+    })?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let sampled_ids = input
+        .sampled_entity_ids
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let scale_position = |x: f64, y: f64, z: f64| {
+        [
+            (x - input.source_centroid[0]) * input.isotropic_scale,
+            (y - input.source_centroid[1]) * input.isotropic_scale,
+            (z - input.source_centroid[2]) * input.isotropic_scale,
+        ]
+    };
+    let scale_offset = |x: f64, y: f64, z: f64| {
+        [
+            x * input.isotropic_scale,
+            y * input.isotropic_scale,
+            z * input.isotropic_scale,
+        ]
+    };
+    let mut results = Vec::with_capacity(input.entities.len());
+
+    for request in input.entities {
+        let entity_id = request.entity_id.trim().to_string();
+        if entity_id.is_empty() || !matches!(request.kind.as_str(), "paper" | "hotspot") {
+            results.push(AgentGalaxyResolvedEntity {
+                kind: request.kind,
+                entity_id,
+                hotspot_id: None,
+                membership: "missing".to_string(),
+                semantic_position: None,
+                hotspot_position: None,
+                semantic_offset: None,
+                source_snapshot_id: None,
+                title: None,
+                field: None,
+                year: None,
+                color: None,
+                placement_rule: None,
+            });
+            continue;
+        }
+
+        if request.kind == "hotspot" {
+            let hotspot = conn
+                .query_row(
+                    "SELECT x,y,z,payload_json
+                     FROM v20_hotspots
+                     WHERE project_id=?1 AND snapshot_id=?2 AND hotspot_id=?3",
+                    params![project_id, input.source_snapshot_id, entity_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, f64>(0)?,
+                            row.get::<_, f64>(1)?,
+                            row.get::<_, f64>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            if let Some((x, y, z, payload_json)) = hotspot {
+                let record = serde_json::from_str::<HotspotRecord>(&payload_json)
+                    .map_err(|error| {
+                        format!("Invalid V20 hotspot payload {entity_id}: {error}")
+                    })?;
+                let position = scale_position(x, y, z);
+                results.push(AgentGalaxyResolvedEntity {
+                    kind: "hotspot".to_string(),
+                    entity_id: entity_id.clone(),
+                    hotspot_id: Some(entity_id),
+                    membership: "sampled".to_string(),
+                    semantic_position: Some(position),
+                    hotspot_position: Some(position),
+                    semantic_offset: Some([0.0, 0.0, 0.0]),
+                    source_snapshot_id: Some(input.source_snapshot_id.clone()),
+                    title: Some(record.title),
+                    field: Some(record.field.clone()),
+                    year: None,
+                    color: Some(app17_topic_color(&record.field, record.topic_id)),
+                    placement_rule: Some("semantic".to_string()),
+                });
+            } else {
+                results.push(AgentGalaxyResolvedEntity {
+                    kind: "hotspot".to_string(),
+                    entity_id,
+                    hotspot_id: None,
+                    membership: "missing".to_string(),
+                    semantic_position: None,
+                    hotspot_position: None,
+                    semantic_offset: None,
+                    source_snapshot_id: None,
+                    title: None,
+                    field: None,
+                    year: None,
+                    color: None,
+                    placement_rule: None,
+                });
+            }
+            continue;
+        }
+
+        let scoped_entity_id = scoped_id(&project_id, &entity_id);
+        let membership = conn
+            .query_row(
+                "SELECT membership.hotspot_id,
+                        membership.x,membership.y,membership.z,
+                        hotspot.x,hotspot.y,hotspot.z,
+                        hotspot.payload_json
+                 FROM v20_paper_memberships AS membership
+                 JOIN v20_hotspots AS hotspot
+                   ON hotspot.project_id=membership.project_id
+                  AND hotspot.snapshot_id=membership.snapshot_id
+                  AND hotspot.hotspot_id=membership.hotspot_id
+                 WHERE membership.project_id=?1
+                   AND membership.snapshot_id=?2
+                   AND membership.paper_id IN (?3,?4)
+                 ORDER BY CASE WHEN membership.paper_id=?3 THEN 0 ELSE 1 END
+                 LIMIT 1",
+                params![
+                    project_id,
+                    input.source_snapshot_id,
+                    entity_id,
+                    scoped_entity_id
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, f64>(3)?,
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, f64>(5)?,
+                        row.get::<_, f64>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let paper_metadata = conn
+            .query_row(
+                "SELECT title,field,year
+                 FROM papers
+                 WHERE project_id=?1 AND id IN (?2,?3)
+                 ORDER BY CASE WHEN id=?2 THEN 0 ELSE 1 END
+                 LIMIT 1",
+                params![project_id, entity_id, scoped_entity_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+
+        if let Some((hotspot_id, px, py, pz, hx, hy, hz, payload_json)) = membership
+        {
+            let hotspot = serde_json::from_str::<HotspotRecord>(&payload_json)
+                .map_err(|error| {
+                    format!("Invalid V20 hotspot payload {hotspot_id}: {error}")
+                })?;
+            let (title, field, year) = paper_metadata.unwrap_or_else(|| {
+                (entity_id.clone(), hotspot.field.clone(), None)
+            });
+            results.push(AgentGalaxyResolvedEntity {
+                kind: "paper".to_string(),
+                entity_id: entity_id.clone(),
+                hotspot_id: Some(hotspot_id),
+                membership: if sampled_ids.contains(&entity_id)
+                    || sampled_ids.contains(&scoped_entity_id)
+                {
+                    "sampled".to_string()
+                } else {
+                    "snapshot-unsampled".to_string()
+                },
+                semantic_position: Some(scale_position(px, py, pz)),
+                hotspot_position: Some(scale_position(hx, hy, hz)),
+                semantic_offset: Some(scale_offset(px - hx, py - hy, pz - hz)),
+                source_snapshot_id: Some(input.source_snapshot_id.clone()),
+                title: Some(title),
+                field: Some(field),
+                year,
+                color: Some(app17_topic_color(&hotspot.field, hotspot.topic_id)),
+                placement_rule: Some("semantic".to_string()),
+            });
+        } else if let Some((title, field, year)) = paper_metadata {
+            results.push(AgentGalaxyResolvedEntity {
+                kind: "paper".to_string(),
+                entity_id,
+                hotspot_id: None,
+                membership: "active-only".to_string(),
+                semantic_position: None,
+                hotspot_position: None,
+                semantic_offset: None,
+                source_snapshot_id: Some(input.source_snapshot_id.clone()),
+                title: Some(title),
+                field: Some(field),
+                year,
+                color: None,
+                placement_rule: Some("unclassified-frontier-v1".to_string()),
+            });
+        } else {
+            results.push(AgentGalaxyResolvedEntity {
+                kind: "paper".to_string(),
+                entity_id,
+                hotspot_id: None,
+                membership: "missing".to_string(),
+                semantic_position: None,
+                hotspot_position: None,
+                semantic_offset: None,
+                source_snapshot_id: None,
+                title: None,
+                field: None,
+                year: None,
+                color: None,
+                placement_rule: None,
+            });
+        }
+    }
+    Ok(results)
 }
 
 fn build_v20_galaxy_payload(
@@ -10359,6 +10652,7 @@ pub fn run() {
             get_v20_analysis_state,
             get_v20_hotspot_snapshot,
             get_v20_galaxy_payload,
+            resolve_agent_galaxy_entities,
             set_app_credential,
             get_app_credential_status,
             delete_app_credential,

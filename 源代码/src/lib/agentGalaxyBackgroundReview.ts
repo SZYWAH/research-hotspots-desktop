@@ -1,4 +1,7 @@
-import type { AgentGalaxyBackgroundPayloadV1 } from "../types";
+import type {
+  AgentGalaxyBackgroundPayloadV1,
+  App17GalaxyPayload,
+} from "../types";
 import type { GalaxyVisualReviewManifest } from "./galaxyVisualReview";
 
 export type AgentGalaxyBackgroundPreset = "voyage" | "breath" | "signal";
@@ -77,6 +80,18 @@ export async function loadAgentGalaxyBackgroundPayload() {
   }
   if (payload.sourceSnapshotId !== payload.activeSnapshotId && !payload.stale) {
     throw new Error("Agent 星空载荷的快照过期状态不一致。");
+  }
+  return { manifest, payload };
+}
+
+export async function loadAgentGalaxyFullReviewPayload() {
+  const manifest = await fetchSnapshotJson<GalaxyVisualReviewManifest>(
+    "manifest.json",
+  );
+  const fullPath = manifest.payloadPath || "payload.json";
+  const payload = await fetchSnapshotJson<App17GalaxyPayload>(fullPath);
+  if (!payload.ready || !payload.papers.length || !payload.hotspots.length) {
+    throw new Error("完整理论星图评审载荷不可用。");
   }
   return { manifest, payload };
 }

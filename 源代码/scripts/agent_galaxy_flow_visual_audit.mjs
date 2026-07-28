@@ -20,21 +20,30 @@ const read = (path) => readFile(new URL(path, root), "utf8");
 const [
   canvas,
   review,
+  reviewCss,
   reviewConfig,
   flow,
   contract,
+  photosphere,
+  focusField,
   main,
 ] = await Promise.all([
   read("src/components/AgentGalaxyFlowCanvas.tsx"),
   read("src/components/AgentGalaxyFlowReview.tsx"),
+  read("src/components/AgentGalaxyFlowReview.css"),
   read("src/lib/agentGalaxyFlowReview.ts"),
   read("src/lib/gravitationalWeaveFlow.ts"),
   read("src/lib/agentGalaxyFlowContract.ts"),
+  read("src/lib/agentGalaxyPhotosphere.ts"),
+  read("src/lib/agentGalaxyFocusField.ts"),
   read("src/main.tsx"),
 ]);
 
 const fragmentShaders = extractFragmentShaders(canvas);
-const fragmentShaderText = fragmentShaders.join("\n");
+const fragmentShaderText = [
+  ...fragmentShaders,
+  photosphere,
+].join("\n");
 const lowerCanvas = canvas.toLowerCase();
 const lowerFragmentShaders = fragmentShaderText.toLowerCase();
 
@@ -84,7 +93,16 @@ const checks = {
     && flow.includes("runtimeLaneReassignmentAllowed: false"),
   normalBlendingOnly: canvas.includes("THREE.NormalBlending")
     && forbiddenPostProcessingTokens.every((token) => !lowerCanvas.includes(token)),
-  sharpFragmentShadersFound: fragmentShaders.length >= 1,
+  sharpFragmentShadersFound: fragmentShaders.length >= 1
+    && photosphere.includes("AGENT_GALAXY_PHOTOSPHERE_CORE_FRAGMENT_SHADER")
+    && photosphere.includes("AGENT_GALAXY_PHOTOSPHERE_SURFACE_FRAGMENT_SHADER"),
+  pureBlackCanvas: canvas.includes("setClearColor(0x000000, 1)")
+    && reviewCss.includes("--flow-bg: #000000"),
+  derivativeAntialiasedSharpCores: fragmentShaderText.includes("fwidth(radius)")
+    && fragmentShaderText.includes(
+      "sqrt(max(0.0, 1.0 - radiusSquared))",
+    )
+    && !fragmentShaderText.includes("motionBlur"),
   noTimeDrivenFragmentOpacity: !/\buTime\b/.test(fragmentShaderText)
     && !lowerFragmentShaders.includes("timeopacity")
     && canvas.includes('data-semantic-time-opacity="false"'),
@@ -121,7 +139,25 @@ const checks = {
     && canvas.includes("animationSeconds +="),
   dprIndependentOfQuality: canvas.includes("Math.min(window.devicePixelRatio || 1, 2)")
     && canvas.includes("renderer.setPixelRatio(pixelRatio())"),
-  parameterSurface: ["gravity", "shear", "twist", "speed", "calm", "quality", "camera", "time", "record", "hud"]
+  focusFieldIsLocalAndBounded:
+    focusField.includes("AGENT_GALAXY_FOCUS_FIELD_MAX_WORLD_UNITS = 0.24")
+    && focusField.includes("sampleAgentGalaxyFocusFieldOffset")
+    && canvas.includes("AGENT_GALAXY_FOCUS_FIELD_GLSL_CHUNK"),
+  parameterSurface: [
+    "gravity",
+    "shear",
+    "twist",
+    "speed",
+    "calm",
+    "quality",
+    "camera",
+    "time",
+    "record",
+    "hud",
+    "starMaterial",
+    "focusField",
+    "focusCamera",
+  ]
     .every((parameter) => reviewConfig.includes(`"${parameter}"`)),
   recordingBound: reviewConfig.includes("Math.min(requestedRecord, 60)"),
 };

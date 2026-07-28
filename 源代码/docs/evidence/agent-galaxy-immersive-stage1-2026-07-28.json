@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "agent-galaxy-immersive-stage1-evidence-v1",
+  "recordedAt": "2026-07-28",
+  "branch": "codex/agent-galaxy-focus",
+  "head": "2b7a32495897afbfed2cfc09de34439166a053a5",
+  "sourceSnapshotId": "project-default:v20:1784975696989",
+  "productionLayoutVersion": "semantic-hierarchical-natural-pca3-v3",
+  "backgroundPayloadSha256": "CBA42B19B4CACCF00D0EF22BCCEF108906C5937101EF4D968E41AA912384D80F",
+  "data": {
+    "sourcePapers": 25463,
+    "hotspots": 160,
+    "residentPaperProxies": 3840,
+    "dynamicEntitySlots": 24,
+    "maximumContextPapers": 24,
+    "maximumParallelEvidenceTargets": 5
+  },
+  "implementation": {
+    "sixAgentStates": true,
+    "sameVertexResidentContext": true,
+    "orderedEvidenceReveal": true,
+    "readOnlyEntityResolver": true,
+    "snapshotUnsampledExactCoordinateRecovery": true,
+    "activeOnlyUnclassifiedFrontier": true,
+    "missingCreatesNoEntity": true,
+    "hotspotFocus": true,
+    "immersiveTheoryIdentityBridge": true,
+    "defaultHomeChanged": false,
+    "databaseSchemaChanged": false
+  },
+  "verification": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "rustCargoCheckJobs2": "PASS",
+    "immersiveAudit": "PASS",
+    "gravitationalWeaveAudit": "PASS",
+    "focusAudit": "PASS",
+    "flowVisualStaticAudit": "PASS",
+    "browserVisual": "UNVERIFIED",
+    "tauriReadOnlyRuntime": "UNVERIFIED",
+    "userVisualAcceptance": "UNVERIFIED"
+  },
+  "deviceProtection": {
+    "longFullscreenTestRun": false,
+    "highQualityStressTestRun": false,
+    "reason": "Recent VIDEO_MEMORY_MANAGEMENT_INTERNAL and nvlddmkm failures require conservative validation."
+  },
+  "delivery": {
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

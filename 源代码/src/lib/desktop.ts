@@ -17,6 +17,10 @@ import type {
   SearchResultPaper,
   V20HotspotSnapshot,
 } from "../types";
+import type {
+  AgentGalaxyFocusIntent,
+  ResolvedAgentGalaxyEntity,
+} from "./agentGalaxyFlowContract";
 
 export type DesktopHealthResult = {
   pythonPath: string;
@@ -60,6 +64,16 @@ export type SemanticEmbeddingCapabilities = {
   modelRoot?: string;
   cpuAvailable: boolean;
   gpuAvailable: boolean;
+};
+
+export type AgentGalaxyEntityResolveInput = {
+  databaseDir?: string;
+  projectId?: string;
+  sourceSnapshotId: string;
+  sourceCentroid: [number, number, number];
+  isotropicScale: number;
+  sampledEntityIds?: string[];
+  entities: Array<Pick<AgentGalaxyFocusIntent, "kind" | "entityId">>;
 };
 
 export type PaperFileImportProgress = {
@@ -583,6 +597,16 @@ export async function getV20HotspotSnapshot(input: { databaseDir?: string; proje
 export async function getV20GalaxyPayload(input: { databaseDir?: string; projectId?: string; mode?: string }) {
   if (!isDesktopRuntime()) return getApp17GalaxyPayload(input);
   return invoke<App17GalaxyPayload>("get_v20_galaxy_payload", { input });
+}
+
+export async function resolveAgentGalaxyEntities(
+  input: AgentGalaxyEntityResolveInput,
+) {
+  if (!isDesktopRuntime()) return [] as ResolvedAgentGalaxyEntity[];
+  return invoke<ResolvedAgentGalaxyEntity[]>(
+    "resolve_agent_galaxy_entities",
+    { input },
+  );
 }
 
 export async function setAppCredential(projectId: string, service: string, secret: string) {

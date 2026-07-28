@@ -1,5 +1,5 @@
 .agent-flow-review {
-  --flow-bg: #020304;
+  --flow-bg: #000000;
   --flow-text: #e7eaec;
   --flow-muted: #858b90;
   --flow-faint: rgba(205, 212, 216, 0.34);
@@ -65,6 +65,77 @@
   color: var(--flow-muted);
   font-size: 11px;
   line-height: 1.65;
+}
+
+.agent-flow-review__focus-controls {
+  position: absolute;
+  z-index: 4;
+  top: 112px;
+  left: 34px;
+  width: min(330px, calc(100vw - 68px));
+  padding: 10px;
+  border: 1px solid rgba(222, 228, 231, 0.16);
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.agent-flow-review__focus-controls > div {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-flow-review__focus-controls > div + div {
+  margin-top: 7px;
+}
+
+.agent-flow-review__focus-targets {
+  grid-template-columns: 1fr 1fr;
+}
+
+.agent-flow-review__focus-modes {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.agent-flow-review__focus-actions {
+  grid-template-columns: 1fr 1fr auto;
+  align-items: center;
+}
+
+.agent-flow-review__focus-controls button {
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid rgba(220, 226, 229, 0.18);
+  border-radius: 0;
+  color: rgba(218, 224, 227, 0.7);
+  background: rgba(223, 228, 231, 0.035);
+  font: 500 10px/1.2 "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif;
+  cursor: pointer;
+}
+
+.agent-flow-review__focus-controls button:hover {
+  border-color: rgba(229, 234, 236, 0.34);
+  color: rgba(239, 242, 243, 0.92);
+}
+
+.agent-flow-review__focus-controls button:focus-visible {
+  outline: 1px solid rgba(239, 243, 245, 0.92);
+  outline-offset: 2px;
+}
+
+.agent-flow-review__focus-controls button:active {
+  transform: translateY(1px);
+}
+
+.agent-flow-review__focus-controls button[aria-pressed="true"] {
+  border-color: rgba(234, 239, 241, 0.58);
+  color: #eef1f2;
+  background: rgba(224, 230, 233, 0.13);
+}
+
+.agent-flow-review__focus-actions output {
+  min-width: 54px;
+  color: rgba(189, 197, 201, 0.6);
+  font: 9px/1 "Cascadia Mono", "SFMono-Regular", monospace;
+  text-align: right;
 }
 
 .agent-flow-review__telemetry {
@@ -223,6 +294,12 @@
     right: 22px;
     bottom: 51px;
     left: 22px;
+  }
+
+  .agent-flow-review__focus-controls {
+    top: 104px;
+    left: 22px;
+    width: min(330px, calc(100vw - 44px));
   }
 
   .agent-flow-review__telemetry dl {

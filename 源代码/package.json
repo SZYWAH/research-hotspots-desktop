@@ -19,6 +19,8 @@
     "audit:agent-galaxy-flow-preparation": "node scripts/agent_galaxy_flow_preparation_audit.mjs",
     "audit:agent-galaxy-gravitational-weave": "node --experimental-strip-types scripts/agent_galaxy_gravitational_weave_audit.mjs",
     "audit:agent-galaxy-flow-visual": "node scripts/agent_galaxy_flow_visual_audit.mjs",
+    "audit:agent-galaxy-focus": "node --experimental-strip-types scripts/agent_galaxy_focus_audit.mjs",
+    "audit:agent-galaxy-immersive": "node --experimental-strip-types scripts/agent_galaxy_immersive_audit.mjs",
     "experiment:galaxy-global-umap": "D:\\yingyong\\venvs\\galaxy_umap_py312\\Scripts\\python.exe scripts/generate_global_umap_overrides.py",
     "audit:galaxy-global-umap": "node scripts/galaxy_umap_ab_audit.mjs",
     "report:galaxy-umap-multiscale": "node scripts/galaxy_umap_multiscale_report.mjs",

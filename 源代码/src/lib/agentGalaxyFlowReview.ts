@@ -8,6 +8,11 @@ export const AGENT_GALAXY_FLOW_REVIEW_MODEL = "gravitational-weave" as const;
 
 export type AgentGalaxyFlowReviewCamera = "static" | "codrift";
 export type AgentGalaxyFlowReviewQuality = "auto" | "balanced" | "high";
+export type AgentGalaxyFlowReviewFocusMode =
+  | "signal"
+  | "soft-focus"
+  | "full-focus";
+export type AgentGalaxyFlowReviewStarMaterial = "flat" | "photosphere";
 
 export type AgentGalaxyFlowReviewConfig = {
   model: typeof AGENT_GALAXY_FLOW_REVIEW_MODEL;
@@ -24,6 +29,12 @@ export type AgentGalaxyFlowReviewConfig = {
   snapshotPng: boolean;
   snapshotRegion: "full" | "stars";
   showHud: boolean;
+  focusPaper?: string;
+  focusMode: AgentGalaxyFlowReviewFocusMode;
+  focusDelaySeconds: number;
+  starMaterial: AgentGalaxyFlowReviewStarMaterial;
+  focusField: boolean;
+  focusCamera: boolean;
 };
 
 function readNumber(
@@ -53,6 +64,8 @@ export function readAgentGalaxyFlowReviewConfig(): AgentGalaxyFlowReviewConfig {
   const requestedRecord = params.has("record") ? Number(params.get("record")) : undefined;
   const requestedCamera = params.get("camera");
   const requestedQuality = params.get("quality");
+  const requestedFocusMode = params.get("focusMode");
+  const focusPaper = params.get("focusPaper")?.trim() || undefined;
   const fixedTimeSeconds = requestedTime !== undefined
     && Number.isFinite(requestedTime)
     && requestedTime >= 0
@@ -83,5 +96,16 @@ export function readAgentGalaxyFlowReviewConfig(): AgentGalaxyFlowReviewConfig {
       ? "stars"
       : "full",
     showHud: params.get("hud") !== "0",
+    focusPaper,
+    focusMode: requestedFocusMode === "signal"
+      || requestedFocusMode === "soft-focus"
+      ? requestedFocusMode
+      : "full-focus",
+    focusDelaySeconds: readNumber(params, "focusDelay", 0, 0, 60),
+    starMaterial: params.get("starMaterial") === "flat"
+      ? "flat"
+      : "photosphere",
+    focusField: params.get("focusField") !== "0",
+    focusCamera: params.get("focusCamera") !== "0",
   };
 }

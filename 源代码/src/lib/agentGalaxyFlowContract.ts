@@ -45,8 +45,23 @@ export type ResolvedAgentGalaxyEntity = {
   entityId: string;
   hotspotId?: string;
   membership: BackgroundMembership;
+  semanticPosition?: [number, number, number];
+  hotspotPosition?: [number, number, number];
   semanticOffset?: [number, number, number];
   sourceSnapshotId?: string;
+  title?: string;
+  field?: string;
+  year?: number;
+  color?: string;
+  placementRule?: "semantic" | "unclassified-frontier-v1";
+};
+
+export type AgentGalaxyImmersiveIntent = {
+  state: AgentGalaxyMotionState;
+  primaryFocus?: AgentGalaxyFocusIntent;
+  contextEntityIds?: string[];
+  evidenceOrder?: string[];
+  view: "immersive" | "theory";
 };
 
 export type AgentGalaxyParticleKind =

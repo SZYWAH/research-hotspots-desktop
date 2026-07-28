@@ -12,6 +12,36 @@ Agent 背景载荷由当前理论星图快照只读派生。载荷保存快照�
 
 M1.2a 新增独立的 `AgentGalaxyFlowCanvas`。它复用只读背景载荷，但不复用旧 Canvas 的空间变换或 Shader；开发入口为 `visual-review=agent-flow`，默认 `<App />`、旧 `agent-background` 和轨道对照入口保持独立。
 
+M1.3c 原计划将 Agent 星空拆分为两种产品视图，但沉浸实现仍消费 `AgentGalaxyBackgroundPayloadV1.position/offset`，最终只是“理论坐标 + 沉浸外壳”，已经判定为结构性失败。该路径只保留为技术预览。
+
+M1.3d 重新建立两种互不继承空间结构的产品背景：
+
+- `immersive`：面向对话和沉浸体验，使用会话随机空间与连续 Curl 流；只消费真实身份、热点归属、颜色和年份，不消费理论 XYZ。
+- `theory`：面向语义位置、热点归属和可解释关系，继续使用现有理论星图坐标。
+
+两种视图共享实体身份和快照身份，但不共享世界坐标解释器。M1.3d 只完成两套静置背景和显式切换，后续聚焦与状态控制必须分别设计。
+
+## M1.3d 双背景数据流
+
+```text
+SQLite / active V20 snapshot
+  ├─ load_agent_immersive_background
+  │    → AgentImmersiveBackgroundPayloadV2（无坐标）
+  │    → SessionSeed + SeededSpatialAssignment
+  │    → CurlFlow
+  │    → AgentImmersiveStarfieldCanvas
+  └─ existing V20 visual payload
+       → real theory XYZ
+       → App17GalaxyCanvas(agent-theory / ambient|explore)
+
+AgentDualBackgroundPage
+  → BlackSwitchMask
+  → exactly one active renderer
+  → central prompt contract / advanced workbench
+```
+
+`AgentImmersiveBackgroundPayloadV2` 的 Schema 必须从类型层面排除 `position`、`offset`、`centroid` 和任何语义坐标。固定种子仅用于审计和截图；正常应用会话由 Web Crypto 生成种子并保存在 `sessionStorage`。
+
 ## 目标数据流
 
 ```text
@@ -33,10 +63,28 @@ AgentGalaxyBackgroundPayloadV1
 AgentGalaxyFocusIntent
   → EntityResolver
   → ResolvedAgentGalaxyEntity
-  → DynamicFocusLayer
-  → FlowModel 目标位置与切线
+  → ResidentFocusController / DynamicFocusLayer
+  → FocusTimeline
+  → FocusField
+  → PhotosphereLOD
   → CameraFlowController
 ```
+
+沉浸视图的上下文抽取通路：
+
+```text
+AgentGalaxyFocusIntent
+  → EntityResolver
+  → ContextSetResolver
+  → ContextExtractionController
+  ├─ SharpPaperLayer
+  ├─ StableHotspotLayer
+  ├─ EnvironmentLayer
+  └─ EvidencePanelAnchor
+  → ImmersiveCameraController
+```
+
+`ContextSetResolver` 的正式优先级是当前回答证据、引用邻域、热点成员。开发评审可以使用显式标记的确定性夹具，但不得使用屏幕距离或随机半径伪造论文关系。
 
 ## 模块边界
 
@@ -79,6 +127,10 @@ AgentGalaxyFocusIntent
 - 语义星不参与景深、运动模糊或低分辨率放大。
 - 自动降级优先削减微尘、环境星和光晕。
 - M1.2a 只渲染锐利论文星、锐利热点核心、环境星和暗微尘，统一使用正常透明混合；不加入 Bloom 或高饱和颜色。
+- 隔离评审画布和 CSS 使用一致的 `#000000` 底色。语义星与装饰星都使用 `fwidth` 控制的紧致边缘抗锯齿，不再通过占据大部分点精灵半径的透明渐变制造软边。
+- M1.3b-1 将语义星改为共享几何体的双通道恒星光球。核心通道全分辨率并写深度；表面/薄层日冕通道复用同一顶点身份且不写深度。两者都使用正常透明混合，不经过 Bloom、景深、运动模糊或低分辨率放大。
+- `gl_PointCoord` 在片元阶段重建球面法线，固定视空间主光、弱补光、光球暗边和软能量压缩共同提供三维层次。小于 `2.2px` 时保持锐利针点，`2.2–4.5px` 连续进入光球表面 LOD。
+- 每个论文顶点继承所属热点色相。论文色度低于热点，热点使用更厚的表面与极弱日冕；聚焦只连续提高同一色相的受光层次，核心透明度不读取时间或聚焦进度。
 - balanced 上限为 1,920 个论文代理、55 个明显热点、800 个环境星和 1,600 个暗微尘；high 上限为 2,560、75、1,200 和 2,600。
 
 ### MotionStateController
@@ -113,6 +165,36 @@ AgentGalaxyFocusIntent
 - 淘汰、取消和退出均平滑融回星流。
 - 不存在实体不生成替代位置。
 
+### ImmersiveDisplayComposer
+
+- 外部 `agent背景.html` 只作为视觉参考，不进入生产依赖。
+- 保留纯黑背景、中央紧凑对话框、左右上下文构图和 `Idle / Thinking / Focus` 三态。
+- 输入仍为 `AgentGalaxyBackgroundPayloadV1`、稳定粒子身份、FlowModel 和解析后的上下文集合。
+- 允许将焦点上下文有限地抽取到对话框一侧，但不改变实体身份、不复制目标、不向固定点塌缩。
+- 背景能量下降和目标材质增强必须有上限；语义星核心透明度不参与状态动画。
+- 证据面板只消费真实解析结果，不显示随机标题、随机引用数或伪造相关度。
+- 第一轮使用独立 `AgentGalaxyImmersiveCanvas`、`AgentGalaxyImmersiveWorkspace` 和 `visual-review=agent-immersive`，不覆盖 `AgentGalaxyFlowCanvas` 或默认应用。
+- `AgentGalaxyImmersiveCanvas` 复用 `AgentGalaxyFlowCanvas` 的引力织场和同顶点焦点通路；沉浸工作区负责 Agent 状态、中央对话框、面板构图和上下文集合。
+- `agentGalaxyImmersiveContext.ts` 从真实载荷解析目标论文、所属热点和最多 24 个同热点邻近成员。该关系明确标记为 `hotspot-membership`，不冒充引用边。
+- `ContextController` 使用 `aContextRoleA/B` 与 `aContextOrderA/B` 在同一论文/热点几何体上执行双槽交接。上下文只接受刚性世界平移和有限 FocusField 形变，内部语义几何不排序、不塌缩。
+- `AgentStateController` 将六态映射为引力、剪切、扭曲、中央缓流、时间倍率和上下文强度，并以 900ms smootherstep 连续更新同一组 Shader uniform。
+- `DynamicSemanticLayer` 预分配 24 个稳定槽。快照未抽样论文使用精确语义锚点；活动库新增论文使用带版本的未分类外围规则；缺失实体不占槽。
+- `resolve_agent_galaxy_entities` 仅以 SQLite 只读连接查询 V20 membership、热点和论文元数据；浏览器评审使用完整视觉快照实现同构解析。
+- `CoordinateSpaceBridge` 只传递 `entityId / hotspotId / sourceSnapshotId`，再以 400ms 遮罩切换两个独立空间解释器；严禁逐星坐标插值。
+
+### ResidentFocusController
+
+- M1.3a 只处理 `sampled` 常驻论文，不改变 `FlowModel.dynamicFocus=false` 的真实能力声明。
+- 全部 3,840 个常驻论文使用稳定顶点顺序；质量预算通过 `aStableOrder` 逐点掩码控制，不再删除预算外顶点。
+- `paperId -> vertexIndex` 在几何体创建时冻结。聚焦、释放和切换只更新 Shader uniform 与相机控制状态，不重建渲染器或论文几何体。
+- `signal / soft-focus / full-focus` 使用独立时间曲线，并拆分为 `acquisitionBlend / fieldBlend / materialBlend / cameraBlend / releaseBlend`。完整聚焦先在 0.65 秒内捕获并展开光球，0.45–1.15 秒形成 FocusField，0.95–2.35 秒才接近相机。
+- 完整聚焦目标终点为 `8.5 CSS px`，柔焦与信号分别为 `6.2 / 4.2 CSS px`；该绝对尺寸不依赖论文原始点大小，因此关闭相机时仍可辨识。
+- 两个聚焦槽支持旧目标与新目标交叉过渡。目标世界位置始终来自基础引力织场，不生成替代星。
+- 相机不改变 FOV；它在基础 `static/codrift` 轨迹与目标共速姿态之间连续混合，并把目标投影到未来对话框之外的安全区域。
+- `FocusField` 是位于 FlowModel 之后的独立解析形变层，基础 `FlowModel.dynamicFocus` 继续为 `false`。它使用目标实时位置、流场切线和邻域语义向量产生非径向潮汐弯曲，世界位移不超过 `0.24`，目标自身不位移，论文云 P95 直径比保持 `0.96–1.04`。
+- `signal / soft-focus / full-focus` 分别增加递进的低饱和语义色、亮度与尺寸；邻域透明度不随聚焦变化，暗微尘只响应局部速度/方向。
+- 减少动态时关闭相机飞行和局部形变，只保留同一顶点的静态锐利强调。
+
 ## 参数实验室
 
 M1.2a 开发评审入口继续与默认应用隔离，提供引力、剪切、扭曲、时间倍率、中央缓流强度、质量级别、固定/轻微协同漂移相机和固定时间参数。
@@ -128,4 +210,4 @@ M1.2a 开发评审入口继续与默认应用隔离，提供引力、剪切、�
 - 展示星图和理论星图继续使用现有实现。
 - UMAP-A/B/C 继续隔离。
 - 默认启动页在 M1 人工选择前不改变。
-- M1.2a 无数据库迁移、无生产 Tauri 聚焦命令、无发布资源变更。
+- M1.3c 无数据库迁移和发布资源变更；新增的 Tauri 实体解析命令为内部只读命令，不改变 Agent 后端协议或默认首页。

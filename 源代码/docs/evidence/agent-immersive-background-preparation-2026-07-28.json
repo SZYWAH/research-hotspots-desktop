@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-28T20:02:50.8548416+08:00",
+  "stage": "M1.3c-agent-immersive-background-preserve-preparation",
+  "repository": {
+    "captureScope": "entry-state-before-preparation-document-writes",
+    "branch": "codex/agent-galaxy-focus",
+    "head": "2b7a32495897afbfed2cfc09de34439166a053a5",
+    "upstream": "origin/codex/agent-galaxy-focus",
+    "ahead": 0,
+    "behind": 0,
+    "workingTreeClean": false,
+    "trackedModifiedCount": 11,
+    "untrackedCount": 5,
+    "diffCheck": "PASS",
+    "trackedModifiedFiles": [
+      "docs/ARCHITECTURE.md",
+      "docs/DECISIONS.md",
+      "docs/PROJECT.md",
+      "docs/ROADMAP.md",
+      "docs/STATUS.md",
+      "package.json",
+      "scripts/agent_galaxy_flow_visual_audit.mjs",
+      "src/components/AgentGalaxyFlowCanvas.tsx",
+      "src/components/AgentGalaxyFlowReview.css",
+      "src/components/AgentGalaxyFlowReview.tsx",
+      "src/lib/agentGalaxyFlowReview.ts"
+    ],
+    "untrackedFiles": [
+      "scripts/agent_galaxy_focus_audit.mjs",
+      "src/lib/agentGalaxyFocusField.ts",
+      "src/lib/agentGalaxyFocusFieldGpuParity.ts",
+      "src/lib/agentGalaxyPhotosphere.ts",
+      "src/lib/agentGalaxyResidentFocus.ts"
+    ]
+  },
+  "referencePrototype": {
+    "path": "D:\\wenjian\\Desktop\\agent背景.html",
+    "sourceKind": "external-visual-reference",
+    "copiedIntoRepository": false,
+    "sizeBytes": 25143,
+    "lastWriteTimeLocal": "2026-07-28T19:28:07+08:00",
+    "sha256": "951A5FA1C156A4720BA6E501356C5100FC8CC6B23C5BB7B3F2EB679E39BB3D78",
+    "implementationStatus": "prototype-only"
+  },
+  "designRead": {
+    "pageKind": "immersive-research-agent-workspace",
+    "audience": "researchers",
+    "mode": "redesign-preserve",
+    "language": "pure-black-restrained-spatial-narrative",
+    "designVariance": 8,
+    "motionIntensity": 7,
+    "visualDensity": 5,
+    "visualChangePolicy": "targeted-evolution",
+    "status": "accepted-for-preparation"
+  },
+  "productViews": {
+    "immersive": {
+      "purpose": "conversation-atmosphere-and-context-extraction",
+      "coordinateClaim": "display-space",
+      "reference": "agent背景.html"
+    },
+    "theory": {
+      "purpose": "semantic-location-and-hotspot-explanation",
+      "coordinateClaim": "theory-space",
+      "reference": "existing-theory-galaxy"
+    }
+  },
+  "sharedIdentity": {
+    "payloadSchema": "AgentGalaxyBackgroundPayloadV1",
+    "focusContract": "AgentGalaxyFocusIntent",
+    "flowContract": "agent-galaxy-flow-contract-v2",
+    "sourcePaperCount": 25463,
+    "sourceHotspotCount": 160,
+    "residentPaperProxyCount": 3840,
+    "sourceSnapshotId": "project-default:v20:1784975696989"
+  },
+  "preparationBoundaries": {
+    "defaultHomepageChanged": false,
+    "theoryGalaxyChanged": false,
+    "presentationGalaxyChanged": false,
+    "databaseChanged": false,
+    "umapChanged": false,
+    "prototypeSourceChanged": false,
+    "commitCreated": false,
+    "branchChanged": false,
+    "gpuVisualTestRun": false
+  },
+  "deviceSnapshot": {
+    "availableMemoryMB": 6935,
+    "nvidiaGpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "nvidiaDriver": "566.24",
+    "gpuTemperatureC": 42,
+    "gpuUtilizationPercent": 0,
+    "gpuMemoryUsedMB": 0,
+    "latestRecordedGraphicsBugcheck": {
+      "timeLocal": "2026-07-28T12:57:52+08:00",
+      "code": "0x116"
+    },
+    "developmentServerListening": false,
+    "assessment": "LOW_LOAD_DEVELOPMENT_ONLY"
+  }
+}

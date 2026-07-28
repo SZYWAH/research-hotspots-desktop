@@ -1,0 +1,27 @@
+{
+  "recordedAt": "2026-07-28",
+  "status": "FAIL",
+  "failureClass": "structural-product-architecture",
+  "branch": "codex/agent-galaxy-focus",
+  "head": "2b7a32495897afbfed2cfc09de34439166a053a5",
+  "backgroundPayloadSha256": "CBA42B19B4CACCF00D0EF22BCCEF108906C5937101EF4D968E41AA912384D80F",
+  "referenceHtml": {
+    "path": "D:\\wenjian\\Desktop\\agent背景.html",
+    "sha256": "951A5FA1C156A4720BA6E501356C5100FC8CC6B23C5BB7B3F2EB679E39BB3D78"
+  },
+  "observed": [
+    "Tauri 中的所谓沉浸背景仍呈现理论热点团簇，无法找到参考 HTML 的随机流动星海。",
+    "论文世界位置仍由热点理论位置和论文语义偏移组合产生。",
+    "自动审计通过只证明旧实现满足自身技术约束，不能证明产品空间结构正确。"
+  ],
+  "rootCause": "真实实体身份约束被错误扩张为理论空间约束，沉浸层继续消费理论 position/offset。",
+  "salvage": [
+    "只读实体解析",
+    "真实实体身份与快照身份",
+    "Tauri 命令基础",
+    "性能诊断",
+    "锐利恒星材质研究",
+    "同顶点聚焦技术预览"
+  ],
+  "replacement": "M1.3d 真正的沉浸/理论双背景静置闭环"
+}
