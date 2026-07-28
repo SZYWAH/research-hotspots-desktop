@@ -1,0 +1,64 @@
+.agent-orbit-prototype {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #01040a;
+  color: #e9f5ff;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  isolation: isolate;
+}
+
+.agent-orbit-prototype__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.agent-orbit-prototype__hud {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border: 1px solid rgba(151, 209, 241, 0.2);
+  background: rgba(2, 8, 18, 0.58);
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+}
+
+.agent-orbit-prototype__hud b {
+  font-weight: 600;
+  color: #cfe6f6;
+}
+
+.agent-orbit-prototype__hud span {
+  color: #7990a1;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-orbit-prototype__message {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+}
+
+.agent-orbit-prototype__message pre {
+  max-width: 720px;
+  color: #7990a1;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
