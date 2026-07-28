@@ -1,12 +1,23 @@
-export const AGENT_GALAXY_FLOW_CONTRACT_VERSION = "agent-galaxy-flow-contract-v1";
+export const AGENT_GALAXY_FLOW_CONTRACT_VERSION = "agent-galaxy-flow-contract-v2";
 
 export const AGENT_GALAXY_TECHNICAL_FLOW_MODELS = [
-  "curve-flow-tech-preview",
+  "gravitational-weave-tech-preview",
   "tidal-curl-tech-preview",
 ] as const;
 
 export type AgentGalaxyTechnicalFlowModelId =
   (typeof AGENT_GALAXY_TECHNICAL_FLOW_MODELS)[number];
+
+export const AGENT_GALAXY_ACTIVE_TECHNICAL_FLOW_MODEL =
+  "gravitational-weave-tech-preview" as const satisfies AgentGalaxyTechnicalFlowModelId;
+
+export const AGENT_GALAXY_TECHNICAL_FLOW_MODEL_STATUS = {
+  "gravitational-weave-tech-preview": "active",
+  "tidal-curl-tech-preview": "planned",
+} as const satisfies Record<
+  AgentGalaxyTechnicalFlowModelId,
+  "active" | "planned"
+>;
 
 export type AgentGalaxyMotionState =
   | "idle"
@@ -44,13 +55,15 @@ export type AgentGalaxyParticleKind =
   | "environment"
   | "dust";
 
+export type AgentGalaxyVector3 = [number, number, number];
+
 export type AgentGalaxyFlowParticleIdentity = {
   kind: AgentGalaxyParticleKind;
   entityId: string;
   hotspotId?: string;
   sourceSnapshotId: string;
-  semanticPosition?: [number, number, number];
-  semanticOffset?: [number, number, number];
+  semanticPosition?: AgentGalaxyVector3;
+  semanticOffset?: AgentGalaxyVector3;
 };
 
 export type AgentGalaxyFlowAssignment = {
@@ -67,30 +80,44 @@ export type AgentGalaxyFlowContext = {
 };
 
 export type AgentGalaxyFlowSample = {
-  position: [number, number, number];
-  velocity: [number, number, number];
+  position: AgentGalaxyVector3;
+  velocity: AgentGalaxyVector3;
 };
 
 export type AgentGalaxyFlowShaderContract = {
   vertexChunkId: string;
   uniformNames: readonly string[];
+  vertexChunk: string;
 };
 
-export interface AgentGalaxyFlowModel {
+export type AgentGalaxyFlowCapabilities = {
+  deterministicAnalyticMotion: boolean;
+  dynamicFocus: boolean;
+  offscreenLoopRequired: boolean;
+  visibleRespawnAllowed: boolean;
+  runtimeLaneReassignmentAllowed: boolean;
+};
+
+export type AgentGalaxyFlowSampleRequest<TParameters> = {
+  identity: AgentGalaxyFlowParticleIdentity;
+  hotspotAnchor: AgentGalaxyVector3;
+  semanticOffset: AgentGalaxyVector3;
+  assignment: AgentGalaxyFlowAssignment;
+  context: AgentGalaxyFlowContext;
+  parameters: TParameters;
+};
+
+export interface AgentGalaxyFlowModel<TParameters = unknown> {
   readonly id: AgentGalaxyTechnicalFlowModelId;
   readonly assignmentVersion: string;
   readonly shader: AgentGalaxyFlowShaderContract;
-  readonly supportsFocus: true;
-  readonly supportsOffscreenLoop: true;
+  readonly capabilities: AgentGalaxyFlowCapabilities;
+  readonly defaultParameters: TParameters;
   assign(identity: AgentGalaxyFlowParticleIdentity): AgentGalaxyFlowAssignment;
-  sample(
-    assignment: AgentGalaxyFlowAssignment,
-    context: AgentGalaxyFlowContext,
-  ): AgentGalaxyFlowSample;
+  sample(request: AgentGalaxyFlowSampleRequest<TParameters>): AgentGalaxyFlowSample;
   sampleTangent(
-    assignment: AgentGalaxyFlowAssignment,
-    context: AgentGalaxyFlowContext,
-  ): [number, number, number];
+    request: AgentGalaxyFlowSampleRequest<TParameters>,
+  ): AgentGalaxyVector3;
 }
 
 export const AGENT_GALAXY_PARTICLE_BUDGET = {

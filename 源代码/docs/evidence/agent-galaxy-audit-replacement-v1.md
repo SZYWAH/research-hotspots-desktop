@@ -1,8 +1,8 @@
 # Agent 星河审计替换清单
 
-状态：准备阶段冻结
+状态：M1.2a 首轮替换已接入
 
-更新时间：2026-07-27
+更新时间：2026-07-28
 
 ## 继续保留
 
@@ -14,19 +14,27 @@
 - 默认首页不因开发评审入口改变。
 - 评审就绪状态、性能快照和受控录屏保存。
 
-## 在正式流场实现时替换
+## M1.2a 已替换
 
 | 旧检查 | 新检查 |
 | --- | --- |
-| `voyage / breath / signal` 三 preset 存在 | 至少两个技术 FlowModel 可通过同一契约加载，最终产品未预选 |
-| 环境星固定为 6,000 / 2,500 | 环境星预算在 800–1,500，明显锐利星总量在 2,500–4,000 |
-| `PAPER_LIMITS` 为 24 / 12 / 8 | 常驻代理 3,840，视锥/LOD 可辨识 1,800–2,600 |
-| Shader 深度焦点影响所有 Point Sprite | 语义星核心不使用景深，装饰层可独立降级 |
-| `hotspotGlowMaterial` 代表局部 Bloom | 锐利核心和弱光晕使用分离的渲染通道 |
-| 四状态 `idle/input/answer/reading` | 六状态 `idle/input/thinking/answer/reading/focus` 连续转换 |
-| 整组旋转、缩放和相机正弦摆动 | 粒子位置/速度连续，屏幕内重生和换流带为零 |
-| 固定三个候选截图 | 参数实验室的固定时间截图和动态视频 |
-| 仅统计 FPS、对象数和降级原因 | 增加坐标哈希、速度连续性、核心透明度、焦点误差和动态缓存 |
+| `voyage / breath / signal` 三 preset 存在 | 独立加载 `gravitational-weave-tech-preview`；旧 preset 仍明确为历史 `FAIL` |
+| 环境星固定为 6,000 / 2,500 | balanced/high 环境星预算改为 800 / 1,200 |
+| `PAPER_LIMITS` 为 24 / 12 / 8 | 3,840 个身份继续保留，balanced/high 稳定选择不超过 1,920 / 2,560 |
+| Shader 深度焦点影响所有 Point Sprite | M1.2a 锐利语义星不使用景深或时间透明度 |
+| `hotspotGlowMaterial` 代表局部 Bloom | M1.2a 使用 `NormalBlending`，不使用 Bloom |
+| 整组旋转、缩放和相机正弦摆动 | 四节点解析流场改变粒子位置；主要验收相机固定 |
+| 固定三个候选截图 | `agent-flow` 支持固定时间截图和正常动态视频 |
+| 旧审计只统计 FPS、对象数和降级原因 | 新审计检查确定性、连续性、形变预算、清晰度和隔离入口 |
+
+## 后续阶段仍需替换
+
+| 尚未完成 | 后续要求 |
+| --- | --- |
+| 只有一个活动技术 FlowModel | 按人工评审结果决定是否实现 `tidal-curl-tech-preview`，不得预选最终主视觉 |
+| 仅实现 `idle` 黑白骨架 | 接入六状态连续转换，不重建粒子几何体 |
+| 无动态焦点 | 增加焦点误差、实体解析和 16–32 个会话缓存审计 |
+| 仅浏览器评审 | 完成 Iris Xe、RTX 4060 和 Tauri 原生窗口性能验收 |
 
 ## 必须删除或禁止
 
@@ -41,5 +49,8 @@
 
 - `audit:agent-galaxy-background`：继续审计轻量数据载荷。
 - `audit:agent-galaxy-background-visual`：当前仅冻结旧基础设施，明确输出视觉验收 `FAIL`。
-- `audit:agent-galaxy-flow-preparation`：审计开发前文档、契约、夹具、预算、快照和失败分类。
-- 正式实现阶段新增流场确定性、连续性、清晰度、聚焦和参数实验室审计，并替换旧 preset 断言。
+- `audit:agent-galaxy-flow-preparation`：作为 preparation gate，继续审计文档、契约、夹具、预算、快照和失败分类；不再要求“流场尚未实现”。
+- `audit:agent-galaxy-gravitational-weave`：审计场节点、确定性、连续性、位移、热点论文共同形变和 CPU/GPU 数学一致性。
+- `audit:agent-galaxy-flow-visual`：静态审计独立入口、正常透明混合、清晰度禁项、固定相机、预算、减少动态、页面隐藏暂停和默认首页隔离。
+
+以上新审计通过只代表 M1.2a 技术约束 `PASS`。在固定相机动态视频完成人工观看前，产品视觉继续标记为 `UNVERIFIED`。

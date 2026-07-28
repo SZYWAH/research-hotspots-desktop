@@ -68,16 +68,21 @@ const threePackage = JSON.parse(threeText);
 
 const requiredDocumentChecks = {
   projectAuthority: project.includes("状态：权威事实入口")
-    && project.includes("M1“沉浸式视觉方向确认”的开发前准备已经完成"),
+    && project.includes("M1.2a")
+    && project.includes("gravitational-weave-tech-preview"),
   roadmapReopened: roadmap.includes("M1 沉浸式视觉方向确认")
-    && roadmap.includes("重新打开"),
+    && roadmap.includes("M1.2a 引力织场黑白运动骨架"),
   statusCategories: ["## PASS", "## FAIL", "## UNVERIFIED"].every((heading) => status.includes(heading)),
-  architectureFlow: architecture.includes("ParticleAssignment")
+  architectureFlow: architecture.includes("AgentGalaxyFlowCanvas")
     && architecture.includes("FlowModel")
+    && architecture.includes("GravitationalWeaveFlow")
     && architecture.includes("DynamicFocusLayer"),
   decisionsLocked: decisions.includes("流动形态暂不固定")
-    && decisions.includes("3,840 是常驻预算，不是检索边界"),
-  replacementExplicit: replacement.includes("在正式流场实现时替换")
+    && decisions.includes("3,840 是常驻预算，不是检索边界")
+    && decisions.includes("引力织场只作为第一套技术骨架"),
+  replacementExplicit: replacement.includes("audit:agent-galaxy-gravitational-weave")
+    && replacement.includes("audit:agent-galaxy-flow-visual")
+    && replacement.includes("UNVERIFIED")
     && replacement.includes("必须删除或禁止"),
 };
 
@@ -160,14 +165,19 @@ for (const key of forbiddenFixtureKeys) {
 }
 
 const contractChecks = {
-  contractVersion: contract.includes('AGENT_GALAXY_FLOW_CONTRACT_VERSION = "agent-galaxy-flow-contract-v1"'),
-  twoTechnicalModels: contract.includes('"curve-flow-tech-preview"')
+  contractVersion: contract.includes('AGENT_GALAXY_FLOW_CONTRACT_VERSION = "agent-galaxy-flow-contract-v2"'),
+  twoTechnicalModels: contract.includes('"gravitational-weave-tech-preview"')
     && contract.includes('"tidal-curl-tech-preview"'),
   focusIntent: contract.includes("export type AgentGalaxyFocusIntent"),
   memberships: ["sampled", "snapshot-unsampled", "active-only", "missing"]
     .every((value) => contract.includes(`\"${value}\"`)),
   flowModel: contract.includes("export interface AgentGalaxyFlowModel")
     && contract.includes("sampleTangent"),
+  truthfulCapabilities: contract.includes("deterministicAnalyticMotion: boolean")
+    && contract.includes("dynamicFocus: boolean")
+    && contract.includes("offscreenLoopRequired: boolean")
+    && contract.includes("visibleRespawnAllowed: boolean")
+    && contract.includes("runtimeLaneReassignmentAllowed: boolean"),
   sixStates: ["idle", "input", "thinking", "answer", "reading", "focus"]
     .every((value) => contract.includes(`\"${value}\"`)),
   budgets: ["160", "3840", "1800", "2600", "800", "1500", "2500", "4000", "16", "32"]
@@ -187,6 +197,7 @@ assert(legacyVisualAudit.includes('scope: "legacy-infrastructure-only"'), "Legac
 
 console.log(JSON.stringify({
   pass: true,
+  preparationGate: "PASS",
   phase: "agent-galaxy-flow-preparation",
   baseline: {
     sourceHead: baseline.sourceHead,
@@ -209,6 +220,7 @@ console.log(JSON.stringify({
     multiEntityGroups: Object.keys(fixtures.multiEntityGroups).length,
   },
   legacyVisualAssessment: "FAIL",
+  m12aTechnicalSkeletonAllowed: true,
+  m12aProductVisualAcceptance: "UNVERIFIED",
   defaultHomepageChanged: false,
-  flowImplemented: false,
 }, null, 2));

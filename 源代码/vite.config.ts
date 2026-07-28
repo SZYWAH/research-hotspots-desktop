@@ -6,9 +6,12 @@ import react from "@vitejs/plugin-react";
 import packageMetadata from "./package.json";
 
 const appVersion = packageMetadata.version;
-const AGENT_RECORDING_NAME = /^agent-background-(voyage|breath|signal)-(idle|input|answer|reading)-(auto|balanced|high)\.webm$/;
+const AGENT_RECORDING_NAME = /^(?:agent-background-(?:voyage|breath|signal)-(?:idle|input|answer|reading)|agent-flow-gravitational-weave-(?:static|codrift))-(?:auto|balanced|high)\.webm$/;
+const AGENT_FLOW_SNAPSHOT_NAME = /^agent-flow-gravitational-weave-static-(?:auto|balanced|high)-t(?:00|08|20)-(?:3840x2160|stars-1024x768)\.png$/;
 const MIN_AGENT_RECORDING_BYTES = 1024;
 const MAX_AGENT_RECORDING_BYTES = 64 * 1024 * 1024;
+const MIN_AGENT_FLOW_SNAPSHOT_BYTES = 1024;
+const MAX_AGENT_FLOW_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 
 function agentBackgroundRecordingPlugin(): Plugin {
   return {
@@ -79,6 +82,77 @@ function agentBackgroundRecordingPlugin(): Plugin {
           } catch (error) {
             response.statusCode = 500;
             response.end(error instanceof Error ? error.message : "recording save failed");
+          }
+        });
+      });
+      server.middlewares.use("/__agent-flow-snapshot", (request, response, next) => {
+        if (request.method !== "POST") {
+          next();
+          return;
+        }
+        const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+        const filename = requestUrl.searchParams.get("name") ?? "";
+        const origin = request.headers.origin;
+        if (origin && origin !== "http://127.0.0.1:5174") {
+          response.statusCode = 403;
+          response.end("snapshot origin rejected");
+          return;
+        }
+        if (!AGENT_FLOW_SNAPSHOT_NAME.test(filename)) {
+          response.statusCode = 400;
+          response.end("invalid snapshot name");
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let byteLength = 0;
+        let rejected = false;
+        request.on("data", (chunk: Buffer) => {
+          if (rejected) return;
+          byteLength += chunk.byteLength;
+          if (byteLength > MAX_AGENT_FLOW_SNAPSHOT_BYTES) {
+            rejected = true;
+            response.statusCode = 413;
+            response.end("snapshot exceeds 32 MiB");
+            request.destroy();
+            return;
+          }
+          chunks.push(Buffer.from(chunk));
+        });
+        request.on("end", async () => {
+          if (rejected) return;
+          if (byteLength < MIN_AGENT_FLOW_SNAPSHOT_BYTES) {
+            response.statusCode = 422;
+            response.end("snapshot is too small");
+            return;
+          }
+          const snapshot = Buffer.concat(chunks);
+          if (
+            snapshot[0] !== 0x89
+            || snapshot[1] !== 0x50
+            || snapshot[2] !== 0x4e
+            || snapshot[3] !== 0x47
+            || snapshot[4] !== 0x0d
+            || snapshot[5] !== 0x0a
+            || snapshot[6] !== 0x1a
+            || snapshot[7] !== 0x0a
+          ) {
+            response.statusCode = 422;
+            response.end("snapshot has an invalid PNG header");
+            return;
+          }
+          try {
+            const outputDir = join(process.cwd(), ".visual-review", "snapshots");
+            await mkdir(outputDir, { recursive: true });
+            await writeFile(join(outputDir, filename), snapshot);
+            response.statusCode = 200;
+            response.setHeader("Content-Type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({
+              path: `snapshots/${filename}`,
+              byteLength,
+            }));
+          } catch (error) {
+            response.statusCode = 500;
+            response.end(error instanceof Error ? error.message : "snapshot save failed");
           }
         });
       });

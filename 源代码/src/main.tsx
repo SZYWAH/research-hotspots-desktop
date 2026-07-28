@@ -2,17 +2,25 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { isAgentGalaxyBackgroundReviewMode } from "./lib/agentGalaxyBackgroundReview";
+import { isAgentGalaxyFlowReviewMode } from "./lib/agentGalaxyFlowReview";
 import { isAgentGalaxyOrbitPrototypeMode } from "./lib/agentGalaxyOrbitPrototype";
 import "./index.css";
 
 const AgentGalaxyBackgroundReview = React.lazy(
   () => import("./components/AgentGalaxyBackgroundReview"),
 );
+const AgentGalaxyFlowReview = React.lazy(
+  () => import("./components/AgentGalaxyFlowReview"),
+);
 const AgentGalaxyOrbitPrototype = React.lazy(
   () => import("./components/AgentGalaxyOrbitPrototype"),
 );
 const fallback = <div style={{ position: "fixed", inset: 0, background: "#01040a" }} />;
-const content = isAgentGalaxyOrbitPrototypeMode() ? (
+const content = isAgentGalaxyFlowReviewMode() ? (
+  <React.Suspense fallback={fallback}>
+    <AgentGalaxyFlowReview />
+  </React.Suspense>
+) : isAgentGalaxyOrbitPrototypeMode() ? (
   <React.Suspense fallback={fallback}>
     <AgentGalaxyOrbitPrototype />
   </React.Suspense>
