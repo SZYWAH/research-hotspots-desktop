@@ -67,6 +67,7 @@ import {
   type GalaxySystemViewMode,
 } from "./components/App17GalaxyCanvas";
 import { AgentWorkspace } from "./components/AgentWorkspace";
+import { AgentDualBackgroundPage } from "./components/AgentDualBackgroundPage";
 import { readAgentVisualReviewScenario } from "./lib/agentVisualReview";
 
 const threeConsole = (THREE as unknown as {
@@ -693,18 +694,24 @@ export default function App() {
           <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} settings={settings} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
         )}
         {activeView === "agent" && settings && activeProject && (
-          <AgentWorkspace
+          <AgentDualBackgroundPage
             settings={settings}
             activeProject={activeProject}
-            libraryStatus={libraryStatus}
-            v20Snapshot={v20Snapshot}
-            visualReviewScenario={agentVisualReviewScenario}
-            onNavigate={setActiveView}
-            onOpenPaper={(paperId, title) => {
-              setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
-              setActiveView("search");
-            }}
-            onNotice={setNotice}
+            advancedWorkspace={(
+              <AgentWorkspace
+                settings={settings}
+                activeProject={activeProject}
+                libraryStatus={libraryStatus}
+                v20Snapshot={v20Snapshot}
+                visualReviewScenario={agentVisualReviewScenario}
+                onNavigate={setActiveView}
+                onOpenPaper={(paperId, title) => {
+                  setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
+                  setActiveView("search");
+                }}
+                onNotice={setNotice}
+              />
+            )}
           />
         )}
         {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}

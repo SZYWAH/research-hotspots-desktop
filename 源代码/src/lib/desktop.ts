@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   App17GalaxyPayload,
   App17GalaxySyncResult,
+  AgentImmersiveBackgroundPayloadV2,
   CleanerWorkerResult,
   ClusterWorkerResult,
   CnkiSettings,
@@ -605,6 +606,21 @@ export async function resolveAgentGalaxyEntities(
   if (!isDesktopRuntime()) return [] as ResolvedAgentGalaxyEntity[];
   return invoke<ResolvedAgentGalaxyEntity[]>(
     "resolve_agent_galaxy_entities",
+    { input },
+  );
+}
+
+export async function loadAgentImmersiveBackground(input: {
+  databaseDir?: string;
+  projectId?: string;
+  sessionSeed: string;
+  paperCount?: number;
+}) {
+  if (!isDesktopRuntime()) {
+    throw new Error("沉浸背景真实论文载荷仅可在桌面应用中读取。");
+  }
+  return invoke<AgentImmersiveBackgroundPayloadV2>(
+    "load_agent_immersive_background",
     { input },
   );
 }

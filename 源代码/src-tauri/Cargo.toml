@@ -81,6 +81,11 @@ path = "src/bin/audit_galaxy_semantic_layout.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "audit_agent_immersive_background"
+path = "src/bin/audit_agent_immersive_background.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "rebuild_semantic_galaxy_snapshot"
 path = "src/bin/rebuild_semantic_galaxy_snapshot.rs"
 required-features = ["dev-tools"]

@@ -1,0 +1,69 @@
+{
+  "status": {
+    "implementation": "PASS",
+    "desktopFunctionalAcceptance": "PASS",
+    "productVisualAcceptance": "UNVERIFIED"
+  },
+  "branch": "codex/agent-dual-background-v2",
+  "head": "e739e41a65fbb91147c1610458af83a7cb9cf1a9",
+  "failedBaselineCommit": {
+    "hash": "e739e41a65fbb91147c1610458af83a7cb9cf1a9",
+    "subject": "chore(agent): archive failed semantic immersive experiment",
+    "pushed": false
+  },
+  "referenceHtml": {
+    "path": "D:\\wenjian\\Desktop\\agent背景.html",
+    "sha256": "951A5FA1C156A4720BA6E501356C5100FC8CC6B23C5BB7B3F2EB679E39BB3D78"
+  },
+  "databaseAudit": {
+    "databaseOpenMode": "read-only",
+    "projectId": "project-default",
+    "sourceSnapshotId": "project-default:v20:1784365136031",
+    "sourceMembershipCount": 25463,
+    "paperCount": 6000,
+    "uniquePaperCount": 6000,
+    "hotspotCount": 160,
+    "uniqueHotspotCount": 160,
+    "coordinatesSerialized": false,
+    "repeatHash": "4fd063b09bb61c56edff5339cfba477c8425f5a6918bfa27389acb2af6b47d18",
+    "repeatHashMatches": true,
+    "alternateSeedChangedPaperIds": 9044
+  },
+  "staticAudit": {
+    "payloadCoordinateFields": 0,
+    "targetPapers": 6000,
+    "hotspotFloor": 12,
+    "hotspotIdentityTarget": 160,
+    "immersiveRenderer": "independent-session-random-curl",
+    "singleRendererSwitch": true,
+    "theoryProfileDefault": "analysis",
+    "agentTheoryProfile": "agent-theory"
+  },
+  "checks": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "cargoCheckJobs2": "PASS",
+    "agentDualBackgroundAudit": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "tauriLowLoadAcceptance": {
+    "immersiveRandomStarfield": "PASS",
+    "theoryRealLayout": "PASS",
+    "modeSwitch": "PASS",
+    "theoryExploreLayout": "PASS",
+    "theoryExploreSubmitAndReset": "PASS",
+    "plainPromptSubmitWithoutFakeAnswer": "PASS",
+    "advancedWorkspaceRoundTrip": "PASS",
+    "longFullscreenOrStressTest": "NOT_RUN"
+  },
+  "scope": {
+    "defaultStartupPageChanged": false,
+    "databaseSchemaChanged": false,
+    "activeSnapshotChanged": false,
+    "umapChanged": false,
+    "agentBackendConnected": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

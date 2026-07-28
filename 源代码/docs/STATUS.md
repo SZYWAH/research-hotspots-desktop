@@ -2,11 +2,11 @@
 
 更新时间：2026-07-28
 
-当前分支：`codex/agent-galaxy-focus`
+当前分支：`codex/agent-dual-background-v2`
 
-当前工作树 HEAD：`2b7a32495897afbfed2cfc09de34439166a053a5`
+当前工作树 HEAD：`e739e41a65fbb91147c1610458af83a7cb9cf1a9`
 
-当前阶段：M1.3c“理论坐标 + 沉浸外壳”实验已判定为结构性 `FAIL`；下一阶段为 M1.3d“真正的沉浸/理论双背景静置闭环”
+当前阶段：M1.3d“真正的沉浸/理论双背景静置闭环”已完成技术实现和低负载 Tauri 功能验收，产品视觉仍为 `UNVERIFIED`
 
 ## 2026-07-28 纠错结论
 
@@ -76,6 +76,13 @@
 - 沉浸/理论视图通过 400ms 黑色遮罩交叉切换；理论桥接视图直接使用完整 V20 理论 XYZ 定位同一实体，不进行逐星插值，活动库未聚类实体明确禁用“查看语义位置”。
 - `audit:agent-galaxy-immersive` 已验证 25,463 篇源论文、3,840 个常驻代理、160 个热点，以及 sampled / snapshot-unsampled / active-only / hotspot / missing 五类行为，结果为 `PASS`。
 - 本轮本地 `tsc --noEmit`、Vite 生产构建、`cargo check -j 2`、引力织场数学审计、聚焦审计、流场静态审计和沉浸阶段审计均为 `PASS`。
+- M1.3c 失败实现已保存为本地提交 `e739e41`，并从该提交创建隔离分支 `codex/agent-dual-background-v2`；未推送远程。
+- 新增坐标为空的 `AgentImmersiveBackgroundPayloadV2` 和只读命令 `load_agent_immersive_background`。活动快照实测返回 6,000 个唯一真实论文 ID、全部 160 个热点 ID，重复种子哈希一致，不同种子改变 9,044 个抽样位置；载荷不序列化理论坐标。
+- 新 `AgentImmersiveStarfieldCanvas` 独立使用会话随机空间、静止相机和连续 Curl 流，不复用理论星图坐标、质心、语义偏移或 `AgentGalaxyFlowCanvas`。
+- 正式“研究 Agent”导航项已接入 `AgentDualBackgroundPage`：首次使用沉浸背景，模式偏好本地保存，沉浸种子和流动时间在同一会话延续，背景切换期间仅挂载一个 WebGL 画布。
+- Agent 理论背景继续使用完整真实理论 XYZ；默认环境态隐藏标签和交互，探索态显示标签并启用理论星图交互。探索态 Enter 提交后已在 Tauri 中验证恢复中央输入和最佳全图。
+- Tauri 低负载功能验收已验证：沉浸随机星海、理论真实团簇、显式切换、探索进入/退出、普通/探索提交、高级工作台往返均正常；未运行全屏、长录屏或 GPU 压力测试。
+- `tsc -b`、Vite 生产构建、`cargo check -j 2`、`audit:agent-dual-background`、只读数据库审计和 `git diff --check` 均通过。
 
 ## FAIL
 
@@ -89,10 +96,9 @@
 
 ## UNVERIFIED
 
-- 新 `AgentImmersiveStarfieldCanvas` 是否忠实保留参考 HTML 的随机空间、Curl 流、中央构图和沉浸感。
-- Agent 专用理论背景是否在保持真实语义结构的同时改善白色圆点感。
-- 单活动渲染器切换、沉浸会话续接和理论相机姿态恢复是否通过 Tauri 实机验收。
-- RTX 4060 和 Tauri 原生窗口中的最终性能。
+- 用户尚未人工判定新沉浸背景是否忠实保留参考 HTML 的空间、Curl 流、中央构图和沉浸感。
+- 用户尚未人工判定 Agent 专用理论背景是否在保持真实语义结构的同时改善白色圆点感。
+- RTX 4060 和 Tauri 原生窗口中的最终持续性能。
 - 本轮只执行了低负载浏览器检查，未执行新的全屏、录屏或高质量 GPU 压力测试。
 - Tauri 原生窗口中 `resolve_agent_galaxy_entities` 对真实活动库新增论文的只读解析。
 - 相位呼吸、时间地层和正式 Agent 后端驱动的真实回答状态。
@@ -108,11 +114,9 @@
 
 ## 下一步
 
-1. 归档 M1.3c 失败基线并创建 `codex/agent-dual-background-v2`。
-2. 新增不含任何理论坐标的 `AgentImmersiveBackgroundPayloadV2`，会话内抽样最多 6,000 篇真实论文和全部 160 个热点。
-3. 忠实迁移 `agent背景.html` 的随机空间与连续 Curl 流，使用锐利恒星材质重建正式沉浸背景。
-4. 在正式研究 Agent 页面建立沉浸/理论双背景、单活动渲染器、极简输入和高级工作台入口。
-5. 完成 Agent 专用理论视觉配置与探索态；低负载自动验证通过后再交由用户在 Tauri 中人工验收。
+1. 由用户在已打开的 Tauri 开发版中分别审查沉浸背景和 Agent 理论背景。
+2. 若构图、流动密度或恒星材质仍需调整，仅在各自背景内部迭代，不再混用两套坐标解释器。
+3. 两套基础结构均获人工接受后，再单独规划沉浸聚焦、Thinking 波纹、两套背景的状态动画和正式科研 Agent 后端。
 
 ## 证据
 
@@ -120,6 +124,7 @@
 - [确定性焦点夹具](./evidence/agent-galaxy-focus-fixtures-v1.json)
 - [沉浸版准备基线](./evidence/agent-immersive-background-preparation-2026-07-28.json)
 - [阶段 1 实现审计](./evidence/agent-galaxy-immersive-stage1-2026-07-28.json)
+- [M1.3d 双背景实现与低负载验收](./evidence/agent-dual-background-v2-2026-07-28.json)
 - [沉浸版保留式改造准备](./AGENT_IMMERSIVE_BACKGROUND_PREPARATION.md)
 - [旧审计替换清单](./evidence/agent-galaxy-audit-replacement-v1.md)
 - [产品目标](./PROJECT.md)

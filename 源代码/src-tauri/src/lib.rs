@@ -906,6 +906,49 @@ struct AgentGalaxyResolvedEntity {
     placement_rule: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentImmersiveBackgroundInput {
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    session_seed: String,
+    paper_count: Option<usize>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentImmersiveBackgroundHotspotV2 {
+    id: String,
+    field: String,
+    color: String,
+    paper_count: i64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentImmersiveBackgroundPaperV2 {
+    id: String,
+    hotspot_id: String,
+    color: String,
+    year: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentImmersiveBackgroundPayloadV2 {
+    source_snapshot_id: String,
+    session_seed: String,
+    hotspots: Vec<AgentImmersiveBackgroundHotspotV2>,
+    papers: Vec<AgentImmersiveBackgroundPaperV2>,
+}
+
+#[derive(Clone)]
+struct AgentImmersivePaperCandidate {
+    id: String,
+    hotspot_id: String,
+    year: Option<i64>,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct App17GalaxyPaperPoint {
@@ -4527,6 +4570,485 @@ fn get_v20_galaxy_payload(
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
     build_v20_galaxy_payload(&conn, &project_id, &mode)
+}
+
+const AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT: usize = 6_000;
+const AGENT_IMMERSIVE_MAX_PAPER_COUNT: usize = 6_000;
+const AGENT_IMMERSIVE_MIN_PER_HOTSPOT: usize = 12;
+
+fn agent_immersive_hash(parts: &[&str]) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+    for (index, value) in parts.iter().enumerate() {
+        if index > 0 {
+            hash ^= 0xff;
+            hash = hash.wrapping_mul(0x01000193);
+        }
+        for byte in value.as_bytes() {
+            hash ^= u32::from(*byte);
+            hash = hash.wrapping_mul(0x01000193);
+        }
+    }
+    hash
+}
+
+fn allocate_agent_immersive_papers(
+    session_seed: &str,
+    hotspots: &[AgentImmersiveBackgroundHotspotV2],
+    candidates_by_hotspot: &HashMap<String, Vec<AgentImmersivePaperCandidate>>,
+    target_count: usize,
+) -> Result<HashMap<String, usize>, String> {
+    let mut allocations = hotspots
+        .iter()
+        .map(|hotspot| (hotspot.id.clone(), 0_usize))
+        .collect::<HashMap<_, _>>();
+    if target_count == 0 {
+        return Ok(allocations);
+    }
+
+    let guaranteed_total = hotspots
+        .iter()
+        .map(|hotspot| {
+            candidates_by_hotspot
+                .get(&hotspot.id)
+                .map_or(0, |items| items.len().min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT))
+        })
+        .sum::<usize>();
+
+    if target_count < guaranteed_total {
+        // A very small library cannot satisfy twelve papers per hotspot. Use
+        // deterministic fair rounds so no large hotspot consumes the budget.
+        let mut assigned = 0_usize;
+        for round in 0..AGENT_IMMERSIVE_MIN_PER_HOTSPOT {
+            for hotspot in hotspots {
+                if assigned >= target_count {
+                    return Ok(allocations);
+                }
+                let available = candidates_by_hotspot
+                    .get(&hotspot.id)
+                    .map_or(0, Vec::len);
+                if available > round {
+                    *allocations.entry(hotspot.id.clone()).or_default() += 1;
+                    assigned += 1;
+                }
+            }
+        }
+        return Ok(allocations);
+    }
+
+    for hotspot in hotspots {
+        let available = candidates_by_hotspot
+            .get(&hotspot.id)
+            .map_or(0, Vec::len);
+        allocations.insert(
+            hotspot.id.clone(),
+            available.min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT),
+        );
+    }
+
+    let mut remaining = target_count.saturating_sub(guaranteed_total);
+    let total_capacity = hotspots
+        .iter()
+        .map(|hotspot| {
+            let available = candidates_by_hotspot
+                .get(&hotspot.id)
+                .map_or(0, Vec::len);
+            let allocated = allocations.get(&hotspot.id).copied().unwrap_or_default();
+            available.saturating_sub(allocated)
+        })
+        .sum::<usize>();
+    if remaining == 0 || total_capacity == 0 {
+        return Ok(allocations);
+    }
+
+    let mut remainders = Vec::with_capacity(hotspots.len());
+    let initial_remaining = remaining;
+    for hotspot in hotspots {
+        let available = candidates_by_hotspot
+            .get(&hotspot.id)
+            .map_or(0, Vec::len);
+        let allocated = allocations.get(&hotspot.id).copied().unwrap_or_default();
+        let capacity = available.saturating_sub(allocated);
+        let numerator = initial_remaining.saturating_mul(capacity);
+        let floor_share = numerator / total_capacity;
+        let awarded = floor_share.min(capacity);
+        if awarded > 0 {
+            *allocations.entry(hotspot.id.clone()).or_default() += awarded;
+            remaining = remaining.saturating_sub(awarded);
+        }
+        remainders.push((
+            numerator % total_capacity,
+            agent_immersive_hash(&[session_seed, &hotspot.id, "quota"]),
+            hotspot.id.clone(),
+        ));
+    }
+
+    remainders.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    while remaining > 0 {
+        let mut progressed = false;
+        for (_, _, hotspot_id) in &remainders {
+            if remaining == 0 {
+                break;
+            }
+            let available = candidates_by_hotspot
+                .get(hotspot_id)
+                .map_or(0, Vec::len);
+            let allocated = allocations.get(hotspot_id).copied().unwrap_or_default();
+            if allocated < available {
+                *allocations.entry(hotspot_id.clone()).or_default() += 1;
+                remaining -= 1;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+
+    Ok(allocations)
+}
+
+#[tauri::command]
+fn load_agent_immersive_background(
+    app: tauri::AppHandle,
+    input: AgentImmersiveBackgroundInput,
+) -> Result<AgentImmersiveBackgroundPayloadV2, String> {
+    let session_seed = input.session_seed.trim().to_string();
+    if session_seed.is_empty() || session_seed.len() > 256 {
+        return Err("AGENT_IMMERSIVE_SESSION_SEED_INVALID".to_string());
+    }
+    let requested_count = input
+        .paper_count
+        .unwrap_or(AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT)
+        .clamp(1, AGENT_IMMERSIVE_MAX_PAPER_COUNT);
+    let database_dir = resolve_database_dir(&app, input.database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let conn = Connection::open_with_flags(
+        &database_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| {
+        format!(
+            "Cannot open immersive background database read-only {:?}: {error}",
+            database_path
+        )
+    })?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    build_agent_immersive_background_payload(
+        &conn,
+        &project_id,
+        &session_seed,
+        requested_count,
+    )
+}
+
+fn build_agent_immersive_background_payload(
+    conn: &Connection,
+    project_id: &str,
+    session_seed: &str,
+    requested_count: usize,
+) -> Result<AgentImmersiveBackgroundPayloadV2, String> {
+    let state = read_analysis_state(conn, project_id)?
+        .ok_or_else(|| "AGENT_IMMERSIVE_ACTIVE_SNAPSHOT_MISSING".to_string())?;
+
+    let mut hotspot_stmt = conn
+        .prepare(
+            "SELECT hotspot_id,payload_json,paper_count
+             FROM v20_hotspots
+             WHERE project_id=?1 AND snapshot_id=?2
+             ORDER BY hotspot_id ASC",
+        )
+        .map_err(|error| error.to_string())?;
+    let hotspots = hotspot_stmt
+        .query_map(params![project_id, state.active_snapshot_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .map(|result| {
+            let (id, payload_json, paper_count) =
+                result.map_err(|error| error.to_string())?;
+            let record = serde_json::from_str::<HotspotRecord>(&payload_json)
+                .map_err(|error| format!("Invalid V20 hotspot payload {id}: {error}"))?;
+            Ok(AgentImmersiveBackgroundHotspotV2 {
+                id,
+                field: record.field.clone(),
+                color: app17_topic_color(&record.field, record.topic_id),
+                paper_count,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if hotspots.is_empty() {
+        return Err("AGENT_IMMERSIVE_HOTSPOTS_MISSING".to_string());
+    }
+
+    let hotspot_ids = hotspots
+        .iter()
+        .map(|hotspot| hotspot.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut candidates_by_hotspot =
+        HashMap::<String, Vec<AgentImmersivePaperCandidate>>::with_capacity(hotspots.len());
+    let mut membership_stmt = conn
+        .prepare(
+            "SELECT membership.paper_id,membership.hotspot_id,papers.year
+             FROM v20_paper_memberships AS membership
+             JOIN papers
+               ON papers.project_id=membership.project_id
+              AND papers.id=membership.paper_id
+             WHERE membership.project_id=?1
+               AND membership.snapshot_id=?2
+             ORDER BY membership.hotspot_id ASC,membership.paper_id ASC",
+        )
+        .map_err(|error| error.to_string())?;
+    for row in membership_stmt
+        .query_map(params![project_id, state.active_snapshot_id], |row| {
+            Ok(AgentImmersivePaperCandidate {
+                id: row.get(0)?,
+                hotspot_id: row.get(1)?,
+                year: row.get(2)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+    {
+        let candidate = row.map_err(|error| error.to_string())?;
+        if hotspot_ids.contains(candidate.hotspot_id.as_str()) {
+            candidates_by_hotspot
+                .entry(candidate.hotspot_id.clone())
+                .or_default()
+                .push(candidate);
+        }
+    }
+
+    let available_count = candidates_by_hotspot.values().map(Vec::len).sum::<usize>();
+    let target_count = requested_count.min(available_count);
+    let allocations = allocate_agent_immersive_papers(
+        session_seed,
+        &hotspots,
+        &candidates_by_hotspot,
+        target_count,
+    )?;
+    let color_by_hotspot = hotspots
+        .iter()
+        .map(|hotspot| (hotspot.id.as_str(), hotspot.color.as_str()))
+        .collect::<HashMap<_, _>>();
+    let mut papers = Vec::with_capacity(target_count);
+    let mut selected_ids = HashSet::with_capacity(target_count);
+    for hotspot in &hotspots {
+        let take_count = allocations.get(&hotspot.id).copied().unwrap_or_default();
+        let mut candidates = candidates_by_hotspot
+            .remove(&hotspot.id)
+            .unwrap_or_default();
+        candidates.sort_by(|left, right| {
+            agent_immersive_hash(&[session_seed, &hotspot.id, &left.id])
+                .cmp(&agent_immersive_hash(&[
+                    session_seed,
+                    &hotspot.id,
+                    &right.id,
+                ]))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for candidate in candidates.into_iter().take(take_count) {
+            if !selected_ids.insert(candidate.id.clone()) {
+                continue;
+            }
+            papers.push(AgentImmersiveBackgroundPaperV2 {
+                id: candidate.id,
+                hotspot_id: candidate.hotspot_id,
+                color: color_by_hotspot
+                    .get(hotspot.id.as_str())
+                    .copied()
+                    .unwrap_or("#d8dde3")
+                    .to_string(),
+                year: candidate.year,
+            });
+        }
+    }
+    if papers.len() != target_count {
+        return Err(format!(
+            "AGENT_IMMERSIVE_SAMPLE_COUNT_MISMATCH:{}:{}",
+            papers.len(),
+            target_count
+        ));
+    }
+
+    Ok(AgentImmersiveBackgroundPayloadV2 {
+        source_snapshot_id: state.active_snapshot_id,
+        session_seed: session_seed.to_string(),
+        hotspots,
+        papers,
+    })
+}
+
+#[cfg(feature = "dev-tools")]
+pub fn audit_agent_immersive_background_database(
+    database_path: &Path,
+    project_id: &str,
+) -> Result<serde_json::Value, String> {
+    let conn = Connection::open_with_flags(
+        database_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| {
+        format!(
+            "Cannot open immersive background audit database {:?}: {error}",
+            database_path
+        )
+    })?;
+    let state = read_analysis_state(&conn, project_id)?
+        .ok_or_else(|| "AGENT_IMMERSIVE_ACTIVE_SNAPSHOT_MISSING".to_string())?;
+    let first = build_agent_immersive_background_payload(
+        &conn,
+        project_id,
+        "agent-immersive-audit-seed-a",
+        AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT,
+    )?;
+    let repeated = build_agent_immersive_background_payload(
+        &conn,
+        project_id,
+        "agent-immersive-audit-seed-a",
+        AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT,
+    )?;
+    let alternate = build_agent_immersive_background_payload(
+        &conn,
+        project_id,
+        "agent-immersive-audit-seed-b",
+        AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT,
+    )?;
+
+    let hash_payload = |payload: &AgentImmersiveBackgroundPayloadV2| {
+        let bytes = serde_json::to_vec(payload).map_err(|error| error.to_string())?;
+        let mut digest = Sha256::new();
+        digest.update(bytes);
+        Ok::<String, String>(format!("{:x}", digest.finalize()))
+    };
+    let first_hash = hash_payload(&first)?;
+    let repeated_hash = hash_payload(&repeated)?;
+    if first_hash != repeated_hash {
+        return Err("AGENT_IMMERSIVE_REPEAT_HASH_MISMATCH".to_string());
+    }
+
+    let first_paper_ids = first
+        .papers
+        .iter()
+        .map(|paper| paper.id.as_str())
+        .collect::<HashSet<_>>();
+    if first_paper_ids.len() != first.papers.len() {
+        return Err("AGENT_IMMERSIVE_DUPLICATE_PAPER_ID".to_string());
+    }
+    let hotspot_ids = first
+        .hotspots
+        .iter()
+        .map(|hotspot| hotspot.id.as_str())
+        .collect::<HashSet<_>>();
+    if hotspot_ids.len() != first.hotspots.len() {
+        return Err("AGENT_IMMERSIVE_DUPLICATE_HOTSPOT_ID".to_string());
+    }
+    if first
+        .papers
+        .iter()
+        .any(|paper| !hotspot_ids.contains(paper.hotspot_id.as_str()))
+    {
+        return Err("AGENT_IMMERSIVE_UNKNOWN_PAPER_HOTSPOT".to_string());
+    }
+
+    let expected_paper_count = (state.membership_count.max(0) as usize)
+        .min(AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT);
+    if first.papers.len() != expected_paper_count {
+        return Err(format!(
+            "AGENT_IMMERSIVE_AUDIT_PAPER_COUNT_MISMATCH:{}:{}",
+            first.papers.len(),
+            expected_paper_count
+        ));
+    }
+    if first.hotspots.len() != state.hotspot_count.max(0) as usize {
+        return Err(format!(
+            "AGENT_IMMERSIVE_AUDIT_HOTSPOT_COUNT_MISMATCH:{}:{}",
+            first.hotspots.len(),
+            state.hotspot_count
+        ));
+    }
+
+    let selected_count_by_hotspot = first.papers.iter().fold(
+        HashMap::<&str, usize>::new(),
+        |mut counts, paper| {
+            *counts.entry(paper.hotspot_id.as_str()).or_default() += 1;
+            counts
+        },
+    );
+    if expected_paper_count
+        >= first
+            .hotspots
+            .iter()
+            .map(|hotspot| {
+                hotspot
+                    .paper_count
+                    .max(0)
+                    .min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT as i64) as usize
+            })
+            .sum::<usize>()
+    {
+        for hotspot in &first.hotspots {
+            let minimum = hotspot
+                .paper_count
+                .max(0)
+                .min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT as i64)
+                as usize;
+            let selected = selected_count_by_hotspot
+                .get(hotspot.id.as_str())
+                .copied()
+                .unwrap_or_default();
+            if selected < minimum {
+                return Err(format!(
+                    "AGENT_IMMERSIVE_MINIMUM_QUOTA_MISMATCH:{}:{}:{}",
+                    hotspot.id, selected, minimum
+                ));
+            }
+        }
+    }
+
+    let alternate_ids = alternate
+        .papers
+        .iter()
+        .map(|paper| paper.id.as_str())
+        .collect::<HashSet<_>>();
+    let changed_paper_count = first_paper_ids
+        .symmetric_difference(&alternate_ids)
+        .count();
+    let required_change = expected_paper_count
+        .saturating_div(5)
+        .min(1_000);
+    if expected_paper_count >= 1_000 && changed_paper_count < required_change {
+        return Err(format!(
+            "AGENT_IMMERSIVE_ALTERNATE_SEED_TOO_SIMILAR:{}:{}",
+            changed_paper_count, required_change
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "status": "PASS",
+        "databasePath": database_path,
+        "projectId": project_id,
+        "sourceSnapshotId": first.source_snapshot_id,
+        "sourceMembershipCount": state.membership_count,
+        "paperCount": first.papers.len(),
+        "hotspotCount": first.hotspots.len(),
+        "uniquePaperCount": first_paper_ids.len(),
+        "uniqueHotspotCount": hotspot_ids.len(),
+        "repeatHash": first_hash,
+        "repeatHashMatches": first_hash == repeated_hash,
+        "alternateSeedChangedPaperIds": changed_paper_count,
+        "minimumPerHotspot": AGENT_IMMERSIVE_MIN_PER_HOTSPOT,
+        "coordinatesSerialized": false,
+        "databaseOpenMode": "read-only"
+    }))
 }
 
 #[tauri::command]
@@ -10652,6 +11174,7 @@ pub fn run() {
             get_v20_analysis_state,
             get_v20_hotspot_snapshot,
             get_v20_galaxy_payload,
+            load_agent_immersive_background,
             resolve_agent_galaxy_entities,
             set_app_credential,
             get_app_credential_status,

@@ -482,6 +482,35 @@ export type AgentGalaxyBackgroundPayloadV1 = {
   papers: AgentGalaxyBackgroundPaperV1[];
 };
 
+export type AgentImmersiveBackgroundHotspotV2 = {
+  id: string;
+  field: string;
+  color: string;
+  paperCount: number;
+};
+
+export type AgentImmersiveBackgroundPaperV2 = {
+  id: string;
+  hotspotId: string;
+  color: string;
+  year?: number;
+};
+
+/**
+ * Identity-only payload for the immersive Agent background.
+ *
+ * This schema deliberately has no position, offset, centroid, scale, layout
+ * version, or other semantic-coordinate field. World positions are generated
+ * from `sessionSeed` by the immersive renderer and must never be interpreted
+ * as theory-space coordinates.
+ */
+export type AgentImmersiveBackgroundPayloadV2 = {
+  sourceSnapshotId: string;
+  sessionSeed: string;
+  hotspots: AgentImmersiveBackgroundHotspotV2[];
+  papers: AgentImmersiveBackgroundPaperV2[];
+};
+
 export type V20AnalysisState = {
   projectId: string;
   activeSnapshotId: string;

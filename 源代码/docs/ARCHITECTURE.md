@@ -42,6 +42,14 @@ AgentDualBackgroundPage
 
 `AgentImmersiveBackgroundPayloadV2` 的 Schema 必须从类型层面排除 `position`、`offset`、`centroid` 和任何语义坐标。固定种子仅用于审计和截图；正常应用会话由 Web Crypto 生成种子并保存在 `sessionStorage`。
 
+当前实现入口：
+
+- `AgentDualBackgroundPage.tsx`：正式研究 Agent 页面、单活动渲染器切换、会话状态和极简提交契约。
+- `AgentImmersiveStarfieldCanvas.tsx`：身份稳定的会话随机空间、Curl 流和锐利恒星材质。
+- `AgentTheoryBackgroundCanvas.tsx`：完整理论载荷的 Agent 环境态/探索态适配。
+- `App17GalaxyCanvas.tsx`：以 `analysis | agent-theory` 和 `ambient | explore` 隔离 Agent 专用材质与交互，不改变独立分析星图默认值。
+- `load_agent_immersive_background`：只读抽样最多 6,000 篇真实论文并返回全部热点身份，不返回任何空间坐标。
+
 ## 目标数据流
 
 ```text

@@ -38,9 +38,20 @@ import {
   type GalaxyPaperJourneyState,
 } from "./App17PaperJourneyController";
 
-type App17GalaxyCommand = {
+export type App17GalaxyCommand = {
   kind: "reset" | "fit" | "top" | "enter-system" | "exit-system" | "reset-system" | "focus-paper" | "return-system-center" | "toggle-paper-inspection";
   nonce: number;
+};
+
+export type GalaxyVisualProfile = "analysis" | "agent-theory";
+
+export type GalaxyInteractionMode = "ambient" | "explore";
+
+export type GalaxyCameraPose = {
+  center: [number, number, number];
+  distance: number;
+  azimuth: number;
+  elevation: number;
 };
 
 export type GalaxyExplorationState = "overview" | "preparing" | "entering" | "system" | "exiting";
@@ -351,6 +362,12 @@ type App17GalaxyCanvasProps = {
   onBloomAvailabilityChange?: (available: boolean, reason?: string) => void;
   onPerformanceSnapshot?: (snapshot: GalaxyPerformanceSnapshot) => void;
   reviewCameraPreset?: GalaxyReviewCameraPreset;
+  visualProfile?: GalaxyVisualProfile;
+  interactionMode?: GalaxyInteractionMode;
+  labelsVisible?: boolean;
+  initialCameraPose?: GalaxyCameraPose;
+  onCameraPoseChange?: (pose: GalaxyCameraPose) => void;
+  onReady?: () => void;
 };
 
 type App17RenderPoint = {
@@ -1141,6 +1158,12 @@ export function App17GalaxyCanvas({
   onBloomAvailabilityChange,
   onPerformanceSnapshot,
   reviewCameraPreset,
+  visualProfile = "analysis",
+  interactionMode = "explore",
+  labelsVisible = true,
+  initialCameraPose,
+  onCameraPoseChange,
+  onReady,
 }: App17GalaxyCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const labelCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1163,6 +1186,11 @@ export function App17GalaxyCanvas({
   const fullscreenRef = useRef(fullscreen);
   const onBloomAvailabilityChangeRef = useRef(onBloomAvailabilityChange);
   const onPerformanceSnapshotRef = useRef(onPerformanceSnapshot);
+  const interactionModeRef = useRef(interactionMode);
+  const labelsVisibleRef = useRef(labelsVisible);
+  const initialCameraPoseRef = useRef(initialCameraPose);
+  const onCameraPoseChangeRef = useRef(onCameraPoseChange);
+  const onReadyRef = useRef(onReady);
   const resetDiagnosticsRef = useRef<(() => void) | null>(null);
   const invalidateRef = useRef<(() => void) | null>(null);
   const refreshSystemRef = useRef<(() => void) | null>(null);
@@ -1241,6 +1269,24 @@ export function App17GalaxyCanvas({
   }, [onPerformanceSnapshot]);
 
   useEffect(() => {
+    interactionModeRef.current = interactionMode;
+    invalidateRef.current?.();
+  }, [interactionMode]);
+
+  useEffect(() => {
+    labelsVisibleRef.current = labelsVisible;
+    invalidateRef.current?.();
+  }, [labelsVisible]);
+
+  useEffect(() => {
+    onCameraPoseChangeRef.current = onCameraPoseChange;
+  }, [onCameraPoseChange]);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  useEffect(() => {
     diagnosticsResetNonceRef.current = diagnosticsResetNonce;
     resetDiagnosticsRef.current?.();
   }, [diagnosticsResetNonce]);
@@ -1261,6 +1307,7 @@ export function App17GalaxyCanvas({
     renderer.setPixelRatio(currentPixelRatio);
     renderer.setClearColor(0x000000, 0);
     renderer.domElement.className = "app17-galaxy-canvas";
+    renderer.domElement.dataset.visualProfile = visualProfile;
     hostElement.appendChild(renderer.domElement);
     renderer.info.autoReset = false;
     const gpuInfo = readWebglRendererInfo(renderer);
@@ -1291,6 +1338,27 @@ export function App17GalaxyCanvas({
     if (import.meta.env.DEV && reviewCameraPreset) {
       applyGalaxyReviewCameraPreset(cameraPreset, sceneData, reviewCameraPreset);
     }
+    const restoredPose = initialCameraPoseRef.current;
+    if (
+      restoredPose
+      && restoredPose.center.every(Number.isFinite)
+      && Number.isFinite(restoredPose.distance)
+      && Number.isFinite(restoredPose.azimuth)
+      && Number.isFinite(restoredPose.elevation)
+    ) {
+      cameraPreset.center.set(...restoredPose.center);
+      cameraPreset.distance = THREE.MathUtils.clamp(
+        restoredPose.distance,
+        cameraPreset.minDistance,
+        cameraPreset.maxDistance,
+      );
+      cameraPreset.azimuth = restoredPose.azimuth;
+      cameraPreset.elevation = THREE.MathUtils.clamp(
+        restoredPose.elevation,
+        cameraPreset.minElevation,
+        cameraPreset.maxElevation,
+      );
+    }
     const fixedSystemReview = import.meta.env.DEV
       && Boolean(reviewCameraPreset?.startsWith("system-"));
     const farBackgroundRenderHotspots = sceneData.kind === "app15"
@@ -1307,13 +1375,23 @@ export function App17GalaxyCanvas({
     root.scale.set(1, 1, cameraPreset.zScale);
     overviewRoot.add(root);
 
-    const paperLayer = createPaperLayer(sceneData.papers, currentPixelRatio, sceneData.kind);
+    const paperLayer = createPaperLayer(
+      sceneData.papers,
+      currentPixelRatio,
+      sceneData.kind,
+      visualProfile,
+    );
     root.add(paperLayer.object);
 
     const orbitLayer = sceneData.orbitPositions ? createOrbitLayer(sceneData.orbitPositions) : undefined;
     if (orbitLayer) root.add(orbitLayer.object);
 
-    const hotspotLayer = createHotspotLayer(sceneData.hotspots, currentPixelRatio, sceneData.kind);
+    const hotspotLayer = createHotspotLayer(
+      sceneData.hotspots,
+      currentPixelRatio,
+      sceneData.kind,
+      visualProfile,
+    );
     root.add(hotspotLayer.object);
 
     const focusSprite = new THREE.Sprite(createFocusMaterial());
@@ -1377,6 +1455,16 @@ export function App17GalaxyCanvas({
       lastY: 0,
       pauseUntil: 0,
       viewMode: "overview",
+    };
+    const publishCameraPose = () => {
+      const callback = onCameraPoseChangeRef.current;
+      if (!callback) return;
+      callback({
+        center: [orbit.center.x, orbit.center.y, orbit.center.z],
+        distance: orbit.distance,
+        azimuth: orbit.azimuth,
+        elevation: orbit.elevation,
+      });
     };
     let overviewFramingMode: "initial" | "fit" | "manual" = "initial";
     const exploration: GalaxyExplorationRuntime = {
@@ -1505,6 +1593,8 @@ export function App17GalaxyCanvas({
     let disposed = false;
     let runtimeActive = active;
     let renderRequested = true;
+    let readyReported = false;
+    let lastPosePublishedAt = Number.NEGATIVE_INFINITY;
     let labelDirty = true;
     let lastRenderTime = 0;
     let lastLabelRenderTime = Number.NEGATIVE_INFINITY;
@@ -4200,6 +4290,7 @@ export function App17GalaxyCanvas({
     };
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
       if (paperJourney.isMoving()) return;
       if (event.button !== 0 || orbit.pointerPressed) return;
@@ -4224,6 +4315,7 @@ export function App17GalaxyCanvas({
     };
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
       if (paperJourney.isMoving()) return;
       updatePointer(event);
@@ -4288,6 +4380,7 @@ export function App17GalaxyCanvas({
     };
 
     const handlePointerUp = (event: PointerEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       updatePointer(event);
       if (!orbit.pointerPressed) return;
       const wasDragging = orbit.dragging;
@@ -4328,6 +4421,7 @@ export function App17GalaxyCanvas({
     };
 
     const handlePointerCancel = (event: PointerEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       if (!orbit.pointerPressed) return;
       const wasDragging = orbit.dragging;
       orbit.pointerPressed = false;
@@ -4345,6 +4439,7 @@ export function App17GalaxyCanvas({
     };
 
     const handleDoubleClick = (event: MouseEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       if (
         exploration.state !== "system"
         || (paperJourney.isMoving() && paperJourney.getState() !== "flying-in")
@@ -4368,6 +4463,7 @@ export function App17GalaxyCanvas({
     };
 
     const handlePointerLeave = () => {
+      if (interactionModeRef.current !== "explore") return;
       if (systemHoverPickTimer) {
         window.clearTimeout(systemHoverPickTimer);
         systemHoverPickTimer = 0;
@@ -4442,6 +4538,7 @@ export function App17GalaxyCanvas({
     };
 
     const handleWheel = (event: WheelEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       event.preventDefault();
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
       if (paperJourney.isMoving()) return;
@@ -4458,6 +4555,7 @@ export function App17GalaxyCanvas({
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (interactionModeRef.current !== "explore") return;
       if (event.key !== "Escape" || exploration.state === "overview") return;
       event.preventDefault();
       if (exploration.state === "system" && (paperJourney.getState() === "flying-out" || paperJourney.getState() === "releasing")) {
@@ -5074,6 +5172,20 @@ export function App17GalaxyCanvas({
         camera.layers.set(0);
         renderer.setRenderTarget(null);
         renderer.render(scene, camera);
+        if (!readyReported) {
+          readyReported = true;
+          onReadyRef.current?.();
+        }
+        if (
+          onCameraPoseChangeRef.current
+          && (
+            lastPosePublishedAt === Number.NEGATIVE_INFINITY
+            || now - lastPosePublishedAt >= 120
+          )
+        ) {
+          lastPosePublishedAt = now;
+          publishCameraPose();
+        }
         const bloomStartedAt = measurePerformance && bloomMode !== "none" ? performance.now() : 0;
         if (bloomMode !== "none" && bloomPipeline) {
           try {
@@ -5161,7 +5273,11 @@ export function App17GalaxyCanvas({
         if (autoRotateActive || orbit.dragging || orbitChanged) labelDirty = true;
       }
 
-      if (labelDirty && now - lastLabelRenderTime >= APP17_LABEL_FRAME_INTERVAL) {
+      if (
+        labelsVisibleRef.current
+        && labelDirty
+        && now - lastLabelRenderTime >= APP17_LABEL_FRAME_INTERVAL
+      ) {
         const measurePerformance = ensureDiagnosticsActive(now);
         const labelStartedAt = measurePerformance ? performance.now() : 0;
         if (exploration.blend >= 0.7 && systemResources) {
@@ -5196,6 +5312,10 @@ export function App17GalaxyCanvas({
         if (measurePerformance) labelSamples.push({ timestamp: now, value: performance.now() - labelStartedAt });
         labelDirty = false;
         lastLabelRenderTime = now;
+      } else if (!labelsVisibleRef.current && labelDirty) {
+        const context = labelCanvas!.getContext("2d");
+        context?.clearRect(0, 0, labelCanvas!.width, labelCanvas!.height);
+        labelDirty = false;
       }
 
       renderRequested = false;
@@ -5236,6 +5356,7 @@ export function App17GalaxyCanvas({
 
     return () => {
       disposed = true;
+      publishCameraPose();
       if (frameId) cancelAnimationFrame(frameId);
       clearAutoResumeTimer();
       if (systemHoverPickTimer) window.clearTimeout(systemHoverPickTimer);
@@ -5281,13 +5402,17 @@ export function App17GalaxyCanvas({
       bloomPipeline?.dispose();
       renderer.dispose();
     };
-  }, [farBackgroundPayload, reviewCameraPreset, sceneData]);
+  }, [farBackgroundPayload, reviewCameraPreset, sceneData, visualProfile]);
 
   return (
     <>
       <div className="reference-galaxy-backdrop" />
       <div ref={containerRef} className="reference-galaxy-canvas-host" />
-      <canvas ref={labelCanvasRef} className="app17-galaxy-label-canvas" />
+      <canvas
+        ref={labelCanvasRef}
+        className="app17-galaxy-label-canvas"
+        style={{ display: labelsVisible ? "block" : "none" }}
+      />
       <div className="reference-galaxy-vignette" />
     </>
   );
@@ -9469,6 +9594,7 @@ function createPaperLayer(
   papers: App17ParticlePoint[],
   pixelRatio: number,
   kind: App17SceneData["kind"],
+  visualProfile: GalaxyVisualProfile = "analysis",
   dynamicPositions = false,
 ) {
   const count = papers.length;
@@ -9509,7 +9635,7 @@ function createPaperLayer(
   const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);
   geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);
 
-  const material = createPaperMaterial(pixelRatio, kind);
+  const material = createPaperMaterial(pixelRatio, kind, visualProfile);
   const object = new THREE.Points(geometry, material);
   object.frustumCulled = false;
   let selectedTopicKey = "";
@@ -9571,7 +9697,12 @@ function createPaperLayer(
   };
 }
 
-function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, kind: App17SceneData["kind"]) {
+function createHotspotLayer(
+  hotspots: App17RenderPoint[],
+  pixelRatio: number,
+  kind: App17SceneData["kind"],
+  visualProfile: GalaxyVisualProfile = "analysis",
+) {
   const count = hotspots.length;
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
@@ -9610,7 +9741,9 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
     rayStrengths[index] = rayRank === undefined ? 0 : 0.08 + (1 - rayRank / 7) * 0.14;
     breathPhases[index] = hotspot.seed * Math.PI * 2;
     breathSpeeds[index] = (Math.PI * 2) / hotspot.breathPeriodSeconds;
-    breathAmplitudes[index] = hotspot.breathAmplitudeScale;
+    breathAmplitudes[index] = visualProfile === "agent-theory"
+      ? 0
+      : hotspot.breathAmplitudeScale;
   });
 
   const geometry = new THREE.BufferGeometry();
@@ -9628,7 +9761,11 @@ function createHotspotLayer(hotspots: App17RenderPoint[], pixelRatio: number, ki
   const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);
   geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);
 
-  const material = createHotspotPointSourceMaterial(pixelRatio, kind);
+  const material = createHotspotPointSourceMaterial(
+    pixelRatio,
+    kind,
+    visualProfile,
+  );
   const object = new THREE.Points(geometry, material);
   object.frustumCulled = false;
   let selectedTopicKey = "";
@@ -10481,7 +10618,12 @@ function createSystemRepresentativeBloomMaterial(pixelRatio: number) {
   });
 }
 
-function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
+function createPaperMaterial(
+  pixelRatio: number,
+  kind: App17SceneData["kind"],
+  visualProfile: GalaxyVisualProfile = "analysis",
+) {
+  const agentTheory = visualProfile === "agent-theory";
   return new THREE.ShaderMaterial({
     uniforms: {
       uPixelRatio: { value: pixelRatio },
@@ -10498,7 +10640,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       uSystemDepthStrength: { value: 0 },
     },
     transparent: true,
-    depthWrite: false,
+    depthWrite: agentTheory,
     depthTest: true,
     blending: THREE.NormalBlending,
     toneMapped: false,
@@ -10522,6 +10664,7 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
       uniform float uSystemDepthStrength;
       varying vec3 vColor;
       varying float vAlpha;
+      varying float vCssSize;
       void main() {
         vColor = color;
         float isolationProgress = ${kind === "app15"
@@ -10557,16 +10700,56 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
         float displayScale = mix(1.0, distanceScale, uDistanceAttenuation);
         float overviewPointScale = mix(1.0, 0.62, uOverviewFarBlend);
         float overviewMinimumCssSize = mix(uMinimumCssSize, 1.15, uOverviewFarBlend);
-        gl_PointSize = max(
+        vCssSize = max(
           pointSize * pointScale * overviewPointScale,
           overviewMinimumCssSize * pointScale
-        ) * uPixelRatio * displayScale;
+        ) * displayScale;
+        gl_PointSize = vCssSize * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
-    fragmentShader: `
+    fragmentShader: agentTheory ? `
       varying vec3 vColor;
       varying float vAlpha;
+      varying float vCssSize;
+      void main() {
+        if (vAlpha <= 0.001) discard;
+        vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(point);
+        float antialias = max(fwidth(radius), 0.012);
+        float edge = 1.0 - smoothstep(0.92, 0.92 + antialias, radius);
+        if (edge <= 0.0) discard;
+        float sphereZ = sqrt(max(0.0, 1.0 - radius * radius));
+        vec3 normal = normalize(vec3(point, sphereZ));
+        float light = 0.42 + 0.58 * max(0.0, dot(
+          normal,
+          normalize(vec3(-0.38, 0.46, 0.80))
+        ));
+        float limb = pow(max(0.0, sphereZ), 0.62);
+        float tiny = 1.0 - smoothstep(2.2, 3.1, vCssSize);
+        float hotCore = 1.0 - smoothstep(
+          0.18,
+          0.18 + antialias * 1.6,
+          radius
+        );
+        float diamond = 1.0 - smoothstep(
+          0.38,
+          0.38 + antialias,
+          abs(point.x) + abs(point.y)
+        );
+        float needle = mix(hotCore, diamond, tiny);
+        float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
+        vec3 muted = mix(vec3(luminance), vColor, 0.20);
+        vec3 color = mix(muted, vec3(0.995, 0.997, 1.0), hotCore * 0.86 + tiny * 0.48);
+        float energy = mix(light * limb, 0.92, tiny) * 0.76 + needle * 0.56;
+        float alpha = edge * vAlpha * clamp(energy, 0.0, 1.0);
+        if (alpha < 0.012) discard;
+        gl_FragColor = vec4(color * min(1.08, energy), alpha);
+      }
+    ` : `
+      varying vec3 vColor;
+      varying float vAlpha;
+      varying float vCssSize;
       void main() {
         if (vAlpha <= 0.001) discard;
         vec2 centered = (gl_PointCoord - vec2(0.5)) * 2.0;
@@ -10585,7 +10768,12 @@ function createPaperMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
   });
 }
 
-function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneData["kind"]) {
+function createHotspotPointSourceMaterial(
+  pixelRatio: number,
+  kind: App17SceneData["kind"],
+  visualProfile: GalaxyVisualProfile = "analysis",
+) {
+  const agentTheory = visualProfile === "agent-theory";
   return new THREE.ShaderMaterial({
     uniforms: {
       uPixelRatio: { value: pixelRatio },
@@ -10600,9 +10788,9 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       uOverviewFarBlend: { value: 0 },
     },
     transparent: true,
-    depthWrite: false,
+    depthWrite: agentTheory,
     depthTest: true,
-    blending: THREE.AdditiveBlending,
+    blending: agentTheory ? THREE.NormalBlending : THREE.AdditiveBlending,
     toneMapped: false,
     vertexShader: `
       attribute vec3 color;
@@ -10632,6 +10820,7 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
       varying float vCoreVisibility;
       varying float vHaloVisibility;
       varying float vRayVisibility;
+      varying float vCssSize;
       void main() {
         vColor = color;
         vPointIntensity = pointIntensity;
@@ -10688,15 +10877,62 @@ function createHotspotPointSourceMaterial(pixelRatio: number, kind: App17SceneDa
         vec4 mvPosition = modelViewMatrix * vec4(transformedPosition, 1.0);
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.74, 1.22);
         float displayScale = mix(1.0, distanceScale, uDepthAttenuation);
-        gl_PointSize = pointSize
+        vCssSize = pointSize
           * pointScale
           * mix(1.0, 0.68, uOverviewFarBlend)
-          * displayScale
-          * uPixelRatio;
+          * displayScale;
+        gl_PointSize = vCssSize * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
-    fragmentShader: `
+    fragmentShader: agentTheory ? `
+      varying vec3 vColor;
+      varying float vPointIntensity;
+      varying float vHaloStrength;
+      varying float vRayStrength;
+      varying float vCoreVisibility;
+      varying float vHaloVisibility;
+      varying float vRayVisibility;
+      varying float vCssSize;
+      void main() {
+        vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(point);
+        float antialias = max(fwidth(radius), 0.012);
+        float edge = 1.0 - smoothstep(0.92, 0.92 + antialias, radius);
+        if (edge <= 0.0 || vCoreVisibility <= 0.001) discard;
+        float sphereZ = sqrt(max(0.0, 1.0 - radius * radius));
+        vec3 normal = normalize(vec3(point, sphereZ));
+        float key = max(0.0, dot(normal, normalize(vec3(-0.42, 0.48, 0.76))));
+        float fill = max(0.0, dot(normal, normalize(vec3(0.46, -0.16, 0.42))));
+        float limb = pow(max(0.0, sphereZ), 0.42);
+        float surface = (0.32 + key * 0.58 + fill * 0.10) * limb;
+        float hotCore = 1.0 - smoothstep(
+          0.20,
+          0.20 + antialias * 1.4,
+          radius
+        );
+        float axis = min(abs(point.x), abs(point.y));
+        float spike = (1.0 - smoothstep(
+          0.014,
+          0.014 + antialias,
+          axis
+        )) * pow(max(0.0, 1.0 - radius), 7.0)
+          * smoothstep(3.1, 5.4, vCssSize);
+        float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
+        vec3 muted = mix(vec3(luminance), vColor, 0.34);
+        vec3 color = mix(
+          muted,
+          vec3(1.0, 0.992, 0.965),
+          hotCore * 0.88 + spike * 0.25
+        );
+        float energy = surface * (0.78 + vPointIntensity * 0.18)
+          + hotCore * 0.62
+          + spike * 0.14;
+        float alpha = edge * vCoreVisibility * clamp(energy, 0.0, 1.0);
+        if (alpha < 0.012) discard;
+        gl_FragColor = vec4(color * min(1.10, energy), alpha);
+      }
+    ` : `
       varying vec3 vColor;
       varying float vPointIntensity;
       varying float vHaloStrength;
