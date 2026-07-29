@@ -38,11 +38,12 @@ for (const name of requiredDocs) {
 }
 
 requireText("PROJECT.md", "## 最终目标", "final goal section");
-requireText("PROJECT.md", "M1.3f", "current work package");
+requireText("PROJECT.md", "M1.3g", "current work package");
 requireText("ROADMAP.md", "## 里程碑", "milestone section");
 requireText("ROADMAP.md", "M1.3e 沉浸流动与理论恒星材质修订", "M1.3e stage");
 requireText("ROADMAP.md", "M1.3f Agent 理论背景纵深与深空层次调整", "M1.3f stage");
-requireText("STATUS.md", "当前分支：`codex/agent-dual-background-v2`", "current branch");
+requireText("ROADMAP.md", "M1.3g Agent 理论外围巡航与观测尺度恒星 LOD", "M1.3g stage");
+requireText("STATUS.md", "当前分支：`codex/agent-theory-perimeter-lod`", "current branch");
 requireText("STATUS.md", "IN_PROGRESS / UNVERIFIED", "current status");
 requireText("ARCHITECTURE.md", "## 现有基础", "as-built architecture section");
 requireText("DECISIONS.md", "D-033", "GPGPU flow decision");
@@ -52,18 +53,20 @@ requireText("DECISIONS.md", "D-036", "documentation governance decision");
 requireText("DECISIONS.md", "D-037", "Agent theory depth decision");
 requireText("DECISIONS.md", "D-038", "deep-field layer decision");
 requireText("DECISIONS.md", "D-039", "ambient co-orbit decision");
+requireText("DECISIONS.md", "D-042", "perimeter cruise decision");
+requireText("DECISIONS.md", "D-043", "Explore return decision");
+requireText("DECISIONS.md", "D-044", "observational stellar LOD decision");
+requireText("DECISIONS.md", "D-045", "runtime WebGL readiness and coordinate-unit decision");
 
 for (const heading of [
   "## 最终目标摘要",
   "## 阶段事实",
-  "## 当前工作包：M1.3f",
+  "## 当前工作包：M1.3g",
   "### 1. 基线",
   "### 2. 计划步骤与完成条件",
   "### 3. 实际开发日志",
-  "### 4. 测试与证据",
-  "### 5. 方案偏差与风险",
-  "### 6. 当前进度",
-  "### 7. 遗留问题和下一步",
+  "### 4. 当前验证",
+  "### 5. 已知风险",
   "## 开发总账更新规则",
 ]) {
   requireText("DEVELOPMENT.md", heading, heading);
@@ -71,7 +74,7 @@ for (const heading of [
 
 requireText(
   "DEVELOPMENT.md",
-  "07de19deedd051bb17f19fc602ca1ec11006d0f7",
+  "220a5c4",
   "current baseline commit",
 );
 requireText(
@@ -98,7 +101,7 @@ const result = {
   audit: "project-documentation-v1",
   generatedAt: new Date().toISOString(),
   status: failed.length === 0 ? "PASS" : "FAIL",
-  currentStage: "M1.3f",
+  currentStage: "M1.3g",
   requiredDocuments: requiredDocs,
   checks,
   failedChecks: failed,

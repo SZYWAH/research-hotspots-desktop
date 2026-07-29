@@ -2,7 +2,7 @@
 
 更新时间：2026-07-29
 
-当前分支：`codex/agent-dual-background-v2`
+当前分支：`codex/agent-theory-perimeter-lod`
 
 M1.3d 基线提交：`63e83d3cd7b49d513df1613dfb42ef01fd1b5ce0`
 
@@ -10,7 +10,9 @@ M1.3e 技术检查点：`ea5c8b843dc94f328caa25e32b358150b38c1518`
 
 M1.3e 文档检查点：`07de19d`
 
-当前阶段：M1.3f“Agent 理论背景纵深与深空层次调整”归档，状态为 `TECHNICAL PASS / PRODUCT VISUAL FAIL`
+M1.3f 失败归档提交：`220a5c4`
+
+当前阶段：M1.3g“Agent 理论外围巡航与观测尺度恒星 LOD”，状态为 `IN_PROGRESS / UNVERIFIED`
 
 当前开发总账：[DEVELOPMENT.md](./DEVELOPMENT.md)
 
@@ -25,8 +27,16 @@ M1.3e 文档检查点：`07de19d`
 - 用户在 M1.3e 技术复验后确认 Agent 理论背景仍像薄板状、低饱和二维数据点云。M1.3f 仅修订 Agent 理论显示空间、构图、深度材质和非语义深空装饰层。
 - M1.3f 允许 Agent 理论背景使用上限为 `2.2` 的可审计纵深增强；独立理论星图、展示星图、数据库和原始理论载荷继续保持原始 XYZ。
 - M1.3f 的纵深矩阵、深度材质、装饰层和共轨数学审计通过，但用户实机确认默认构图仍像二维圆片散点图，只有主动鼠标交互时才产生明显三维感；该产品视觉结论为 `FAIL`。
+- M1.3g 从 M1.3f 的失败归档提交创建隔离分支；外围巡航、连续返回和恒星 LOD 仅进入 Agent 理论背景，不修改独立理论星图、展示星图、数据库或原始 XYZ。
+- M1.3g 首轮桌面运行出现理论背景全黑。R1 确认并修复三项运行时根因：InstancedMesh Shader 重复声明 Three.js 自动注入的 `instanceColor`；外围剖面使用原始单位而场景使用 `0.0047` 缩放单位；热点 PSF/光球尺寸未统一到渲染世界单位。
 
 ## PASS
+
+- M1.3g-R1 已为论文 PSF、热点核心/光学 PSF、光球核心/日冕和深空装饰材质设置可诊断名称；热点 Shader 不再手动声明 `instanceColor`，自定义 `instanceSeed` 与 `instanceBlend` 保留。
+- Agent 理论背景撤掉遮罩前会真实编译并检查 WebGL program、清空首帧错误并使用 Three.js `Frustum` 确认至少一个真实论文或热点可见；失败会停止 RAF、禁止保存检查点并显示可重试错误。
+- 外围剖面、巡航相机、场景实体与热点光学尺寸已统一到 `APP15_THEORY_COORDINATE_SCALE=0.0047` 后的 Three.js 世界单位；旧检查点版本被隔离。
+- M1.3g 外围专项审计读取 25,463 篇论文和 160 个热点，原始坐标哈希仍为 `49c931dad6ccee730f7e6939010971c42a829db1a731c4feb77a570a8388bf37`；96 扇区 8 分钟覆盖率为 `91.67%`，近景 5 秒位移中位数为 `16.248px`，连续返回无单调违规。
+- Tauri balanced Ambient 已完成真实首帧和 15 秒低负载观察：论文与热点可见、无间歇性黑屏、未出现原错误中的重复无效 program；热点尺寸单位修正后不再出现巨型蓝色光弧。
 
 - 理论星图和展示星图已有稳定基线，生产布局继续使用 v3。
 - 轻量 `AgentGalaxyBackgroundPayloadV1` 已生成并通过确定性、身份、大小和哈希审计。
@@ -114,6 +124,7 @@ M1.3e 文档检查点：`07de19d`
 - M1.3c 把真实身份约束错误扩张为理论空间约束，沉浸视图继续继承理论热点中心和论文语义偏移。Tauri 实机中启动后仍呈现理论星图式热点团簇，用户无法找到 `agent背景.html` 的随机流动星海，因此该产品结构判定为 `FAIL`。
 - M1.3d 双背景空间拆分正确，但沉浸 Shader 只产生原位微幅偏移，5 秒内缺少可追踪输运；Agent 理论论文被重复白化，热点使用方向光球面圆片。其技术状态保留 `PASS`，产品视觉状态改为 `FAIL`。
 - M1.3f 仅靠全图远视角、Z 轴增强、前中后景材质和微幅共轨漂移，未能让默认 Agent 理论背景摆脱圆片散点图观感；该方向停止扩张。
+- M1.3g 首轮运行时 Shader 因 `instanceColor` 重复声明编译失败并持续调用无效 program，理论背景完全空白；原静态审计错误地将源码结构通过视为运行时成功。本次事故技术结论记录为 `FAIL`，已由 R1 修复并建立真实 WebGL 就绪门。
 
 ## UNVERIFIED
 
@@ -124,6 +135,8 @@ M1.3e 文档检查点：`07de19d`
 - 本轮只执行了低负载浏览器检查，未执行新的全屏、录屏或高质量 GPU 压力测试。
 - Tauri 原生窗口中 `resolve_agent_galaxy_entities` 对真实活动库新增论文的只读解析。
 - 相位呼吸、时间地层和正式 Agent 后端驱动的真实回答状态。
+- M1.3g-R1 的 Explore 原地冻结、最佳全图重置、从全图/热点内部返回外围、背景往返检查点和 100% 像素 LOD 检查尚未完成本轮桌面验收。
+- M1.3g 产品视觉仍为 `UNVERIFIED`；R1 技术修复不能替代用户对外围构图与恒星质感的最终判断。
 
 ## 当前风险
 
@@ -136,9 +149,9 @@ M1.3e 文档检查点：`07de19d`
 
 ## 下一步
 
-1. 归档 M1.3f 失败视觉基线并创建外围巡航隔离分支。
-2. 使用外围安全壳巡航和观测尺度恒星 LOD 替换远距离全图与持续圆片逻辑。
-3. 用户接受两套基础视觉后，再规划沉浸聚焦、Thinking 波纹、两套背景状态动画和正式科研 Agent 后端。
+1. 完成 Explore 冻结、最佳全图重置、从全图/热点内部返回外围和背景往返的剩余低负载 Tauri 验收。
+2. 对 Point / PSF / Near-PSF / Sphere 做 100% 像素检查，确认不存在圆片、宽软边和尖芒滥用。
+3. 由用户判断外围运动与恒星质感；通过前 M1.3g 保持 `IN_PROGRESS / UNVERIFIED`。
 
 ## 证据
 
@@ -148,6 +161,7 @@ M1.3e 文档检查点：`07de19d`
 - [阶段 1 实现审计](./evidence/agent-galaxy-immersive-stage1-2026-07-28.json)
 - [M1.3d 双背景实现与低负载验收](./evidence/agent-dual-background-v2-2026-07-28.json)
 - [M1.3e 技术实现与运行时修复](./evidence/agent-m1.3e-technical-2026-07-29.json)
+- [M1.3g 外围巡航、恒星 LOD 与 R1 空白修复](./evidence/agent-m1.3g-perimeter-stellar-lod-2026-07-29.json)
 - [沉浸版保留式改造准备](./AGENT_IMMERSIVE_BACKGROUND_PREPARATION.md)
 - [旧审计替换清单](./evidence/agent-galaxy-audit-replacement-v1.md)
 - [产品目标](./PROJECT.md)

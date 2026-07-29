@@ -23,6 +23,10 @@ M1.3d 重新建立两种互不继承空间结构的产品背景：
 
 M1.3f 在理论背景内部进一步区分“原始理论空间”和“Agent 显示空间”。原始载荷与数据库仍保存未经修改的 XYZ；只有 `agent-theory` 渲染入口创建确定的纵深配置，并将同一显示变换一致应用于论文、热点、标签、拾取、相机拟合和热点进入。独立理论星图始终绕过该变换。
 
+M1.3g 在 Agent 显示空间之外增加“观察控制层”。它读取增强后的只读坐标构建 PCA 外围安全壳，但不改写任何实体位置。Ambient 相机由会话随机巡航控制器写入；Explore 继续由既有 Orbit/热点系统控制器写入；返回外围使用独立、有限时长的连续过渡。三个模式任意时刻只有一个相机写入者。
+
+M1.3g-R1 明确渲染坐标契约：纵深增强后的 XYZ 先统一乘以 `APP15_THEORY_COORDINATE_SCALE`，外围剖面、巡航相机、论文与热点世界坐标、PSF 世界直径和真实光球半径全部消费同一单位。原始 XYZ 与数据库值不变；禁止外围控制器在原始单位、渲染器在缩放单位的双尺度运行。
+
 ## M1.3d 双背景数据流
 
 ```text
@@ -100,6 +104,37 @@ App17GalaxyPayload（原始理论 XYZ，只读）
   → 前中后景恒星材质 + 世界锚定装饰层
   → Ambient 共轨相机 / Explore 交互 / 热点进入
 ```
+
+## M1.3g 外围巡航与恒星 LOD 数据流
+
+```text
+Agent 增强显示 XYZ（只读）
+  → APP15_THEORY_COORDINATE_SCALE（统一 Three.js 世界单位）
+  → PCA 主平面
+  → 96 扇区真实外缘 + 保守包络 + 安全间隔
+  → 会话随机 CruiseCheckpoint
+  → cruise / explore / returning 单一相机写入者
+  → 观测深度与投影视直径
+  → Point / PSF / Near-PSF / Sphere LOD
+  → Agent 理论渲染器
+```
+
+- 巡航检查点保存种子、固定步数、位置、速度、加速度、PRNG 状态和已访问扇区；背景往返时恢复同一会话路径。
+- 普通论文永不进入真实光球；近景热点最多占用 12 个共享实例槽。Sprite 与 Sphere 共享业务实体 ID、拾取来源和屏幕中心。
+- Explore 不重新布局、不自动切到最佳全图；最佳全图只作为 Explore 内显式“重置理论视图”命令。
+
+### Agent 理论真实 WebGL 就绪门
+
+```text
+named Agent theory materials
+  → renderer.compile(scene, camera)
+  → WebGL COMPILE_STATUS / LINK_STATUS + Three diagnostics
+  → drain and verify first-frame WebGL errors
+  → real THREE.Frustum semantic visibility > 0
+  → onReady / remove switch mask
+```
+
+任一步失败都会记录具体材质名称，停止该画布 RAF，禁止保存当前巡航检查点，并通过 `onRuntimeError` 显示“理论背景渲染失败”及重试入口。就绪门不得通过关闭 Three.js Shader 错误检查绕过。连续三帧真实语义可见比例低于 5% 时，巡航相机仍留在外围，只平滑重构图到有效包围盒，并记录 `perimeter-reframe`。
 
 `AgentTheoryDepthProfileV1` 的比例由快照坐标统计确定，限制在 `1.0–2.2`。增强载荷只存在于 Agent 页面内存，不写回数据库、快照或导出资源。Ambient 与 Explore 消费同一增强载荷，因此切换模式不替换坐标空间。
 

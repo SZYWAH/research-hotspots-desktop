@@ -1,0 +1,116 @@
+{
+  "workPackage": "M1.3g-R1",
+  "generatedAt": "2026-07-29",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "220a5c4",
+  "technicalCommit": "2d14b8b",
+  "status": {
+    "incident": "FAIL",
+    "technicalRepair": "PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "incident": {
+    "symptom": "Agent theory background rendered blank in the Tauri runtime.",
+    "rootCauses": [
+      {
+        "id": "duplicate-instance-color",
+        "detail": "The InstancedMesh vertex shader manually declared instanceColor while Three.js injected the same attribute."
+      },
+      {
+        "id": "perimeter-scene-unit-mismatch",
+        "detail": "The perimeter profile and camera used unscaled display coordinates while the scene used APP15_THEORY_COORDINATE_SCALE=0.0047."
+      },
+      {
+        "id": "hotspot-optical-unit-mismatch",
+        "detail": "Hotspot PSF diameter and sphere radius were not converted to the scene world unit, producing giant blue arcs after visibility was restored."
+      }
+    ],
+    "auditGap": "Previous static checks did not compile/link the real WebGL programs or measure visibility with the actual Three.js camera and frustum."
+  },
+  "repair": {
+    "materialNames": [
+      "AgentTheoryPaperPSF",
+      "AgentTheoryHotspotCorePSF",
+      "AgentTheoryHotspotOpticalPSF",
+      "AgentTheoryHotspotSphereCore",
+      "AgentTheoryHotspotSphereCorona",
+      "AgentTheoryDecorativeDeepField"
+    ],
+    "runtimeReadyGate": [
+      "renderer.compile",
+      "WebGL LINK_STATUS and Three.js diagnostics",
+      "first-frame WebGL error drain",
+      "real semantic visibility greater than zero"
+    ],
+    "failureBehavior": [
+      "stop RAF",
+      "do not persist the invalid cruise checkpoint",
+      "report the failed material",
+      "show a retryable theory-rendering error"
+    ],
+    "coordinateScale": 0.0047,
+    "checkpointProfileVersion": "agent-theory-perimeter-v1-r1"
+  },
+  "dataIdentity": {
+    "snapshotId": "project-default:v20:1784365136031",
+    "paperCount": 25463,
+    "hotspotCount": 160,
+    "rawCoordinateSha256": "49c931dad6ccee730f7e6939010971c42a829db1a731c4feb77a570a8388bf37",
+    "depthScale": 1.9478813603445035,
+    "perimeterProfileSha256": "d7f8e467a53f4b63a7c3aecb1d52f3e220d971ddee6e9748bcc84d8d7e004c80"
+  },
+  "perimeterMetrics": {
+    "medianRadiusWorld": 0.508978829589,
+    "maxRadiusWorld": 0.529915724049,
+    "verticalRadiusWorld": 0.144237579538,
+    "sectorCoverageEightMinutes": 0.9166667,
+    "rawVisibilityRatio": {
+      "p05": 0.317878,
+      "median": 0.356828,
+      "p95": 0.407681
+    },
+    "fiveSecondMotionPx": {
+      "allMedian": 14.0952,
+      "nearMedian": 16.2484,
+      "p75": 20.1141,
+      "p95": 53.6828
+    },
+    "returnDurationMs": 1804.52,
+    "returnMonotonicViolations": 0
+  },
+  "automatedValidation": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "cargoCheckJ2": "PASS",
+    "agentTheoryPerimeterLod": "PASS",
+    "agentTheoryStellarMaterial": "PASS",
+    "agentTheoryDepth": "PASS",
+    "dualBackgroundIsolation": "PASS",
+    "galaxyVisualInvariants": "PASS",
+    "projectDocumentation": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "tauriLowLoadValidation": {
+    "ambientFirstFrame": "PASS",
+    "ambientFifteenSecondsWithoutBlankFrame": "PASS",
+    "duplicateShaderOrInvalidProgramError": "NOT_OBSERVED",
+    "giantHotspotArcAfterUnitRepair": "NOT_OBSERVED",
+    "exploreFreeze": "UNVERIFIED",
+    "bestViewReset": "UNVERIFIED",
+    "returnToPerimeter": "UNVERIFIED",
+    "backgroundRoundTrip": "UNVERIFIED",
+    "pixelLevelLodInspection": "UNVERIFIED",
+    "stopReason": "Computer-control testing stopped after user input was detected."
+  },
+  "scopeProtection": {
+    "rawTheoryCoordinatesChanged": false,
+    "databaseChanged": false,
+    "activeSnapshotChanged": false,
+    "analysisTheoryGalaxyChanged": false,
+    "presentationGalaxyChanged": false,
+    "immersiveBackgroundChanged": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}
