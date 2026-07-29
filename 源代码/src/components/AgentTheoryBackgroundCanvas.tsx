@@ -6,6 +6,13 @@ import {
   createAgentTheoryDepthProfile,
 } from "../lib/agentTheoryDepth";
 import {
+  createAgentTheoryCruiseCheckpoint,
+  createAgentTheoryPerimeterProfile,
+  parseAgentTheoryCruiseCheckpoint,
+  serializeAgentTheoryCruiseCheckpoint,
+  type AgentTheoryCruiseCheckpointV1,
+} from "../lib/agentTheoryPerimeter";
+import {
   App17GalaxyCanvas,
   type App17GalaxyCommand,
   type AgentTheoryDepthDiagnostics,
@@ -22,6 +29,7 @@ type AgentTheoryBackgroundCanvasProps = {
   resetToBestNonce: number;
   onCameraPoseChange: (pose: GalaxyCameraPose) => void;
   onReady: () => void;
+  onRuntimeError: (message: string) => void;
 };
 
 export function AgentTheoryBackgroundCanvas({
@@ -31,6 +39,7 @@ export function AgentTheoryBackgroundCanvas({
   resetToBestNonce,
   onCameraPoseChange,
   onReady,
+  onRuntimeError,
 }: AgentTheoryBackgroundCanvasProps) {
   const [selectedHotspotId, setSelectedHotspotId] = useState("");
   const [selectedPaperId, setSelectedPaperId] = useState("");
@@ -50,21 +59,60 @@ export function AgentTheoryBackgroundCanvas({
     () => applyAgentTheoryDepthProfile(payload, depthProfile),
     [depthProfile, payload],
   );
-  const ambientStorageKey = useMemo(
+  const perimeterProfile = useMemo(
+    () => createAgentTheoryPerimeterProfile(displayPayload),
+    [displayPayload],
+  );
+  const cruiseStorageKey = useMemo(
     () => (
-      `research-agent:theory-ambient:${depthProfile.version}:`
+      `research-agent:theory-cruise:${perimeterProfile.version}:`
       + `${payload.snapshotId ?? "unknown"}`
     ),
-    [depthProfile.version, payload.snapshotId],
+    [payload.snapshotId, perimeterProfile.version],
   );
-  const initialAmbientElapsedSeconds = useMemo(() => {
+  const sessionSeedStorageKey = (
+    `research-agent:theory-cruise-seed:${payload.snapshotId ?? "unknown"}`
+  );
+  const legacySessionSeedStorageKey = (
+    `research-agent:theory-cruise:agent-theory-perimeter-v1:`
+    + `${payload.snapshotId ?? "unknown"}:seed`
+  );
+  const sessionSeed = useMemo(() => {
     try {
-      const value = Number(window.sessionStorage.getItem(ambientStorageKey));
-      return Number.isFinite(value) && value >= 0 ? value : 0;
+      const existing = window.sessionStorage.getItem(sessionSeedStorageKey)
+        ?? window.sessionStorage.getItem(legacySessionSeedStorageKey);
+      if (existing) {
+        window.sessionStorage.setItem(sessionSeedStorageKey, existing);
+        return existing;
+      }
+      const randomWords = new Uint32Array(4);
+      window.crypto.getRandomValues(randomWords);
+      const seed = Array.from(
+        randomWords,
+        (value) => value.toString(16).padStart(8, "0"),
+      ).join("");
+      window.sessionStorage.setItem(sessionSeedStorageKey, seed);
+      return seed;
     } catch {
-      return 0;
+      return `${payload.snapshotId ?? "unknown"}:${Date.now().toString(36)}`;
     }
-  }, [ambientStorageKey]);
+  }, [
+    legacySessionSeedStorageKey,
+    payload.snapshotId,
+    sessionSeedStorageKey,
+  ]);
+  const initialCruiseCheckpoint = useMemo<AgentTheoryCruiseCheckpointV1>(() => {
+    try {
+      const restored = parseAgentTheoryCruiseCheckpoint(
+        window.sessionStorage.getItem(cruiseStorageKey),
+        sessionSeed,
+      );
+      if (restored) return restored;
+    } catch {
+      // Session cruise persistence is best effort.
+    }
+    return createAgentTheoryCruiseCheckpoint(perimeterProfile, sessionSeed);
+  }, [cruiseStorageKey, perimeterProfile, sessionSeed]);
   const quality = useMemo<AgentTheoryQuality>(() => {
     if (!import.meta.env.DEV) return "balanced";
     return new URLSearchParams(window.location.search)
@@ -103,12 +151,48 @@ export function AgentTheoryBackgroundCanvas({
       data-display-space="agent-depth-enhanced"
       data-depth-scale={depthProfile.depthScale.toFixed(6)}
       data-depth-ratio={depthProfile.rawDepthRatio.toFixed(6)}
+      data-perimeter-profile={perimeterProfile.version}
+      data-cruise-seed={sessionSeed}
       data-near-paper-count={depthDiagnostics?.nearPaperCount ?? 0}
       data-middle-paper-count={depthDiagnostics?.middlePaperCount ?? 0}
       data-far-paper-count={depthDiagnostics?.farPaperCount ?? 0}
+      data-camera-mode={depthDiagnostics?.cameraMode ?? (
+        interactionMode === "explore" ? "explore" : "cruise"
+      )}
+      data-perimeter-sector={depthDiagnostics?.perimeterSector ?? 0}
+      data-visible-galaxy-ratio={(
+        depthDiagnostics?.visibleGalaxyRatio ?? 0
+      ).toFixed(4)}
+      data-visited-sector-ratio={(
+        depthDiagnostics?.visitedSectorRatio ?? 0
+      ).toFixed(4)}
+      data-sphere-hotspot-count={
+        depthDiagnostics?.activeSphereHotspotCount ?? 0
+      }
+      data-shader-status={depthDiagnostics?.shaderStatus ?? "pending"}
+      data-shader-failure-materials={
+        depthDiagnostics?.shaderFailureMaterials.join(",") ?? ""
+      }
+      data-webgl-error-count={depthDiagnostics?.webglErrorCount ?? 0}
+      data-first-frame-paper-count={
+        depthDiagnostics?.firstFrameVisiblePaperCount ?? 0
+      }
+      data-first-frame-hotspot-count={
+        depthDiagnostics?.firstFrameVisibleHotspotCount ?? 0
+      }
+      data-first-frame-decorative-count={
+        depthDiagnostics?.firstFrameDecorativeVisibleCount ?? 0
+      }
+      data-perimeter-reframe-count={
+        depthDiagnostics?.perimeterReframeCount ?? 0
+      }
+      data-perimeter-degradation={
+        depthDiagnostics?.perimeterDegradationReason ?? ""
+      }
+      data-ready-gate={depthDiagnostics?.readyGatePassed ? "pass" : "pending"}
     >
       <div className="agent-theory-background__space-label">
-        理论布局 · 视觉纵深增强
+        理论布局 · 外围观测巡航
       </div>
       <App17GalaxyCanvas
         active
@@ -124,23 +208,23 @@ export function AgentTheoryBackgroundCanvas({
         labelsVisible={interactionMode === "explore"}
         initialCameraPose={initialCameraPose}
         agentTheoryDepthProfile={depthProfile}
+        agentTheoryPerimeterProfile={perimeterProfile}
         agentTheoryQuality={quality}
-        initialAgentTheoryAmbientElapsedSeconds={
-          initialAmbientElapsedSeconds
-        }
-        onAgentTheoryAmbientElapsedSecondsChange={(elapsedSeconds) => {
+        initialAgentTheoryCruiseCheckpoint={initialCruiseCheckpoint}
+        onAgentTheoryCruiseCheckpointChange={(checkpoint) => {
           try {
             window.sessionStorage.setItem(
-              ambientStorageKey,
-              elapsedSeconds.toFixed(6),
+              cruiseStorageKey,
+              serializeAgentTheoryCruiseCheckpoint(checkpoint),
             );
           } catch {
-            // Ambient phase persistence is session-only best effort.
+            // Session cruise persistence is best effort.
           }
         }}
         onAgentTheoryDepthDiagnostics={setDepthDiagnostics}
         onCameraPoseChange={onCameraPoseChange}
         onReady={onReady}
+        onRuntimeError={onRuntimeError}
         onSelect={(hotspotId) => {
           if (interactionMode !== "explore") return;
           setSelectedHotspotId(hotspotId);

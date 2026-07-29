@@ -314,7 +314,7 @@ check(
   "Agent wrapper derives an in-memory display payload",
   /applyAgentTheoryDepthProfile\(payload, depthProfile\)/.test(wrapperSource)
     && /data-display-space="agent-depth-enhanced"/.test(wrapperSource)
-    && /理论布局 · 视觉纵深增强/.test(wrapperSource),
+    && /理论布局 · (视觉纵深增强|外围观测巡航)/.test(wrapperSource),
   "AgentTheoryBackgroundCanvas",
 );
 check(

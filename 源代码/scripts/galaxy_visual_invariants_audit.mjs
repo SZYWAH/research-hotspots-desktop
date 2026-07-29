@@ -22,10 +22,20 @@ function functionSource(name) {
 function displayHotspotLayerSource() {
   return functionSource("createHotspotLayer")
     .replace("  const crossfadeMasks = new Float32Array(count);\n", "")
+    .replace("  const sphereBlends = new Float32Array(count);\n", "")
+    .replace("  const hotspotIds = hotspots.map((hotspot) => hotspot.id);\n", "")
     .replace(
       [
         "  const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);",
         '  geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);',
+        "",
+      ].join("\n"),
+      "",
+    )
+    .replace(
+      [
+        "  const sphereBlendAttribute = new THREE.BufferAttribute(sphereBlends, 1);",
+        '  geometry.setAttribute("sphereBlend", sphereBlendAttribute);',
         "",
       ].join("\n"),
       "",
@@ -39,6 +49,20 @@ function displayHotspotLayerSource() {
         "      crossfadeMaskAttribute.needsUpdate = true;",
         "    },",
       ].join("\n"),
+      "",
+    )
+    .replace(
+      [
+        "    setViewportHeight: (viewportHeight: number) => {",
+        "      materials.forEach((material) => {",
+        "        material.uniforms.uViewportHeight.value = Math.max(1, viewportHeight);",
+        "      });",
+        "    },",
+      ].join("\n"),
+      "",
+    )
+    .replace(
+      /    setResolvedSphereBlends: \(blendById: ReadonlyMap<string, number>\) => \{[\s\S]*?^    \},\r?\n/m,
       "",
     );
 }

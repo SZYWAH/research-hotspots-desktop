@@ -497,7 +497,6 @@ export function AgentDualBackgroundPage({
     onPromptSubmit?.(event);
     if (preferredMode === "theory" && exploreTheory) {
       setExploreTheory(false);
-      setResetTheoryNonce((value) => value + 1);
     }
   };
 
@@ -569,6 +568,11 @@ export function AgentDualBackgroundPage({
               }
             }}
             onReady={revealRenderer}
+            onRuntimeError={(message) => {
+              setLoadError(message);
+              setSwitching(false);
+              setMaskVisible(false);
+            }}
           />
         ) : null}
         <div className="agent-dual-page__vignette" />
@@ -617,6 +621,18 @@ export function AgentDualBackgroundPage({
                 <MessageSquareText size={15} />
                 高级工作台
               </button>
+              {preferredMode === "theory" && exploreTheory ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    setResetTheoryNonce((value) => value + 1);
+                  }}
+                >
+                  <Orbit size={15} />
+                  重置理论视图
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -686,7 +702,11 @@ export function AgentDualBackgroundPage({
 
       {loadError ? (
         <div className="agent-dual-page__error" role="alert">
-          <strong>星空暂时不可用</strong>
+          <strong>
+            {preferredMode === "theory"
+              ? "理论背景渲染失败"
+              : "沉浸背景渲染失败"}
+          </strong>
           <span>{loadError}</span>
           <button type="button" onClick={() => void mountBackground(preferredMode, false)}>
             <RefreshCw size={14} />

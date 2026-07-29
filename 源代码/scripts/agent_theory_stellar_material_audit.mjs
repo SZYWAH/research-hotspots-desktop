@@ -29,6 +29,9 @@ const hotspotMaterial = source.match(
 const agentHotspotFragment = hotspotMaterial.match(
   /fragmentShader: agentTheory \? \(opticalPass \? `([\s\S]*?)`\) : `/,
 )?.[1] ?? "";
+const sphereLayer = source.match(
+  /function createAgentTheoryHotspotSphereLayer\([\s\S]*?\n}\n\nfunction setAgentDepthRangeOnObject/,
+)?.[0] ?? "";
 
 for (const [name, passed, detail] of [
   [
@@ -72,14 +75,18 @@ for (const [name, passed, detail] of [
     "hotspot pickObject",
   ],
   [
-    "Agent theory core size is 5-10px",
-    /mix\(5\.0, 10\.0, importance\)/.test(hotspotMaterial),
-    "core LOD",
+    "Agent theory core size follows projected angular diameter",
+    /float angularCssDiameter = worldDiameter/.test(hotspotMaterial)
+      && /clamp\(angularCssDiameter, 1\.0, 16\.0\)/.test(hotspotMaterial)
+      && /\* \$\{APP15_COORD_SCALE\.toFixed\(4\)\}/.test(hotspotMaterial),
+    "angular core LOD",
   ],
   [
-    "Agent theory optical size is 10-20px",
-    /mix\(10\.0, 20\.0, importance\)/.test(hotspotMaterial),
-    "optical LOD",
+    "Agent theory optical size follows the bounded PSF shoulder",
+    /clamp\(angularCssDiameter \* 1\.45, 1\.0, 24\.0\)/.test(
+      hotspotMaterial,
+    ),
+    "optical PSF LOD",
   ],
   [
     "optical corona opacity is capped at 10%",
@@ -93,11 +100,58 @@ for (const [name, passed, detail] of [
     "Agent hotspot fragment",
   ],
   [
-    "Agent hotspot uses a compact stellar core rather than a full disc",
-    /compactCore/.test(agentHotspotFragment)
+    "Agent hotspot uses a point-spread function rather than a full disc",
+    /coreTightness/.test(agentHotspotFragment)
+      && /shoulder/.test(agentHotspotFragment)
       && /shortSpike/.test(agentHotspotFragment)
       && !/directionalLight|Lambert/i.test(agentHotspotFragment),
     "hybrid stellar LOD",
+  ],
+  [
+    "nearby Agent hotspots use no more than 12 shared sphere slots",
+    /const maximumSlots = 12/.test(source)
+      && /new THREE\.InstancedMesh\(geometry, coreMaterial, maximumSlots\)/.test(
+        source,
+      ),
+    "resolved hotspot sphere LOD",
+  ],
+  [
+    "InstancedMesh shader relies on the Three.js injected instanceColor",
+    sphereLayer.length > 0
+      && !/attribute vec3 instanceColor/.test(sphereLayer)
+      && /vColor = instanceColor/.test(sphereLayer)
+      && /core\.instanceColor\.needsUpdate = true/.test(sphereLayer)
+      && /corona\.instanceColor\.needsUpdate = true/.test(sphereLayer),
+    "no duplicate instanceColor declaration",
+  ],
+  [
+    "Agent theory materials have diagnostic names",
+    [
+      "AgentTheoryPaperPSF",
+      "AgentTheoryHotspotCorePSF",
+      "AgentTheoryHotspotOpticalPSF",
+      "AgentTheoryHotspotSphereCore",
+      "AgentTheoryHotspotSphereCorona",
+      "AgentTheoryDecorativeDeepField",
+    ].every((name) => source.includes(name)),
+    "named overview programs",
+  ],
+  [
+    "Agent theory performs a real shader compile and link-status gate",
+    /renderer\.debug\.checkShaderErrors = true/.test(source)
+      && /renderer\.compile\(scene, camera\)/.test(source)
+      && /gl\.LINK_STATUS/.test(source)
+      && /agentTheoryInitialGateComplete/.test(source)
+      && /readyGatePassed = true/.test(source),
+    "compile before onReady",
+  ],
+  [
+    "invalid WebGL programs stop RAF and report a runtime error",
+    /function reportAgentTheoryRuntimeFailure/.test(source)
+      && /runtimeActive = false/.test(source)
+      && /cancelAnimationFrame\(frameId\)/.test(source)
+      && /onRuntimeErrorRef\.current\?\.\(message\)/.test(source),
+    "fatal runtime gate",
   ],
   [
     "label offset uses the Agent optical radius",
@@ -116,10 +170,10 @@ const result = {
   status: failed.length === 0 ? "PASS" : "FAIL",
   diagnostics: {
     paperSemanticChromaScale: [0.52, 0.78],
-    hotspotCoreCssSize: [5, 10],
-    hotspotOpticalCssSize: [10, 20],
+    hotspotCoreCssSize: [1, 16],
+    hotspotOpticalCssSize: [1, 24],
     hotspotCoronaOpacityMaximum: 0.10,
-    overviewEntityPasses: 2,
+    overviewEntityPasses: "point/psf plus at most 12 resolved sphere slots",
   },
   checks,
   failedChecks: failed,

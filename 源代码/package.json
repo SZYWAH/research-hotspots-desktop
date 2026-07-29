@@ -25,6 +25,7 @@
     "audit:agent-immersive-flow": "node scripts/agent_immersive_flow_audit.mjs",
     "audit:agent-theory-stellar-material": "node scripts/agent_theory_stellar_material_audit.mjs",
     "audit:agent-theory-depth": "node --experimental-strip-types scripts/agent_theory_depth_audit.mjs",
+    "audit:agent-theory-perimeter-lod": "node --experimental-strip-types scripts/agent_theory_perimeter_lod_audit.mjs",
     "audit:project-docs": "node scripts/project_documentation_audit.mjs",
     "experiment:galaxy-global-umap": "D:\\yingyong\\venvs\\galaxy_umap_py312\\Scripts\\python.exe scripts/generate_global_umap_overrides.py",
     "audit:galaxy-global-umap": "node scripts/galaxy_umap_ab_audit.mjs",
