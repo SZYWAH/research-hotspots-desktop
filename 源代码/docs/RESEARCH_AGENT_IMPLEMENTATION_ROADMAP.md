@@ -8,6 +8,8 @@
 
 产品目标：[科研 Agent 最终产品目标](./RESEARCH_AGENT_PRODUCT_GOAL.md)
 
+本文是详细长期实施蓝图，不记录当前开发状态或进度。当前阶段、实现事实和实际开发过程以 `PROJECT.md`、`ROADMAP.md`、`STATUS.md`、`ARCHITECTURE.md`、`DECISIONS.md` 和 `DEVELOPMENT.md` 六份入口文档为准。
+
 ## 1. 路线目标
 
 本文将最终科研 Agent 产品拆解为可以独立开发、验证和回退的阶段。路线遵循“先锁定真实性和接口，再逐步交付完整体验”，避免一次性重写现有程序。

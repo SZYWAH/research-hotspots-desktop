@@ -30,7 +30,11 @@ import {
   loadAgentImmersiveBackground,
 } from "../lib/desktop";
 import type { GalaxyCameraPose } from "./App17GalaxyCanvas";
-import { AgentImmersiveStarfieldCanvas } from "./AgentImmersiveStarfieldCanvas";
+import {
+  AgentImmersiveStarfieldCanvas,
+  type AgentImmersiveFlowCheckpointV1,
+  type AgentImmersiveFlowMetrics,
+} from "./AgentImmersiveStarfieldCanvas";
 import { AgentTheoryBackgroundCanvas } from "./AgentTheoryBackgroundCanvas";
 import "./AgentDualBackgroundPage.css";
 
@@ -99,6 +103,88 @@ function readElapsedSeconds(key: string) {
   }
 }
 
+function float32ToBase64(values: Float32Array) {
+  const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize));
+    binary += String.fromCharCode(...chunk);
+  }
+  return window.btoa(binary);
+}
+
+function base64ToFloat32(value: string) {
+  const binary = window.atob(value);
+  if (binary.length % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error("invalid-flow-checkpoint-byte-length");
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Float32Array(bytes.buffer);
+}
+
+function readFlowCheckpoint(
+  key: string,
+  sessionSeed: string,
+): AgentImmersiveFlowCheckpointV1 | undefined {
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return undefined;
+    const stored = JSON.parse(raw) as {
+      sessionSeed?: string;
+      stepIndex?: number;
+      textureWidth?: number;
+      textureHeight?: number;
+      positions?: string;
+      velocities?: string;
+      backend?: "gpgpu" | "analytic-fallback";
+    };
+    if (
+      stored.sessionSeed !== sessionSeed
+      || !Number.isFinite(stored.stepIndex)
+      || !Number.isFinite(stored.textureWidth)
+      || !Number.isFinite(stored.textureHeight)
+      || typeof stored.positions !== "string"
+      || typeof stored.velocities !== "string"
+    ) {
+      return undefined;
+    }
+    return {
+      sessionSeed,
+      stepIndex: Math.max(0, Math.floor(stored.stepIndex ?? 0)),
+      textureWidth: Math.max(1, Math.floor(stored.textureWidth ?? 1)),
+      textureHeight: Math.max(1, Math.floor(stored.textureHeight ?? 1)),
+      positions: base64ToFloat32(stored.positions),
+      velocities: base64ToFloat32(stored.velocities),
+      backend: stored.backend,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeFlowCheckpoint(
+  key: string,
+  checkpoint: AgentImmersiveFlowCheckpointV1,
+) {
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({
+      sessionSeed: checkpoint.sessionSeed,
+      stepIndex: checkpoint.stepIndex,
+      textureWidth: checkpoint.textureWidth,
+      textureHeight: checkpoint.textureHeight,
+      positions: float32ToBase64(checkpoint.positions),
+      velocities: float32ToBase64(checkpoint.velocities),
+      backend: checkpoint.backend,
+    }));
+  } catch {
+    // The in-memory checkpoint remains available for the current mounted page.
+  }
+}
+
 function readTheoryCameraPose(key: string): GalaxyCameraPose | undefined {
   try {
     const raw = window.sessionStorage.getItem(key);
@@ -144,6 +230,14 @@ export function AgentDualBackgroundPage({
     () => `research-agent:immersive-elapsed:v2:${activeProject.id}:${sessionSeed}`,
     [activeProject.id, sessionSeed],
   );
+  const flowCheckpointStorageKey = useMemo(
+    () => `research-agent:immersive-flow-checkpoint:v1:${activeProject.id}:${sessionSeed}`,
+    [activeProject.id, sessionSeed],
+  );
+  const flowFallbackStorageKey = useMemo(
+    () => `research-agent:immersive-flow-fallback:v1:${activeProject.id}:${sessionSeed}`,
+    [activeProject.id, sessionSeed],
+  );
   const theoryPoseStorageKey = useMemo(
     () => `research-agent:theory-pose:v2:${activeProject.id}`,
     [activeProject.id],
@@ -160,6 +254,18 @@ export function AgentDualBackgroundPage({
   const [immersiveElapsedSeconds, setImmersiveElapsedSeconds] = useState(
     () => readElapsedSeconds(elapsedStorageKey),
   );
+  const [forceAnalyticFallback, setForceAnalyticFallback] = useState(() => {
+    if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("flowBackend") === "analytic") {
+      return true;
+    }
+    try {
+      return window.sessionStorage.getItem(flowFallbackStorageKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [immersiveMetrics, setImmersiveMetrics] =
+    useState<AgentImmersiveFlowMetrics | null>(null);
   const [maskVisible, setMaskVisible] = useState(true);
   const [switching, setSwitching] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -175,6 +281,12 @@ export function AgentDualBackgroundPage({
   const theoryPoseRef = useRef<GalaxyCameraPose | undefined>(
     readTheoryCameraPose(theoryPoseStorageKey),
   );
+  const flowCheckpointRef = useRef<AgentImmersiveFlowCheckpointV1 | undefined>(
+    readFlowCheckpoint(flowCheckpointStorageKey, sessionSeed),
+  );
+  const mountedFlowCheckpointRef = useRef<
+    AgentImmersiveFlowCheckpointV1 | undefined
+  >(flowCheckpointRef.current);
   const switchTokenRef = useRef(0);
   const revealTimerRef = useRef(0);
 
@@ -188,13 +300,43 @@ export function AgentDualBackgroundPage({
 
   const saveElapsed = useCallback((value: number) => {
     const safeValue = Math.max(0, value);
-    setImmersiveElapsedSeconds(safeValue);
+    setImmersiveElapsedSeconds((current) => (
+      Math.abs(current - safeValue) <= 1e-6 ? current : safeValue
+    ));
     try {
       window.sessionStorage.setItem(elapsedStorageKey, String(safeValue));
     } catch {
       // A blocked storage provider must not interrupt the starfield.
     }
   }, [elapsedStorageKey]);
+
+  const saveFlowCheckpoint = useCallback((
+    checkpoint: AgentImmersiveFlowCheckpointV1,
+  ) => {
+    flowCheckpointRef.current = checkpoint;
+    writeFlowCheckpoint(flowCheckpointStorageKey, checkpoint);
+  }, [flowCheckpointStorageKey]);
+
+  const lockAnalyticFallback = useCallback((reason: string) => {
+    setForceAnalyticFallback(true);
+    setImmersiveMetrics((current) => ({
+      backend: "analytic-fallback",
+      textureWidth: current?.textureWidth ?? 128,
+      textureHeight: current?.textureHeight ?? 64,
+      stepIndex: current?.stepIndex ?? 0,
+      catchupSteps: current?.catchupSteps ?? 0,
+      degradationReason: reason,
+      boundaryTurnCount: current?.boundaryTurnCount ?? 0,
+      visibleJumpCount: current?.visibleJumpCount ?? 0,
+      checkpointRestoreErrorPx: current?.checkpointRestoreErrorPx ?? 0,
+      contextLostCount: (current?.contextLostCount ?? 0) + 1,
+    }));
+    try {
+      window.sessionStorage.setItem(flowFallbackStorageKey, "1");
+    } catch {
+      // The React state still prevents another GPGPU attempt in this session.
+    }
+  }, [flowFallbackStorageKey]);
 
   const ensurePayload = useCallback(async (mode: AgentBackgroundMode) => {
     if (mode === "immersive") {
@@ -249,6 +391,12 @@ export function AgentDualBackgroundPage({
     try {
       await ensurePayload(mode);
       if (token !== switchTokenRef.current) return;
+      if (mode === "immersive") {
+        // Freeze the resume state for this renderer instance. The renderer
+        // writes a newer checkpoint during cleanup; feeding that mutable ref
+        // back as a live prop would retrigger the effect cleanup recursively.
+        mountedFlowCheckpointRef.current = flowCheckpointRef.current;
+      }
       setMountedMode(mode);
     } catch (error) {
       if (token !== switchTokenRef.current) return;
@@ -264,6 +412,18 @@ export function AgentDualBackgroundPage({
     setImmersivePayload(null);
     setTheoryPayload(null);
     setImmersiveElapsedSeconds(readElapsedSeconds(elapsedStorageKey));
+    flowCheckpointRef.current = readFlowCheckpoint(flowCheckpointStorageKey, sessionSeed);
+    mountedFlowCheckpointRef.current = flowCheckpointRef.current;
+    const forcedByReview = import.meta.env.DEV
+      && new URLSearchParams(window.location.search).get("flowBackend") === "analytic";
+    let sessionFallback = false;
+    try {
+      sessionFallback = window.sessionStorage.getItem(flowFallbackStorageKey) === "1";
+    } catch {
+      sessionFallback = false;
+    }
+    setForceAnalyticFallback(forcedByReview || sessionFallback);
+    setImmersiveMetrics(null);
     theoryPoseRef.current = readTheoryCameraPose(theoryPoseStorageKey);
     setExploreTheory(false);
     setAdvancedOpen(false);
@@ -277,8 +437,11 @@ export function AgentDualBackgroundPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     elapsedStorageKey,
+    flowCheckpointStorageKey,
+    flowFallbackStorageKey,
     mountBackground,
     projectKey,
+    sessionSeed,
     theoryPoseStorageKey,
   ]);
 
@@ -365,14 +528,21 @@ export function AgentDualBackgroundPage({
       data-background-mode={preferredMode}
       data-mounted-mode={mountedMode ?? "none"}
       data-renderer-count={mountedMode ? 1 : 0}
+      data-immersive-flow-backend={immersiveMetrics?.backend ?? "pending"}
+      data-immersive-flow-degradation={immersiveMetrics?.degradationReason ?? ""}
     >
       <div className="agent-dual-page__background" aria-hidden="true">
         {mountedMode === "immersive" && immersivePayload ? (
           <AgentImmersiveStarfieldCanvas
             payload={immersivePayload}
             elapsedSeconds={immersiveElapsedSeconds}
+            initialCheckpoint={mountedFlowCheckpointRef.current}
+            forceAnalyticFallback={forceAnalyticFallback}
             reducedMotion={window.matchMedia("(prefers-reduced-motion: reduce)").matches}
             onElapsedSecondsChange={saveElapsed}
+            onCheckpoint={saveFlowCheckpoint}
+            onMetrics={setImmersiveMetrics}
+            onBackendFallback={lockAnalyticFallback}
             onReady={revealRenderer}
             onFatalError={(message) => {
               setLoadError(message);

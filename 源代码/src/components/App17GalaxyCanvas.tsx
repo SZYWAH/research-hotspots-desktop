@@ -394,6 +394,7 @@ type App17ParticlePoint = {
   y: number;
   z: number;
   color: string;
+  semanticColor?: string;
   haloColor?: string;
   size: number;
   alpha: number;
@@ -4081,7 +4082,7 @@ export function App17GalaxyCanvas({
       if (sceneData.kind !== "app15") {
         raycaster.params.Points.threshold = overviewPointPickThreshold;
         raycaster.setFromCamera(pointer, camera);
-        const intersections = raycaster.intersectObject(hotspotLayer.object, false);
+        const intersections = raycaster.intersectObject(hotspotLayer.pickObject, false);
         const index = intersections.length > 0 ? intersections[0].index ?? -1 : -1;
         return index >= 0 ? hotspotByIndex[index]?.id ?? "" : "";
       }
@@ -5307,6 +5308,7 @@ export function App17GalaxyCanvas({
             exploration.blend,
             width,
             height,
+            visualProfile,
           );
         }
         if (measurePerformance) labelSamples.push({ timestamp: now, value: performance.now() - labelStartedAt });
@@ -5958,6 +5960,7 @@ function buildApp15TheoryScene(payload: App17GalaxyPayload): App17SceneData {
     y: paper.y * APP15_COORD_SCALE,
     z: paper.z * APP15_COORD_SCALE,
     color: app17PaperColor(app17FamilyColor(paper.field, paper.topicId)),
+    semanticColor: app17FamilyColor(paper.field, paper.topicId),
     size: THREE.MathUtils.clamp(paper.size || 2.2, 2.2, 3.6),
     alpha: 0.62,
     year: paper.year,
@@ -9600,6 +9603,7 @@ function createPaperLayer(
   const count = papers.length;
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
+  const semanticColors = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
   const alphas = new Float32Array(count);
   const originalAlphas = new Float32Array(count);
@@ -9617,6 +9621,10 @@ function createPaperLayer(
     colors[index * 3] = color.r;
     colors[index * 3 + 1] = color.g;
     colors[index * 3 + 2] = color.b;
+    color.set(paper.semanticColor ?? paper.color);
+    semanticColors[index * 3] = color.r;
+    semanticColors[index * 3 + 1] = color.g;
+    semanticColors[index * 3 + 2] = color.b;
     sizes[index] = paper.size;
     alphas[index] = paper.alpha;
     originalAlphas[index] = paper.alpha;
@@ -9627,6 +9635,7 @@ function createPaperLayer(
   if (dynamicPositions) positionAttribute.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute("position", positionAttribute);
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute("semanticColor", new THREE.BufferAttribute(semanticColors, 3));
   geometry.setAttribute("pointSize", new THREE.BufferAttribute(sizes, 1));
   const alphaAttribute = new THREE.BufferAttribute(alphas, 1);
   geometry.setAttribute("pointAlpha", alphaAttribute);
@@ -9761,22 +9770,45 @@ function createHotspotLayer(
   const crossfadeMaskAttribute = new THREE.BufferAttribute(crossfadeMasks, 1);
   geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);
 
-  const material = createHotspotPointSourceMaterial(
+  const coreMaterial = createHotspotPointSourceMaterial(
     pixelRatio,
     kind,
     visualProfile,
+    "core",
   );
-  const object = new THREE.Points(geometry, material);
-  object.frustumCulled = false;
+  const coreObject = new THREE.Points(geometry, coreMaterial);
+  coreObject.frustumCulled = false;
+  coreObject.renderOrder = 1;
+  const opticalMaterial = visualProfile === "agent-theory"
+    ? createHotspotPointSourceMaterial(pixelRatio, kind, visualProfile, "optical")
+    : null;
+  const opticalObject = opticalMaterial
+    ? new THREE.Points(geometry, opticalMaterial)
+    : null;
+  if (opticalObject) {
+    opticalObject.frustumCulled = false;
+    opticalObject.renderOrder = 2;
+  }
+  const object = new THREE.Group();
+  object.add(coreObject);
+  if (opticalObject) object.add(opticalObject);
+  const materials = opticalMaterial
+    ? [coreMaterial, opticalMaterial]
+    : [coreMaterial];
   let selectedTopicKey = "";
 
   return {
     object,
+    pickObject: coreObject,
     setOpacity: (opacity: number) => {
-      material.uniforms.uSceneOpacity.value = opacity;
+      materials.forEach((material) => {
+        material.uniforms.uSceneOpacity.value = opacity;
+      });
     },
     setExplorationSelection: (topicKey: string, focusPosition: THREE.Vector3) => {
-      material.uniforms.uFocusPosition.value.copy(focusPosition);
+      materials.forEach((material) => {
+        material.uniforms.uFocusPosition.value.copy(focusPosition);
+      });
       if (selectedTopicKey === topicKey) return;
       selectedTopicKey = topicKey;
       for (let index = 0; index < selectedMasks.length; index += 1) {
@@ -9785,7 +9817,9 @@ function createHotspotLayer(
       selectedMaskAttribute.needsUpdate = true;
     },
     setExplorationProgress: (progress: number) => {
-      material.uniforms.uExplorationProgress.value = progress;
+      materials.forEach((material) => {
+        material.uniforms.uExplorationProgress.value = progress;
+      });
     },
     setTheoryFarTransitionModes: (modeByTopic: Map<string, "retreat" | "crossfade">) => {
       for (let index = 0; index < crossfadeMasks.length; index += 1) {
@@ -9794,17 +9828,21 @@ function createHotspotLayer(
       crossfadeMaskAttribute.needsUpdate = true;
     },
     setAmbientState: (timeSeconds: number, rotationAngle: number, strength: number, overviewAmbient = 0) => {
-      material.uniforms.uAmbientTime.value = timeSeconds;
-      material.uniforms.uFarRotationAngle.value = rotationAngle;
-      material.uniforms.uAmbientStrength.value = strength;
-      material.uniforms.uOverviewAmbient.value = THREE.MathUtils.clamp(overviewAmbient, 0, 1);
+      materials.forEach((material) => {
+        material.uniforms.uAmbientTime.value = timeSeconds;
+        material.uniforms.uFarRotationAngle.value = rotationAngle;
+        material.uniforms.uAmbientStrength.value = strength;
+        material.uniforms.uOverviewAmbient.value = THREE.MathUtils.clamp(overviewAmbient, 0, 1);
+      });
     },
     setOverviewFarBlend: (blend: number) => {
-      material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
+      materials.forEach((material) => {
+        material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
+      });
     },
     dispose: () => {
       geometry.dispose();
-      material.dispose();
+      materials.forEach((material) => material.dispose());
     },
   };
 }
@@ -10646,6 +10684,7 @@ function createPaperMaterial(
     toneMapped: false,
     vertexShader: `
       attribute vec3 color;
+      attribute vec3 semanticColor;
       attribute float pointSize;
       attribute float pointAlpha;
       attribute float selectedMask;
@@ -10663,10 +10702,12 @@ function createPaperMaterial(
       uniform float uSystemDepthRange;
       uniform float uSystemDepthStrength;
       varying vec3 vColor;
+      varying vec3 vSemanticColor;
       varying float vAlpha;
       varying float vCssSize;
       void main() {
         vColor = color;
+        vSemanticColor = semanticColor;
         float isolationProgress = ${kind === "app15"
           ? "smoothstep(0.70, 1.0, uExplorationProgress)"
           : "uExplorationProgress"};
@@ -10710,6 +10751,7 @@ function createPaperMaterial(
     `,
     fragmentShader: agentTheory ? `
       varying vec3 vColor;
+      varying vec3 vSemanticColor;
       varying float vAlpha;
       varying float vCssSize;
       void main() {
@@ -10738,9 +10780,13 @@ function createPaperMaterial(
           abs(point.x) + abs(point.y)
         );
         float needle = mix(hotCore, diamond, tiny);
-        float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
-        vec3 muted = mix(vec3(luminance), vColor, 0.20);
-        vec3 color = mix(muted, vec3(0.995, 0.997, 1.0), hotCore * 0.86 + tiny * 0.48);
+        float luminance = dot(vSemanticColor, vec3(0.2126, 0.7152, 0.0722));
+        vec3 semanticShell = mix(vec3(luminance), vSemanticColor, 0.54);
+        vec3 color = mix(
+          semanticShell,
+          vec3(0.995, 0.997, 1.0),
+          hotCore * 0.84 + tiny * 0.10
+        );
         float energy = mix(light * limb, 0.92, tiny) * 0.76 + needle * 0.56;
         float alpha = edge * vAlpha * clamp(energy, 0.0, 1.0);
         if (alpha < 0.012) discard;
@@ -10772,8 +10818,10 @@ function createHotspotPointSourceMaterial(
   pixelRatio: number,
   kind: App17SceneData["kind"],
   visualProfile: GalaxyVisualProfile = "analysis",
+  channel: "core" | "optical" = "core",
 ) {
   const agentTheory = visualProfile === "agent-theory";
+  const opticalPass = agentTheory && channel === "optical";
   return new THREE.ShaderMaterial({
     uniforms: {
       uPixelRatio: { value: pixelRatio },
@@ -10788,9 +10836,13 @@ function createHotspotPointSourceMaterial(
       uOverviewFarBlend: { value: 0 },
     },
     transparent: true,
-    depthWrite: agentTheory,
+    depthWrite: agentTheory && !opticalPass,
     depthTest: true,
-    blending: agentTheory ? THREE.NormalBlending : THREE.AdditiveBlending,
+    blending: opticalPass
+      ? THREE.AdditiveBlending
+      : agentTheory
+        ? THREE.NormalBlending
+        : THREE.AdditiveBlending,
     toneMapped: false,
     vertexShader: `
       attribute vec3 color;
@@ -10877,7 +10929,13 @@ function createHotspotPointSourceMaterial(
         vec4 mvPosition = modelViewMatrix * vec4(transformedPosition, 1.0);
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.74, 1.22);
         float displayScale = mix(1.0, distanceScale, uDepthAttenuation);
-        vCssSize = pointSize
+        float importance = clamp((pointIntensity - 0.68) / 0.32, 0.0, 1.0);
+        float sourceCssSize = ${agentTheory
+          ? opticalPass
+            ? "mix(8.0, 18.0, importance)"
+            : "mix(4.5, 9.0, importance)"
+          : "pointSize"};
+        vCssSize = sourceCssSize
           * pointScale
           * mix(1.0, 0.68, uOverviewFarBlend)
           * displayScale;
@@ -10885,7 +10943,7 @@ function createHotspotPointSourceMaterial(
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
-    fragmentShader: agentTheory ? `
+    fragmentShader: agentTheory ? (opticalPass ? `
       varying vec3 vColor;
       varying float vPointIntensity;
       varying float vHaloStrength;
@@ -10897,42 +10955,66 @@ function createHotspotPointSourceMaterial(
       void main() {
         vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
         float radius = length(point);
-        float antialias = max(fwidth(radius), 0.012);
-        float edge = 1.0 - smoothstep(0.92, 0.92 + antialias, radius);
-        if (edge <= 0.0 || vCoreVisibility <= 0.001) discard;
-        float sphereZ = sqrt(max(0.0, 1.0 - radius * radius));
-        vec3 normal = normalize(vec3(point, sphereZ));
-        float key = max(0.0, dot(normal, normalize(vec3(-0.42, 0.48, 0.76))));
-        float fill = max(0.0, dot(normal, normalize(vec3(0.46, -0.16, 0.42))));
-        float limb = pow(max(0.0, sphereZ), 0.42);
-        float surface = (0.32 + key * 0.58 + fill * 0.10) * limb;
-        float hotCore = 1.0 - smoothstep(
-          0.20,
-          0.20 + antialias * 1.4,
-          radius
-        );
+        float antialias = max(fwidth(radius), 0.008);
+        if (radius >= 1.0) discard;
         float axis = min(abs(point.x), abs(point.y));
-        float spike = (1.0 - smoothstep(
-          0.014,
-          0.014 + antialias,
-          axis
-        )) * pow(max(0.0, 1.0 - radius), 7.0)
-          * smoothstep(3.1, 5.4, vCssSize);
+        float shortSpike = (
+          1.0 - smoothstep(0.012, 0.012 + antialias, axis)
+        ) * pow(max(0.0, 1.0 - radius), 4.5);
+        float corona = exp(-radius * radius * 7.5)
+          * (1.0 - smoothstep(0.58, 0.98, radius));
+        float haloEnergy = corona * 0.045 * vHaloStrength * vHaloVisibility;
+        float rayEnergy = shortSpike
+          * (0.060 + vRayStrength * 0.16)
+          * vRayVisibility;
+        float alpha = min(0.12, haloEnergy + rayEnergy);
+        if (alpha < 0.003) discard;
         float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
-        vec3 muted = mix(vec3(luminance), vColor, 0.34);
-        vec3 color = mix(
-          muted,
-          vec3(1.0, 0.992, 0.965),
-          hotCore * 0.88 + spike * 0.25
-        );
-        float energy = surface * (0.78 + vPointIntensity * 0.18)
-          + hotCore * 0.62
-          + spike * 0.14;
-        float alpha = edge * vCoreVisibility * clamp(energy, 0.0, 1.0);
-        if (alpha < 0.012) discard;
-        gl_FragColor = vec4(color * min(1.10, energy), alpha);
+        vec3 stellarColor = mix(vec3(luminance), vColor, 0.42);
+        vec3 color = mix(stellarColor, vec3(0.995, 0.997, 1.0), rayEnergy * 4.0);
+        gl_FragColor = vec4(color, alpha);
       }
     ` : `
+      varying vec3 vColor;
+      varying float vPointIntensity;
+      varying float vHaloStrength;
+      varying float vRayStrength;
+      varying float vCoreVisibility;
+      varying float vHaloVisibility;
+      varying float vRayVisibility;
+      varying float vCssSize;
+      void main() {
+        vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(point);
+        float antialias = max(fwidth(radius), 0.010);
+        float compactCore = 1.0 - smoothstep(0.58, 0.58 + antialias, radius);
+        if (compactCore <= 0.0 || vCoreVisibility <= 0.001) discard;
+        float hotCore = 1.0 - smoothstep(
+          0.16,
+          0.16 + antialias * 1.4,
+          radius
+        );
+        float diamond = 1.0 - smoothstep(
+          0.33,
+          0.33 + antialias,
+          abs(point.x) + abs(point.y)
+        );
+        float shoulder = compactCore * (1.0 - hotCore);
+        float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
+        vec3 stellarShell = mix(vec3(luminance), vColor, 0.46);
+        vec3 color = mix(
+          stellarShell,
+          vec3(0.995, 0.997, 1.0),
+          hotCore * 0.90 + diamond * 0.18
+        );
+        float energy = shoulder * (0.44 + vPointIntensity * 0.28)
+          + hotCore * 1.02
+          + diamond * 0.20;
+        float alpha = compactCore * vCoreVisibility * clamp(energy, 0.0, 1.0);
+        if (alpha < 0.012) discard;
+        gl_FragColor = vec4(color * min(1.08, energy), alpha);
+      }
+    `) : `
       varying vec3 vColor;
       varying float vPointIntensity;
       varying float vHaloStrength;
@@ -11213,6 +11295,7 @@ function drawLabels(
   explorationProgress: number,
   width: number,
   height: number,
+  visualProfile: GalaxyVisualProfile,
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -11244,7 +11327,10 @@ function drawLabels(
     screenPosition.copy(worldPosition).project(camera);
     if (screenPosition.z < -1 || screenPosition.z > 1) continue;
     const x = (screenPosition.x * 0.5 + 0.5) * width;
-    const baseLabelOffset = Math.max(15, hotspot.size * 0.5 + hotspot.displaySize * 0.08);
+    const agentOpticalDiameter = 8 + hotspot.importance * 10;
+    const baseLabelOffset = visualProfile === "agent-theory"
+      ? Math.max(15, agentOpticalDiameter * 0.5 + 7)
+      : Math.max(15, hotspot.size * 0.5 + hotspot.displaySize * 0.08);
     const selectedLabelOffset = focusMarkerCssDiameter() * 0.5 + (sceneData.kind === "app15" ? 26 : 12);
     const labelOffset = hotspot.id === selectedId ? Math.max(baseLabelOffset, selectedLabelOffset) : baseLabelOffset;
     const y = (-screenPosition.y * 0.5 + 0.5) * height - labelOffset;

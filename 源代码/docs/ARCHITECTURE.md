@@ -2,7 +2,7 @@
 
 状态：权威架构入口
 
-更新时间：2026-07-28
+更新时间：2026-07-29
 
 ## 现有基础
 
@@ -19,7 +19,7 @@ M1.3d 重新建立两种互不继承空间结构的产品背景：
 - `immersive`：面向对话和沉浸体验，使用会话随机空间与连续 Curl 流；只消费真实身份、热点归属、颜色和年份，不消费理论 XYZ。
 - `theory`：面向语义位置、热点归属和可解释关系，继续使用现有理论星图坐标。
 
-两种视图共享实体身份和快照身份，但不共享世界坐标解释器。M1.3d 只完成两套静置背景和显式切换，后续聚焦与状态控制必须分别设计。
+两种视图共享实体身份和快照身份，但不共享世界坐标解释器。M1.3d 完成两套静置背景和显式切换，但产品视觉未通过；M1.3e 在不改变该空间边界的前提下修订沉浸流动与 Agent 理论恒星材质。
 
 ## M1.3d 双背景数据流
 
@@ -45,10 +45,48 @@ AgentDualBackgroundPage
 当前实现入口：
 
 - `AgentDualBackgroundPage.tsx`：正式研究 Agent 页面、单活动渲染器切换、会话状态和极简提交契约。
-- `AgentImmersiveStarfieldCanvas.tsx`：身份稳定的会话随机空间、Curl 流和锐利恒星材质。
+- `AgentImmersiveStarfieldCanvas.tsx`：身份稳定的会话随机空间、状态化 GPGPU 两级流场、解析式后备、会话检查点和锐利恒星材质。
 - `AgentTheoryBackgroundCanvas.tsx`：完整理论载荷的 Agent 环境态/探索态适配。
 - `App17GalaxyCanvas.tsx`：以 `analysis | agent-theory` 和 `ambient | explore` 隔离 Agent 专用材质与交互，不改变独立分析星图默认值。
 - `load_agent_immersive_background`：只读抽样最多 6,000 篇真实论文并返回全部热点身份，不返回任何空间坐标。
+
+## M1.3e 沉浸流场数据流
+
+```text
+AgentImmersiveBackgroundPayloadV2（无坐标）
+  → SessionSeed + StableRandomAssignment
+  → PositionTexture RGBA32F 128×64
+  → VelocityTexture RGBA32F 128×64
+  → FixedStep 1/60s Ping-Pong Integrator
+       ├─ LargeScaleTransportField
+       ├─ SmallScaleCurlField
+       ├─ DialogCalmEllipsoid
+       └─ SoftEllipsoidBoundary
+  → SharpPaper/Hotspot Core + Restricted Corona
+  → AgentImmersiveFlowCheckpointV1
+       └─ sessionStorage / in-memory cache
+
+capability failure or context lost
+  → session-locked analytic-fallback
+  → same seed, identity order and sharp semantic layer
+```
+
+GPGPU 每帧最多补算三个固定步；页面隐藏时停止 RAF，恢复后不补算离屏时间。检查点保存位置、速度、步数、纹理尺寸和会话种子；双背景切换的黑色遮罩覆盖后再读回，返回沉浸背景时恢复同一状态。context lost 后该会话不再次申请 GPGPU。
+
+## M1.3e Agent 理论恒星材质
+
+`buildApp15TheoryScene` 为论文同时保留原分析颜色和独立 `semanticColor`。`analysis` 继续读取原 `color`；`agent-theory` 使用银白亮核和约 54% 色度的热点语义色外层。
+
+热点概览层共享同一几何体和实体索引：
+
+```text
+Hotspot entity/index
+  ├─ core pass: 4.5–9 CSS px, normal blend, depth write
+  └─ optical pass: 8–18 CSS px, short diffraction + thin corona,
+                   additive blend, no depth write, alpha <= 12%
+```
+
+业务拾取只绑定核心对象。Agent 概览不再计算方向光 Lambert 球面或实心圆片；进入热点系统后的现有局部光球继续负责近距离表面层次。独立理论星图和展示星图仍走 `analysis` 分支。
 
 ## 目标数据流
 
@@ -139,6 +177,7 @@ AgentGalaxyFocusIntent
 - M1.3b-1 将语义星改为共享几何体的双通道恒星光球。核心通道全分辨率并写深度；表面/薄层日冕通道复用同一顶点身份且不写深度。两者都使用正常透明混合，不经过 Bloom、景深、运动模糊或低分辨率放大。
 - `gl_PointCoord` 在片元阶段重建球面法线，固定视空间主光、弱补光、光球暗边和软能量压缩共同提供三维层次。小于 `2.2px` 时保持锐利针点，`2.2–4.5px` 连续进入光球表面 LOD。
 - 每个论文顶点继承所属热点色相。论文色度低于热点，热点使用更厚的表面与极弱日冕；聚焦只连续提高同一色相的受光层次，核心透明度不读取时间或聚焦进度。
+- M1.3e 部分取代上述统一光球规则：Agent 理论概览热点改为混合恒星 LOD，完整光球仅保留给飞近后的局部系统；Agent 理论论文通过独立 `semanticColor` 避免 CPU 与 Shader 双重白化。
 - balanced 上限为 1,920 个论文代理、55 个明显热点、800 个环境星和 1,600 个暗微尘；high 上限为 2,560、75、1,200 和 2,600。
 
 ### MotionStateController

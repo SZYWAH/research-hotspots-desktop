@@ -1,0 +1,128 @@
+{
+  "workPackage": "M1.3e",
+  "title": "沉浸流动与理论恒星材质修订",
+  "generatedAt": "2026-07-29T05:45:52.342Z",
+  "branch": "codex/agent-dual-background-v2",
+  "baselineCommit": "63e83d3cd7b49d513df1613dfb42ef01fd1b5ce0",
+  "technicalStatus": "PASS",
+  "productVisualStatus": "UNVERIFIED",
+  "immersiveFlow": {
+    "version": "agent-immersive-two-level-v1",
+    "stateTexture": {
+      "width": 128,
+      "height": 64,
+      "format": "RGBA32F",
+      "fixedStepSeconds": 0.016666666666666666,
+      "maximumCatchupSteps": 3
+    },
+    "backends": [
+      "gpgpu",
+      "analytic-fallback"
+    ],
+    "representativeFiveSecondMetrics": {
+      "visiblePaperCount": 4524,
+      "medianDisplacementPx": 4.63539841408724,
+      "p75DisplacementPx": 8.114176432634506,
+      "p95DisplacementPx": 19.137221571022074,
+      "movedOver3PxRatio": 0.7895667550839964,
+      "globalDirectionality": 0.22190530536332034,
+      "coordinateHash": "53ad69caced76b6938c7a0693358ec3d40a3ce1bb4d510679087fae69f89eb80"
+    },
+    "comparisonSeedCoordinateHash": "6201b7b49716a4538acb06e3dee199865238419be8a756f73d1beaa0b6f529f0",
+    "identityRules": {
+      "paperTarget": 6000,
+      "hotspotTarget": 160,
+      "usesTheoryCoordinates": false,
+      "allowsRespawn": false,
+      "allowsRuntimeReassignment": false
+    }
+  },
+  "agentTheoryMaterial": {
+    "paperSemanticChromaScale": 0.54,
+    "hotspotCoreCssPx": [
+      4.5,
+      9
+    ],
+    "hotspotOpticalCssPx": [
+      8,
+      18
+    ],
+    "hotspotCoronaOpacityMaximum": 0.12,
+    "sharedEntityGeometry": true,
+    "lambertSphereDiscRemoved": true,
+    "analysisProfileUnchanged": true
+  },
+  "databaseAudit": {
+    "database": "data/library/research-hotspots-v7.sqlite",
+    "projectId": "project-default",
+    "sourcePaperCount": 25463,
+    "sourceHotspotCount": 160,
+    "immersivePaperCount": 6000,
+    "membershipCount": 25463,
+    "readOnly": true,
+    "repeatPayloadHash": "4fd063b09bb61c56edff5339cfba477c8425f5a6918bfa27389acb2af6b47d18"
+  },
+  "automatedValidation": [
+    {
+      "command": "node node_modules/typescript/bin/tsc -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "command": "node node_modules/vite/bin/vite.js build",
+      "status": "PASS",
+      "durationSeconds": 10.3
+    },
+    {
+      "command": "cargo check -j 2",
+      "status": "PASS",
+      "durationSeconds": 2.53
+    },
+    {
+      "command": "node scripts/agent_immersive_flow_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "node scripts/agent_theory_stellar_material_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "node scripts/agent_dual_background_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "desktopRuntime": {
+    "initialLaunch": "PASS",
+    "theoryBackground": "PASS",
+    "firstImmersiveSwitch": "FAIL",
+    "failure": "React maximum update depth exceeded during elapsed/checkpoint cleanup feedback",
+    "rootCause": "A mutable latest checkpoint was fed back as the live initialCheckpoint prop, recursively retriggering the renderer effect cleanup.",
+    "fix": "Freeze one mounted checkpoint per renderer instance and reuse unchanged elapsed state.",
+    "postFixStaticValidation": "PASS",
+    "postFixVisualRoundTrip": "PASS",
+    "roundTrip": [
+      "immersive",
+      "theory",
+      "Quantum Physics hotspot",
+      "immersive"
+    ],
+    "processResponding": true,
+    "newConsoleOrStartupErrors": false,
+    "userVisualAcceptance": "UNVERIFIED"
+  },
+  "safety": {
+    "fullscreenTested": false,
+    "longRecordingTested": false,
+    "gpuStressTested": false,
+    "pushPerformed": false,
+    "pullRequestCreated": false,
+    "releasePerformed": false
+  }
+}

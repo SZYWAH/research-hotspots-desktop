@@ -8,6 +8,8 @@
 
 配套实施文档：[科研 Agent 分阶段实施路线](./RESEARCH_AGENT_IMPLEMENTATION_ROADMAP.md)
 
+本文是详细产品定义和历史蓝图，不记录当前开发状态或进度。当前事实以 `PROJECT.md`、`ROADMAP.md`、`STATUS.md`、`ARCHITECTURE.md`、`DECISIONS.md` 和 `DEVELOPMENT.md` 六份入口文档为准。
+
 ## 1. 文档地位
 
 本文详细定义本项目的最终产品形态、用户体验、能力边界和完成标准。范围、当前阶段和优先级以 `PROJECT.md`、`ROADMAP.md`、`STATUS.md`、`ARCHITECTURE.md` 和 `DECISIONS.md` 为事实入口；本文作为产品细节来源。

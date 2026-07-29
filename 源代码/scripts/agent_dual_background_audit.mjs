@@ -121,8 +121,10 @@ assert(
   "Reference 60-degree FOV was not preserved",
 );
 assert(
-  immersive.includes("immersiveCurlOffset"),
-  "Curl/noise motion is missing",
+  immersive.includes("createGpgpuRuntime")
+  && immersive.includes("VELOCITY_FRAGMENT_SHADER")
+  && immersive.includes("ANALYTIC_FLOW_GLSL"),
+  "Stateful two-level flow or analytic fallback is missing",
 );
 const coreShader = between(
   immersive,
@@ -195,7 +197,7 @@ const result = {
   targetPapers: 6_000,
   hotspotFloor: 12,
   hotspotIdentityTarget: 160,
-  immersiveRenderer: "independent-session-random-curl",
+  immersiveRenderer: "independent-session-random-two-level-flow",
   singleRendererSwitch: true,
   theoryProfileDefault: "analysis",
   agentTheoryProfile: "agent-theory",
