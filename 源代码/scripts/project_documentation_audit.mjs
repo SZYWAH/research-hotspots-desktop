@@ -70,7 +70,12 @@ requireText(
   "63e83d3cd7b49d513df1613dfb42ef01fd1b5ce0",
   "current baseline commit",
 );
-requireText("DEVELOPMENT.md", "dirty worktree", "uncommitted state is explicit");
+requireText(
+  "DEVELOPMENT.md",
+  "ea5c8b843dc94f328caa25e32b358150b38c1518",
+  "M1.3e technical checkpoint commit",
+);
+requireText("DEVELOPMENT.md", "技术检查点提交：`PASS`", "checkpoint status");
 
 for (const detailedDoc of [
   "RESEARCH_AGENT_PRODUCT_GOAL.md",
