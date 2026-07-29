@@ -14,6 +14,11 @@ export type GalaxyTheoryViewScore = {
   edgeCrowding: number;
 };
 
+export type AgentGalaxyTheoryViewScore = GalaxyTheoryViewScore & {
+  depthCompressionPenalty: number;
+  parallaxPenalty: number;
+};
+
 export type GalaxyTheoryViewSelection = {
   azimuth: number;
   elevation: number;
@@ -23,6 +28,13 @@ export type GalaxyTheoryViewSelection = {
   improvementRatio: number;
   usedOptimizedView: boolean;
   score: GalaxyTheoryViewScore;
+};
+
+export type AgentGalaxyTheoryViewSelection = Omit<
+  GalaxyTheoryViewSelection,
+  "score"
+> & {
+  score: AgentGalaxyTheoryViewScore;
 };
 
 const DEG = Math.PI / 180;
@@ -43,6 +55,7 @@ type Basis = {
 type ProjectedPoint = {
   x: number;
   y: number;
+  viewDepth: number;
   displaySize: number;
 };
 
@@ -135,6 +148,125 @@ export function selectDeterministicTheoryView(
   };
 }
 
+export function selectDeterministicAgentTheoryView(
+  hotspots: GalaxyTheoryViewPoint[],
+  papers: GalaxyTheoryViewPoint[],
+  aspect = 16 / 9,
+  verticalFovDegrees = 42,
+): AgentGalaxyTheoryViewSelection {
+  if (hotspots.length === 0) {
+    return {
+      azimuth: BASELINE_AZIMUTH,
+      elevation: BASELINE_ELEVATION,
+      distance: 1,
+      baselineScore: 0,
+      selectedScore: 0,
+      improvementRatio: 0,
+      usedOptimizedView: false,
+      score: {
+        ...zeroScore(),
+        depthCompressionPenalty: 0,
+        parallaxPenalty: 0,
+      },
+    };
+  }
+
+  const center = medianCenter(hotspots);
+  const allPoints = [...hotspots, ...papers];
+  const scorePapers = stratifiedPaperSample(papers, MAX_PAPER_SCORE_SAMPLES);
+  const scorePoints = [...hotspots, ...scorePapers];
+  const verticalTangent = Math.tan(verticalFovDegrees * DEG * 0.5);
+  const horizontalTangent = verticalTangent * Math.max(0.1, aspect);
+  const candidates: Array<{ azimuth: number; elevation: number }> = [];
+  for (let index = 0; index < 24; index += 1) {
+    for (const elevation of VIEW_ELEVATIONS) {
+      candidates.push({ azimuth: index * 15 * DEG, elevation });
+    }
+  }
+
+  const evaluate = (azimuth: number, elevation: number) => {
+    const basis = viewBasis(azimuth, elevation);
+    const distance = fitDistance(
+      allPoints,
+      center,
+      basis,
+      horizontalTangent,
+      verticalTangent,
+    );
+    const projectedHotspots = projectPoints(
+      hotspots,
+      center,
+      basis,
+      distance,
+      horizontalTangent,
+      verticalTangent,
+    );
+    const projectedScorePoints = projectPoints(
+      scorePoints,
+      center,
+      basis,
+      distance,
+      horizontalTangent,
+      verticalTangent,
+    );
+    const statistical = scoreView(projectedHotspots, projectedScorePoints);
+    const depthCompressionPenalty = scoreDepthCompression(
+      projectedScorePoints,
+      distance,
+    );
+    const parallaxPenalty = scoreParallaxPotential(
+      scorePoints,
+      center,
+      azimuth,
+      elevation,
+      distance,
+      horizontalTangent,
+      verticalTangent,
+    );
+    const score: AgentGalaxyTheoryViewScore = {
+      ...statistical,
+      depthCompressionPenalty,
+      parallaxPenalty,
+      score:
+        statistical.overlapPenalty * 0.30
+        + statistical.emptyGridRatio * 0.15
+        + statistical.centerOffset * 0.15
+        + statistical.edgeCrowding * 0.10
+        + depthCompressionPenalty * 0.20
+        + parallaxPenalty * 0.10,
+    };
+    return { azimuth, elevation, distance, score };
+  };
+
+  const baseline = evaluate(BASELINE_AZIMUTH, BASELINE_ELEVATION);
+  let best = baseline;
+  for (const candidate of candidates) {
+    const evaluated = evaluate(candidate.azimuth, candidate.elevation);
+    if (
+      evaluated.score.score < best.score.score - 1e-12
+      || (
+        Math.abs(evaluated.score.score - best.score.score) <= 1e-12
+        && candidateOrder(evaluated) < candidateOrder(best)
+      )
+    ) {
+      best = evaluated;
+    }
+  }
+  const improvementRatio = baseline.score.score > 1e-12
+    ? Math.max(0, (baseline.score.score - best.score.score) / baseline.score.score)
+    : 0;
+  return {
+    azimuth: best.azimuth,
+    elevation: best.elevation,
+    distance: best.distance,
+    baselineScore: baseline.score.score,
+    selectedScore: best.score.score,
+    improvementRatio,
+    usedOptimizedView: candidateOrder(best) !== candidateOrder(baseline),
+    score: best.score,
+  };
+}
+
 function scoreView(hotspots: ProjectedPoint[], points: ProjectedPoint[]): GalaxyTheoryViewScore {
   const overlapPenalty = hotspotOverlapPenalty(hotspots);
   const occupied = new Set<number>();
@@ -219,9 +351,60 @@ function projectPoints(
     return {
       x: dot(relative, basis.right) / (viewDepth * horizontalTangent),
       y: dot(relative, basis.up) / (viewDepth * verticalTangent),
+      viewDepth,
       displaySize: point.displaySize ?? 12,
     };
   });
+}
+
+function scoreDepthCompression(points: ProjectedPoint[], distance: number) {
+  if (points.length < 2) return 1;
+  const depths = points.map((point) => point.viewDepth).sort((left, right) => left - right);
+  const spread = percentile(depths, 0.95) - percentile(depths, 0.05);
+  const normalizedSpread = spread / Math.max(1e-9, distance);
+  return 1 - clamp01(normalizedSpread / 0.34);
+}
+
+function scoreParallaxPotential(
+  points: GalaxyTheoryViewPoint[],
+  center: [number, number, number],
+  azimuth: number,
+  elevation: number,
+  distance: number,
+  horizontalTangent: number,
+  verticalTangent: number,
+) {
+  if (points.length < 4) return 1;
+  const base = projectPoints(
+    points,
+    center,
+    viewBasis(azimuth, elevation),
+    distance,
+    horizontalTangent,
+    verticalTangent,
+  );
+  const yawed = projectPoints(
+    points,
+    center,
+    viewBasis(azimuth + 0.8 * DEG, elevation),
+    distance,
+    horizontalTangent,
+    verticalTangent,
+  );
+  const ranked = base
+    .map((point, index) => ({
+      depth: point.viewDepth,
+      displacement: Math.hypot(
+        yawed[index].x - point.x,
+        yawed[index].y - point.y,
+      ),
+    }))
+    .sort((left, right) => left.depth - right.depth);
+  const groupSize = Math.max(1, Math.floor(ranked.length / 3));
+  const near = ranked.slice(0, groupSize).map((item) => item.displacement);
+  const far = ranked.slice(-groupSize).map((item) => item.displacement);
+  const separation = Math.abs(median(near.sort((a, b) => a - b)) - median(far.sort((a, b) => a - b)));
+  return 1 - clamp01(separation / 0.0024);
 }
 
 function viewBasis(azimuth: number, elevation: number): Basis {
@@ -279,6 +462,18 @@ function median(values: number[]) {
   return values.length % 2 === 0
     ? (values[middle - 1] + values[middle]) * 0.5
     : values[middle];
+}
+
+function percentile(values: number[], value: number) {
+  if (values.length === 0) return 0;
+  return values[Math.min(
+    values.length - 1,
+    Math.max(0, Math.ceil(values.length * value) - 1),
+  )];
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function subtractPoint(

@@ -239,7 +239,7 @@ export function AgentDualBackgroundPage({
     [activeProject.id, sessionSeed],
   );
   const theoryPoseStorageKey = useMemo(
-    () => `research-agent:theory-pose:v2:${activeProject.id}`,
+    () => `research-agent:theory-pose:v3-agent-depth:${activeProject.id}`,
     [activeProject.id],
   );
   const initialMode = useMemo(readBackgroundMode, []);

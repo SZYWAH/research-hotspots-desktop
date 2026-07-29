@@ -18,6 +18,23 @@
   background: #000;
 }
 
+.agent-theory-background__space-label {
+  position: absolute;
+  z-index: 5;
+  left: 22px;
+  bottom: 18px;
+  pointer-events: none;
+  color: rgb(215 224 235 / 44%);
+  font: 500 10px/1.2 "Microsoft YaHei", system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 8px rgb(0 0 0 / 92%);
+}
+
+.agent-theory-background[data-interaction-mode="explore"]
+  .agent-theory-background__space-label {
+  color: rgb(224 232 241 / 58%);
+}
+
 .agent-immersive-starfield__canvas {
   position: absolute;
   inset: 0;

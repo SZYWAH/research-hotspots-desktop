@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { App17GalaxyPayload } from "../types";
 import {
+  applyAgentTheoryDepthProfile,
+  createAgentTheoryDepthProfile,
+} from "../lib/agentTheoryDepth";
+import {
   App17GalaxyCanvas,
   type App17GalaxyCommand,
+  type AgentTheoryDepthDiagnostics,
+  type AgentTheoryQuality,
   type GalaxyCameraPose,
   type GalaxyExplorationState,
   type GalaxyInteractionMode,
@@ -36,6 +42,38 @@ export function AgentTheoryBackgroundCanvas({
   });
   const pendingBestResetRef = useRef(false);
   const previousResetNonceRef = useRef(resetToBestNonce);
+  const depthProfile = useMemo(
+    () => createAgentTheoryDepthProfile(payload),
+    [payload],
+  );
+  const displayPayload = useMemo(
+    () => applyAgentTheoryDepthProfile(payload, depthProfile),
+    [depthProfile, payload],
+  );
+  const ambientStorageKey = useMemo(
+    () => (
+      `research-agent:theory-ambient:${depthProfile.version}:`
+      + `${payload.snapshotId ?? "unknown"}`
+    ),
+    [depthProfile.version, payload.snapshotId],
+  );
+  const initialAmbientElapsedSeconds = useMemo(() => {
+    try {
+      const value = Number(window.sessionStorage.getItem(ambientStorageKey));
+      return Number.isFinite(value) && value >= 0 ? value : 0;
+    } catch {
+      return 0;
+    }
+  }, [ambientStorageKey]);
+  const quality = useMemo<AgentTheoryQuality>(() => {
+    if (!import.meta.env.DEV) return "balanced";
+    return new URLSearchParams(window.location.search)
+      .get("agentTheoryQuality") === "high"
+      ? "high"
+      : "balanced";
+  }, []);
+  const [depthDiagnostics, setDepthDiagnostics] =
+    useState<AgentTheoryDepthDiagnostics | null>(null);
 
   const issueCommand = (kind: App17GalaxyCommand["kind"]) => {
     setCommand((current) => ({
@@ -62,11 +100,20 @@ export function AgentTheoryBackgroundCanvas({
       className="agent-theory-background"
       data-interaction-mode={interactionMode}
       data-source-snapshot-id={payload.snapshotId ?? "unknown"}
+      data-display-space="agent-depth-enhanced"
+      data-depth-scale={depthProfile.depthScale.toFixed(6)}
+      data-depth-ratio={depthProfile.rawDepthRatio.toFixed(6)}
+      data-near-paper-count={depthDiagnostics?.nearPaperCount ?? 0}
+      data-middle-paper-count={depthDiagnostics?.middlePaperCount ?? 0}
+      data-far-paper-count={depthDiagnostics?.farPaperCount ?? 0}
     >
+      <div className="agent-theory-background__space-label">
+        理论布局 · 视觉纵深增强
+      </div>
       <App17GalaxyCanvas
         active
-        payload={payload}
-        farBackgroundPayload={payload}
+        payload={displayPayload}
+        farBackgroundPayload={displayPayload}
         selectedId={selectedHotspotId}
         selectedPaperId={selectedPaperId}
         visualMode="galaxy"
@@ -76,6 +123,22 @@ export function AgentTheoryBackgroundCanvas({
         interactionMode={interactionMode}
         labelsVisible={interactionMode === "explore"}
         initialCameraPose={initialCameraPose}
+        agentTheoryDepthProfile={depthProfile}
+        agentTheoryQuality={quality}
+        initialAgentTheoryAmbientElapsedSeconds={
+          initialAmbientElapsedSeconds
+        }
+        onAgentTheoryAmbientElapsedSecondsChange={(elapsedSeconds) => {
+          try {
+            window.sessionStorage.setItem(
+              ambientStorageKey,
+              elapsedSeconds.toFixed(6),
+            );
+          } catch {
+            // Ambient phase persistence is session-only best effort.
+          }
+        }}
+        onAgentTheoryDepthDiagnostics={setDepthDiagnostics}
         onCameraPoseChange={onCameraPoseChange}
         onReady={onReady}
         onSelect={(hotspotId) => {

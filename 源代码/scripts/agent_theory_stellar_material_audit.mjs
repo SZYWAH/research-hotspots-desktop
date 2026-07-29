@@ -50,7 +50,8 @@ for (const [name, passed, detail] of [
   [
     "Agent theory paper shader reads semanticColor",
     /varying vec3 vSemanticColor/.test(paperMaterial)
-      && /mix\(vec3\(luminance\), vSemanticColor, 0\.54\)/.test(paperMaterial),
+      && /mix\(vec3\(luminance\), vSemanticColor, semanticChroma\)/.test(paperMaterial)
+      && /mix\(0\.52, 0\.78, vAgentNearness\)/.test(paperMaterial),
     "createPaperMaterial",
   ],
   [
@@ -71,18 +72,18 @@ for (const [name, passed, detail] of [
     "hotspot pickObject",
   ],
   [
-    "Agent theory core size is 4.5-9px",
-    /mix\(4\.5, 9\.0, importance\)/.test(hotspotMaterial),
+    "Agent theory core size is 5-10px",
+    /mix\(5\.0, 10\.0, importance\)/.test(hotspotMaterial),
     "core LOD",
   ],
   [
-    "Agent theory optical size is 8-18px",
-    /mix\(8\.0, 18\.0, importance\)/.test(hotspotMaterial),
+    "Agent theory optical size is 10-20px",
+    /mix\(10\.0, 20\.0, importance\)/.test(hotspotMaterial),
     "optical LOD",
   ],
   [
-    "optical corona opacity is capped at 12%",
-    /min\(0\.12, haloEnergy \+ rayEnergy\)/.test(hotspotMaterial),
+    "optical corona opacity is capped at 10%",
+    /min\(0\.10, haloEnergy \+ rayEnergy\)/.test(hotspotMaterial),
     "optical opacity cap",
   ],
   [
@@ -114,10 +115,10 @@ const result = {
   generatedAt: new Date().toISOString(),
   status: failed.length === 0 ? "PASS" : "FAIL",
   diagnostics: {
-    paperSemanticChromaScale: 0.54,
-    hotspotCoreCssSize: [4.5, 9],
-    hotspotOpticalCssSize: [8, 18],
-    hotspotCoronaOpacityMaximum: 0.12,
+    paperSemanticChromaScale: [0.52, 0.78],
+    hotspotCoreCssSize: [5, 10],
+    hotspotOpticalCssSize: [10, 20],
+    hotspotCoronaOpacityMaximum: 0.10,
     overviewEntityPasses: 2,
   },
   checks,
