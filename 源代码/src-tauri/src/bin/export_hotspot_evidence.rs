@@ -1,4 +1,6 @@
-use research_hotspots_desktop_lib::{export_hotspot_evidence_from_database_path, HotspotEvidenceExportResult};
+use research_hotspots_desktop_lib::{
+    export_hotspot_evidence_from_database_path, HotspotEvidenceExportResult,
+};
 use serde::Serialize;
 use std::env;
 use std::fs;
@@ -56,23 +58,43 @@ fn main() {
 fn run() -> Result<(), String> {
     let args = parse_args()?;
     let database_path = resolve_database_path(&args)?;
-    let export = export_hotspot_evidence_from_database_path(database_path, args.project_id.clone(), args.hotspot_id.clone(), args.max_papers)?;
+    let export = export_hotspot_evidence_from_database_path(
+        database_path,
+        args.project_id.clone(),
+        args.hotspot_id.clone(),
+        args.max_papers,
+    )?;
     let strict_gate = build_gate(&args, &export);
 
     if let Some(markdown_output) = args.markdown_output.as_ref() {
         if let Some(parent) = markdown_output.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Cannot create markdown output dir {}: {error}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "Cannot create markdown output dir {}: {error}",
+                    parent.display()
+                )
+            })?;
         }
-        fs::write(markdown_output, format!("{}\n", export.evidence_profile_markdown)).map_err(|error| format!("Cannot write {}: {error}", markdown_output.display()))?;
+        fs::write(
+            markdown_output,
+            format!("{}\n", export.evidence_profile_markdown),
+        )
+        .map_err(|error| format!("Cannot write {}: {error}", markdown_output.display()))?;
     }
 
-    let report = HotspotEvidenceReport { export, strict_gate };
+    let report = HotspotEvidenceReport {
+        export,
+        strict_gate,
+    };
     let json = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = args.output.as_ref() {
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Cannot create output dir {}: {error}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Cannot create output dir {}: {error}", parent.display())
+            })?;
         }
-        fs::write(output, format!("{json}\n")).map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
+        fs::write(output, format!("{json}\n"))
+            .map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
     }
 
     println!(
@@ -118,11 +140,13 @@ fn parse_args() -> Result<Args, String> {
                 index += 1;
             }
             "--database-dir" => {
-                args.database_dir = Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
+                args.database_dir =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
                 index += 2;
             }
             "--database-path" => {
-                args.database_path = Some(PathBuf::from(value_after(&raw, index, "--database-path")?));
+                args.database_path =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-path")?));
                 index += 2;
             }
             "--project-id" => {
@@ -138,15 +162,25 @@ fn parse_args() -> Result<Args, String> {
                 index += 2;
             }
             "--markdown-output" => {
-                args.markdown_output = Some(PathBuf::from(value_after(&raw, index, "--markdown-output")?));
+                args.markdown_output = Some(PathBuf::from(value_after(
+                    &raw,
+                    index,
+                    "--markdown-output",
+                )?));
                 index += 2;
             }
             "--max-papers" => {
-                args.max_papers = parse_positive_usize(&value_after(&raw, index, "--max-papers")?, "--max-papers")?;
+                args.max_papers = parse_positive_usize(
+                    &value_after(&raw, index, "--max-papers")?,
+                    "--max-papers",
+                )?;
                 index += 2;
             }
             "--min-representative-papers" => {
-                args.min_representative_papers = parse_positive_usize(&value_after(&raw, index, "--min-representative-papers")?, "--min-representative-papers")?;
+                args.min_representative_papers = parse_positive_usize(
+                    &value_after(&raw, index, "--min-representative-papers")?,
+                    "--min-representative-papers",
+                )?;
                 index += 2;
             }
             "--require-evolution" => {
@@ -157,7 +191,9 @@ fn parse_args() -> Result<Args, String> {
                 args.require_source_distribution = true;
                 index += 1;
             }
-            value if value.starts_with("--") => return Err(format!("Unsupported argument: {value}")),
+            value if value.starts_with("--") => {
+                return Err(format!("Unsupported argument: {value}"))
+            }
             value => {
                 if args.database_path.is_none() && args.database_dir.is_none() {
                     args.database_path = Some(PathBuf::from(value));
@@ -179,10 +215,17 @@ fn parse_args() -> Result<Args, String> {
 
 fn resolve_database_path(args: &Args) -> Result<PathBuf, String> {
     if let Some(path) = args.database_path.as_ref() {
-        return path.canonicalize().map_err(|error| format!("Cannot resolve database path {}: {error}", path.display()));
+        return path
+            .canonicalize()
+            .map_err(|error| format!("Cannot resolve database path {}: {error}", path.display()));
     }
-    let path = args.database_dir.as_ref().expect("database_dir checked").join(DATABASE_FILE);
-    path.canonicalize().map_err(|error| format!("Cannot resolve database path {}: {error}", path.display()))
+    let path = args
+        .database_dir
+        .as_ref()
+        .expect("database_dir checked")
+        .join(DATABASE_FILE);
+    path.canonicalize()
+        .map_err(|error| format!("Cannot resolve database path {}: {error}", path.display()))
 }
 
 fn build_gate(args: &Args, export: &HotspotEvidenceExportResult) -> StrictGate {
@@ -225,7 +268,12 @@ fn build_gate(args: &Args, export: &HotspotEvidenceExportResult) -> StrictGate {
     let failures = checks
         .iter()
         .filter(|check| !check.passed)
-        .map(|check| format!("{} expected {}, actual {}.", check.name, check.expected, check.actual))
+        .map(|check| {
+            format!(
+                "{} expected {}, actual {}.",
+                check.name, check.expected, check.actual
+            )
+        })
         .collect::<Vec<_>>();
     StrictGate {
         enabled: true,
@@ -243,7 +291,9 @@ fn value_after(raw: &[String], index: usize, name: &str) -> Result<String, Strin
 }
 
 fn parse_positive_usize(value: &str, name: &str) -> Result<usize, String> {
-    let parsed = value.parse::<usize>().map_err(|_| format!("{name} must be a positive integer."))?;
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("{name} must be a positive integer."))?;
     if parsed == 0 {
         return Err(format!("{name} must be a positive integer."));
     }

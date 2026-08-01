@@ -105,12 +105,14 @@ assert(
   "Paper world assignment is not stable per session seed and entity ID",
 );
 assert(
-  immersive.includes("writeRandomPosition(basePositions, index, random, FIELD_SIZE)"),
-  "Paper stars are not assigned to the independent wide random field",
+  immersive.includes("writeRandomPosition(basePositions, index, random, randomRadius)")
+  && immersive.includes("random,\n      FIELD_SIZE,"),
+  "The random-field paper path no longer uses the independent wide field",
 );
 assert(
-  immersive.includes("writeRandomPosition(basePositions, index, random, HOTSPOT_CORE_RADIUS)"),
-  "Hotspots are not assigned to the independent core field",
+  immersive.includes("style === \"star-river\"")
+  && immersive.includes("random,\n      HOTSPOT_CORE_RADIUS,"),
+  "The random-field hotspot path no longer uses the independent core field",
 );
 assert(
   immersive.includes("camera.position.set(0, 0, 25)"),
@@ -162,7 +164,7 @@ assert(
   "Session continuation or background preference persistence is missing",
 );
 assert(
-  dualPage.includes("本版仅记录提交；科研 Agent 回答后端尚未接入"),
+  dualPage.includes("正式回答后端尚未接入；证据舞台仅使用开发答案夹具"),
   "The prompt shell does not disclose the absent Agent backend",
 );
 assert(
@@ -170,9 +172,12 @@ assert(
   "Formal Research Agent navigation still renders the old workspace directly",
 );
 assert(
-  app.includes("advancedWorkspace={(") && app.includes("<AgentWorkspace"),
-  "The supervised Agent workspace is not preserved as the advanced workbench",
+  app.includes('onOpenRunCenter={() => setActiveView("agent-runs")}')
+  && app.includes('activeView === "agent-runs"')
+  && app.includes("<AgentWorkspace"),
+  "The supervised Agent workspace is not preserved as the independent run center",
 );
+assert(!dualPage.includes("advancedWorkspace") && dualPage.includes("Agent 运行中心"), "The legacy embedded advanced workbench is still present");
 
 assert(
   theory.includes("visualProfile = \"analysis\""),

@@ -57,11 +57,13 @@ fn parse_args() -> Result<Args, String> {
         match raw[index].as_str() {
             "--" => index += 1,
             "--database-dir" => {
-                args.database_dir = Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
+                args.database_dir =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
                 index += 2;
             }
             "--database-path" => {
-                args.database_path = Some(PathBuf::from(value_after(&raw, index, "--database-path")?));
+                args.database_path =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-path")?));
                 index += 2;
             }
             "--project-id" => {
@@ -73,11 +75,16 @@ fn parse_args() -> Result<Args, String> {
                 index += 2;
             }
             "--coordinate-override" => {
-                args.coordinate_override =
-                    Some(PathBuf::from(value_after(&raw, index, "--coordinate-override")?));
+                args.coordinate_override = Some(PathBuf::from(value_after(
+                    &raw,
+                    index,
+                    "--coordinate-override",
+                )?));
                 index += 2;
             }
-            value if value.starts_with("--") => return Err(format!("Unsupported argument: {value}")),
+            value if value.starts_with("--") => {
+                return Err(format!("Unsupported argument: {value}"))
+            }
             value => return Err(format!("Unexpected positional argument: {value}")),
         }
     }
@@ -94,7 +101,11 @@ fn resolve_database_path(args: &Args) -> Result<PathBuf, String> {
     let path = args
         .database_path
         .clone()
-        .or_else(|| args.database_dir.as_ref().map(|dir| dir.join(DATABASE_FILE)))
+        .or_else(|| {
+            args.database_dir
+                .as_ref()
+                .map(|dir| dir.join(DATABASE_FILE))
+        })
         .expect("database path checked");
     path.canonicalize()
         .map_err(|error| format!("Cannot resolve database path {}: {error}", path.display()))

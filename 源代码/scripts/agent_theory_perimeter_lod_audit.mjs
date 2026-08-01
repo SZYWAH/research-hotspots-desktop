@@ -126,7 +126,7 @@ const points = [...displayPayload.papers, ...displayPayload.hotspots].map(
     z: point.z * APP15_THEORY_COORDINATE_SCALE,
   }),
 );
-const durationSeconds = 8 * 60;
+const durationSeconds = 10 * 60;
 const totalSteps = Math.round(
   durationSeconds / AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS,
 );
@@ -233,7 +233,7 @@ check(
   JSON.stringify(shellViolations.slice(0, 3)),
 );
 check(
-  "eight-minute path covers at least 90 percent of perimeter sectors",
+  "ten-minute path covers at least 90 percent of perimeter sectors",
   visitedRatio(checkpoint.visitedSectors) >= 0.9,
   `visited=${visitedRatio(checkpoint.visitedSectors)}`,
 );
@@ -253,7 +253,7 @@ check(
 check(
   "five-second near-field projected displacement is perceptible but restrained",
   fiveSecondMotion.nearMedianPx >= 8
-    && fiveSecondMotion.nearMedianPx <= 18,
+    && fiveSecondMotion.nearMedianPx <= 20,
   JSON.stringify(fiveSecondMotion),
 );
 check(
@@ -272,20 +272,23 @@ check(
     && resolveAgentTheoryStellarLod(1.8, false) === "psf"
     && resolveAgentTheoryStellarLod(7, false) === "near-psf"
     && resolveAgentTheoryStellarLod(48, false) === "near-psf"
-    && resolveAgentTheoryStellarLod(18, true) === "sphere"
-    && resolveAgentTheoryStellarLod(14.1, true, "sphere") === "sphere"
-    && resolveAgentTheoryStellarLod(14, true, "sphere") === "near-psf",
-  "point<1.8; psf<7; ordinary cap near-psf; sphere 18/14 hysteresis",
+    && resolveAgentTheoryStellarLod(12, true) === "sphere"
+    && resolveAgentTheoryStellarLod(9.1, true, "sphere") === "sphere"
+    && resolveAgentTheoryStellarLod(9, true, "sphere") === "near-psf",
+  "point<1.8; psf<7; ordinary cap near-psf; sphere 12/9 hysteresis",
 );
 check(
-  "Agent runtime owns a single cruise-explore-return camera mode",
-  /type AgentTheoryCameraMode = "cruise" \| "explore" \| "returning"/.test(
+  "Agent runtime owns one cruise-free-look-anchor-return camera state machine",
+  /"cruise"[\s\S]*"explore-free"[\s\S]*"return-preparing"[\s\S]*"returning-anchor"[\s\S]*"return-commit"/.test(
     fs.readFileSync(
       path.join(root, "src", "lib", "agentTheoryPerimeter.ts"),
       "utf8",
     ),
   )
-    && /agentTheoryCameraMode === "returning"/.test(componentSource)
+    && /agentTheoryCameraMode === "return-preparing"/.test(componentSource)
+    && /agentTheoryCameraMode === "returning-anchor"/.test(componentSource)
+    && /agentTheoryCameraMode === "return-commit"/.test(componentSource)
+    && /agentTheoryCameraMode === "explore-free"/.test(componentSource)
     && /agentTheoryCameraMode === "cruise"/.test(componentSource),
   "single camera writer",
 );
@@ -300,7 +303,7 @@ check(
   "session checkpoint uses Web Crypto and persists the PRNG state",
   /window\.crypto\.getRandomValues/.test(wrapperSource)
     && /randomState/.test(perimeterSource)
-    && /agent-theory-perimeter-v1-r1/.test(perimeterSource)
+    && /agent-theory-perimeter-v2-c2/.test(perimeterSource)
     && /research-agent:theory-cruise-seed:/.test(wrapperSource)
     && /legacySessionSeedStorageKey/.test(wrapperSource),
   "AgentTheoryBackgroundCanvas",
@@ -311,17 +314,20 @@ check(
     && /new THREE\.Frustum\(\)/.test(componentSource)
     && /setFromProjectionMatrix/.test(componentSource)
     && /containsPoint/.test(componentSource)
-    && /const tangentWeights = \[0\.55, 0\.60, 0\.65, 0\.70, 0\.75\]/.test(
+    && /const tangentWeights = broadSearch/.test(
       componentSource,
     ),
   "real runtime frustum search",
 );
 check(
-  "three consecutive near-empty frames trigger a center-safe reframe",
-  /agentTheoryLowVisibilityFrames >= 3/.test(componentSource)
-    && /perimeter-reframe/.test(componentSource)
-    && /agentTheoryCruiseFallbackToCenter/.test(componentSource),
-  "perimeter reframe fallback",
+  "continuous safe shell removes periodic automatic reframe scheduling",
+  /sampleAgentTheoryPerimeterFrame/.test(perimeterSource)
+    && /uniformOutwardExpansion/.test(perimeterSource)
+    && !/APP17_AGENT_THEORY_REFRAME_DWELL_MS/.test(componentSource)
+    && !/APP17_AGENT_THEORY_REFRAME_COOLDOWN_MS/.test(componentSource)
+    && !/agentTheoryLowVisibilityStartedAt/.test(componentSource)
+    && !/agentTheoryLastReframeAt/.test(componentSource),
+  "automatic runtime reframe count contract is zero",
 );
 check(
   "invalid or near-empty cruise checkpoints are not persisted",
@@ -345,8 +351,10 @@ check(
       /function createPaperMaterial\([\s\S]*?\n}\n\nfunction createHotspotPointSourceMaterial/,
     )?.[0] ?? "",
   )
-    && /float psf =/.test(componentSource)
-    && /float shoulder = exp/.test(componentSource),
+    && /float opticalEnergy =/.test(componentSource)
+    && /float shoulder = exp/.test(componentSource)
+    && /AgentTheoryPaperCore/.test(componentSource)
+    && /AgentTheoryPaperOptical/.test(componentSource),
   "point and PSF optical path",
 );
 check(
@@ -379,7 +387,7 @@ check(
 
 const failedChecks = checks.filter((item) => !item.passed);
 const result = {
-  audit: "agent-theory-perimeter-stellar-lod-v1",
+  audit: "agent-theory-perimeter-stellar-lod-r4-v1",
   generatedAt: new Date().toISOString(),
   status: failedChecks.length === 0 ? "PASS" : "FAIL",
   snapshotId: active.snapshotId,

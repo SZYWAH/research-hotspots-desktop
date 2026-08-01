@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Research Hotspots Desktop",
+  "productName": "Sidera",
   "version": "0.22.0-beta.2",
   "identifier": "com.local.research-hotspots-desktop",
   "build": {
@@ -13,12 +13,17 @@
     "windows": [
       {
         "label": "main",
-        "title": "Research Hotspots Desktop",
+        "title": "Sidera",
         "width": 1360,
         "height": 860,
         "minWidth": 1100,
         "minHeight": 720,
-        "resizable": true
+        "resizable": true,
+        "center": true,
+        "maximized": true,
+        "fullscreen": false,
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {
@@ -28,10 +33,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "publisher": "Research Hotspots Desktop",
-    "copyright": "Copyright © 2026 Research Hotspots Desktop",
-    "shortDescription": "Local-first research hotspot analysis and scientific literature exploration",
-    "longDescription": "Research Hotspots Desktop provides local literature management, research hotspot analysis, evidence reports, and an interactive scientific galaxy visualization.",
+    "publisher": "Sidera",
+    "copyright": "Copyright © 2026 Sidera",
+    "shortDescription": "Local-first research agent and scientific knowledge galaxy",
+    "longDescription": "Sidera combines a local-first research agent, scientific literature workflows, evidence reports, and an interactive knowledge galaxy.",
     "icon": ["icons/icon.ico"],
     "externalBin": [],
     "windows": {

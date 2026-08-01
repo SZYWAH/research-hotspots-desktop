@@ -55,12 +55,12 @@ use super::agent_model_gateway::{
     ModelAttemptHook, ModelAttemptHookError, ModelAttemptKind, ModelCancelHandle,
     ModelCancellation, ModelMessage, ModelMessageRole, ModelPurpose, StructuredModelRequest,
 };
+#[cfg(not(test))]
+use super::LibraryMutationRegistry;
 use super::{
     get_app_credential_status, normalized_database_key, now_millis, open_library_database,
     read_app_credential, set_app_credential,
 };
-#[cfg(not(test))]
-use super::LibraryMutationRegistry;
 
 #[cfg(test)]
 #[derive(Default)]
@@ -1393,12 +1393,11 @@ impl LibraryLeaseRelease {
                         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             let now = timestamp_ms();
-                            let renewed = open_agent_connection(&heartbeat_path).and_then(
-                                |connection| {
+                            let renewed =
+                                open_agent_connection(&heartbeat_path).and_then(|connection| {
                                     AgentCapabilityRepository::new(&connection)?
                                         .renew_library_lease(&current, now)
-                                },
-                            );
+                                });
                             match renewed {
                                 Ok(value) => {
                                     current = value;
@@ -1823,21 +1822,19 @@ fn execute_extended_tool_sync(
             fs::create_dir_all(&staging_dir)
                 .map_err(|error| ToolExecutionFailure::policy(error.to_string()))?;
             let staged_result = match grant.grant_kind {
-                AgentResourceGrantKind::ImportFile => {
-                    stage_verified_import_source(
-                        Path::new(&grant.locator),
-                        &staging_dir,
-                        &grant.fingerprint_sha256,
+                AgentResourceGrantKind::ImportFile => stage_verified_import_source(
+                    Path::new(&grant.locator),
+                    &staging_dir,
+                    &grant.fingerprint_sha256,
+                )
+                .and_then(|staged_source| {
+                    super::import_paper_file_to_library_path(
+                        staging_dir.clone(),
+                        Some(run.project_id.clone()),
+                        staged_source,
                     )
-                    .and_then(|staged_source| {
-                        super::import_paper_file_to_library_path(
-                            staging_dir.clone(),
-                            Some(run.project_id.clone()),
-                            staged_source,
-                        )
-                        .map(|_| ())
-                    })
-                }
+                    .map(|_| ())
+                }),
                 AgentResourceGrantKind::MysqlProfile => {
                     let app =
                         app.ok_or_else(|| "AGENT_MYSQL_IMPORT_APP_CONTEXT_REQUIRED".to_string());
@@ -2384,11 +2381,8 @@ fn apply_deferred_tool_commit(
             if papers.is_empty() {
                 return Err("AGENT_IMPORT_EMPTY".into());
             }
-            let mutation = super::upsert_paper_rows_in_transaction(
-                transaction,
-                &project_id,
-                papers,
-            )?;
+            let mutation =
+                super::upsert_paper_rows_in_transaction(transaction, &project_id, papers)?;
             let revision = current_library_revision(transaction, &project_id)?;
             let capability = AgentCapabilityRepository::new(transaction)?;
             capability.consume_resource_grant(&grant_id, run_id, now)?;
@@ -4669,8 +4663,8 @@ mod tests {
 
     #[test]
     fn writer_evidence_exposes_stable_one_based_citation_indices() {
-        let paper = |id: &str, title: &str| {
-            research_hotspots_core::agent_tools::AgentPaperEvidence {
+        let paper =
+            |id: &str, title: &str| research_hotspots_core::agent_tools::AgentPaperEvidence {
                 id: id.into(),
                 title: title.into(),
                 abstract_text: format!("Evidence for {title}."),
@@ -4682,8 +4676,7 @@ mod tests {
                 doi: None,
                 url: None,
                 untrusted_data: true,
-            }
-        };
+            };
         let evidence = AgentEvidenceBundle {
             schema_version: 1,
             project_id: "project".into(),
@@ -4699,7 +4692,10 @@ mod tests {
             mode: AgentReportMode::Simple,
             hotspot_ids: Vec::new(),
             hotspots: Vec::new(),
-            papers: vec![paper("paper-a", "First paper"), paper("paper-b", "Second paper")],
+            papers: vec![
+                paper("paper-a", "First paper"),
+                paper("paper-b", "Second paper"),
+            ],
             missing_paper_ids: Vec::new(),
             truncated: false,
             untrusted_data: true,
@@ -4734,8 +4730,11 @@ mod tests {
         drop(repository);
         drop(connection);
 
-        let mut guard =
-            LibraryLeaseRelease::new_with_interval(&database, Some(lease), Duration::from_millis(20));
+        let mut guard = LibraryLeaseRelease::new_with_interval(
+            &database,
+            Some(lease),
+            Duration::from_millis(20),
+        );
         let deadline = Instant::now() + Duration::from_secs(2);
         let renewed = loop {
             let connection = open_agent_connection(&database).unwrap();
@@ -5892,9 +5891,7 @@ mod tests {
         assert_eq!(audit.review_status.as_deref(), Some("approved"));
         let report = latest_artifact(&completed, "report_draft").unwrap();
         assert_eq!(report.review_status.as_deref(), Some("needs-review"));
-        assert!(
-            !report_requires_manual_review_for_export(&completed, &report.id).unwrap()
-        );
+        assert!(!report_requires_manual_review_for_export(&completed, &report.id).unwrap());
         assert_eq!(
             serde_json::from_value::<AgentReportAudit>(audit.content.clone())
                 .unwrap()
@@ -6060,8 +6057,7 @@ mod tests {
         let latest_audit = latest_artifact(&awaiting_review, "report_audit").unwrap();
         assert_eq!(latest_audit.review_status.as_deref(), Some("needs-review"));
         assert!(
-            report_requires_manual_review_for_export(&awaiting_review, &latest_report.id)
-                .unwrap()
+            report_requires_manual_review_for_export(&awaiting_review, &latest_report.id).unwrap()
         );
         assert_eq!(
             serde_json::from_value::<AgentReportAudit>(latest_audit.content.clone())

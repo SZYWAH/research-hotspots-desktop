@@ -19,6 +19,10 @@ import type {
   V20HotspotSnapshot,
 } from "../types";
 import type {
+  AgentDualFocusResolveInput,
+  AgentDualFocusScene,
+} from "./agentDualFocus";
+import type {
   AgentGalaxyFocusIntent,
   ResolvedAgentGalaxyEntity,
 } from "./agentGalaxyFlowContract";
@@ -606,6 +610,18 @@ export async function resolveAgentGalaxyEntities(
   if (!isDesktopRuntime()) return [] as ResolvedAgentGalaxyEntity[];
   return invoke<ResolvedAgentGalaxyEntity[]>(
     "resolve_agent_galaxy_entities",
+    { input },
+  );
+}
+
+export async function resolveAgentDualFocusScene(
+  input: AgentDualFocusResolveInput,
+) {
+  if (!isDesktopRuntime()) {
+    throw new Error("双背景真实实体聚焦仅可在桌面应用中解析。");
+  }
+  return invoke<AgentDualFocusScene>(
+    "resolve_agent_dual_focus_scene",
     { input },
   );
 }

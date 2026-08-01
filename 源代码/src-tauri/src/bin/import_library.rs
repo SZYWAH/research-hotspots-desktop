@@ -30,19 +30,30 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
-    let source = args.source.ok_or_else(|| "Missing --source <file>.".to_string())?;
-    let database_dir = args.database_dir.ok_or_else(|| "Missing --database-dir <dir>.".to_string())?;
+    let source = args
+        .source
+        .ok_or_else(|| "Missing --source <file>.".to_string())?;
+    let database_dir = args
+        .database_dir
+        .ok_or_else(|| "Missing --database-dir <dir>.".to_string())?;
     let source = source
         .canonicalize()
         .map_err(|error| format!("Cannot resolve source file {}: {error}", source.display()))?;
     if !source.is_file() {
         return Err(format!("Source path is not a file: {}", source.display()));
     }
-    fs::create_dir_all(&database_dir)
-        .map_err(|error| format!("Cannot create database dir {}: {error}", database_dir.display()))?;
-    let database_dir = database_dir
-        .canonicalize()
-        .map_err(|error| format!("Cannot resolve database dir {}: {error}", database_dir.display()))?;
+    fs::create_dir_all(&database_dir).map_err(|error| {
+        format!(
+            "Cannot create database dir {}: {error}",
+            database_dir.display()
+        )
+    })?;
+    let database_dir = database_dir.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve database dir {}: {error}",
+            database_dir.display()
+        )
+    })?;
 
     let summary = import_paper_file_to_library_path(database_dir, args.project_id, source.clone())?;
     let report = ImportReport {
@@ -53,9 +64,12 @@ fn run() -> Result<(), String> {
     let json = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = args.output.as_ref() {
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Cannot create output dir {}: {error}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Cannot create output dir {}: {error}", parent.display())
+            })?;
         }
-        fs::write(output, format!("{json}\n")).map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
+        fs::write(output, format!("{json}\n"))
+            .map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
     }
 
     println!(
@@ -100,7 +114,8 @@ fn parse_args() -> Result<Args, String> {
                 index += 2;
             }
             "--database-dir" => {
-                args.database_dir = Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
+                args.database_dir =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
                 index += 2;
             }
             "--project-id" => {
@@ -111,7 +126,9 @@ fn parse_args() -> Result<Args, String> {
                 args.output = Some(PathBuf::from(value_after(&raw, index, "--output")?));
                 index += 2;
             }
-            value if value.starts_with("--") => return Err(format!("Unsupported argument: {value}")),
+            value if value.starts_with("--") => {
+                return Err(format!("Unsupported argument: {value}"))
+            }
             value => {
                 if args.source.is_none() {
                     args.source = Some(PathBuf::from(value));

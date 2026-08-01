@@ -13,21 +13,53 @@ import {
 } from "../lib/agentTheoryDepth";
 import {
   AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS,
+  AGENT_THEORY_CRUISE_MOTION_VERSION,
   APP15_THEORY_COORDINATE_SCALE,
   advanceAgentTheoryCruise,
   cloneAgentTheoryCruiseCheckpoint,
+  createAgentTheoryAnchorReturnTransition,
   createAgentTheoryCruiseCheckpoint,
-  createAgentTheoryReturnTransition,
   resolveAgentTheoryAngularDiameterCssPx,
   resolveAgentTheoryStellarLod,
+  sampleAgentTheoryAnchorReturnTransition,
   sampleAgentTheoryCruise,
-  sampleAgentTheoryReturnTransition,
+  sampleInterpolatedAgentTheoryCruise,
+  type AgentTheoryAnchorReturnTransitionV2,
   type AgentTheoryCameraMode,
+  type AgentTheoryCruiseAdvanceControl,
   type AgentTheoryCruiseCheckpointV1,
   type AgentTheoryPerimeterProfileV1,
-  type AgentTheoryReturnTransitionV1,
   type AgentTheoryStellarLod,
 } from "../lib/agentTheoryPerimeter";
+import type {
+  AgentTheoryCruiseGuidanceResult,
+} from "../lib/agentTheoryCruiseGuidance";
+import {
+  AGENT_THEORY_SCREEN_LOD_GUARD_BAND_NDC,
+  resolveAgentTheoryPaperCoreStyle,
+  resolveAgentTheoryScreenLodTarget,
+  selectAgentTheoryScreenLod,
+  type AgentTheoryScreenLodCandidate,
+  type AgentTheoryScreenLodResult,
+} from "../lib/agentTheoryScreenLod";
+import {
+  createAgentTheoryScreenLodWorkerClient,
+  type AgentTheoryScreenLodWorkerClient,
+} from "../lib/agentTheoryScreenLodWorkerClient";
+import type {
+  AgentTheoryLodPurpose,
+  AgentTheoryProjectionSignature,
+  AgentTheoryCruiseGuidanceWorkerResponse,
+  AgentTheoryScreenLodWorkerSelectionResponse,
+} from "../lib/agentTheoryScreenLodWorkerProtocol";
+import {
+  createAgentTheoryVisibilityEnvelope,
+  createEmptyAgentTheoryVisibilityGuardSnapshot,
+  isAgentTheoryVisibilitySafe,
+  scoreAgentTheoryVisibility,
+  type AgentTheoryVisibilityCounts,
+  type AgentTheoryVisibilityGuardSnapshot,
+} from "../lib/agentTheoryVisibilityGuard";
 import {
   GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_BREATH_AMPLITUDE,
   GALAXY_FAR_BACKGROUND_HOTSPOT_CORE_OPACITY,
@@ -63,8 +95,11 @@ import {
 } from "./App17PaperJourneyController";
 
 export type App17GalaxyCommand = {
-  kind: "reset" | "fit" | "top" | "enter-system" | "exit-system" | "reset-system" | "focus-paper" | "return-system-center" | "toggle-paper-inspection";
+  kind: "reset" | "fit" | "top" | "enter-system" | "exit-system" | "reset-system" | "focus-paper" | "return-system-center" | "toggle-paper-inspection" | "agent-focus-overview" | "agent-restore-pose";
   nonce: number;
+  focusMode?: "signal" | "soft-focus" | "full-focus";
+  focusSide?: "left" | "right";
+  cameraPose?: GalaxyCameraPose;
 };
 
 export type GalaxyVisualProfile = "analysis" | "agent-theory";
@@ -72,6 +107,78 @@ export type GalaxyVisualProfile = "analysis" | "agent-theory";
 export type GalaxyInteractionMode = "ambient" | "explore";
 
 export type AgentTheoryQuality = "balanced" | "high";
+
+export type AgentTheoryFocusVisualState = {
+  primaryId?: string;
+  evidenceIds: string[];
+  contextIds: string[];
+  dynamicEntities: Array<{
+    entityId: string;
+    color?: string;
+    role: 1 | 2 | 3;
+  }>;
+  blend: number;
+  productMode?: "legacy-dynamic" | "sidera-explicit";
+  side?: "left" | "right";
+};
+
+export type AgentTheoryCruiseGuidanceMode =
+  | "normal"
+  | "steering"
+  | "fallback";
+
+export type AgentTheoryCruiseGuidanceV1 = {
+  mode: AgentTheoryCruiseGuidanceMode;
+  tangentWeight: number;
+  verticalAimRatio: number;
+  directionSign: -1 | 1;
+  speedScale: number;
+  reason?: "below-target" | "unsafe-horizon" | "no-safe-candidate";
+};
+
+export type AgentTheoryCruiseLivenessSnapshot = {
+  motionVersion: typeof AGENT_THEORY_CRUISE_MOTION_VERSION;
+  cameraMode: AgentTheoryCameraMode;
+  guidanceMode: AgentTheoryCruiseGuidanceMode;
+  stepIndex: number;
+  stepDeltaLastSecond: number;
+  projectionMovementPxLastSecond: number;
+  visibilitySafe: boolean;
+  predictedPaperCount: number;
+  predictedHotspotCount: number;
+  consecutiveStillMs: number;
+  recoveryCount: number;
+  randomTargetSecondsRemaining: number;
+  angularVelocity: number;
+  angularAcceleration: number;
+  verticalAcceleration: number;
+  workerGuidanceLatencyMs: number;
+  workerGuidancePending: number;
+  workerGuidanceDiscarded: number;
+  guidanceTargetHoldMs: number;
+  guidanceTargetSwitchCount: number;
+  guidanceEmergencyOverrideCount: number;
+  mainThreadGuidanceFallbackCount: number;
+  referenceProjectionSpeedPxPerSecond: number;
+  referenceProjectionAccelerationPxPerSecond2: number;
+  referenceTrajectoryResidualPx: number;
+  pausedReason?: "explore" | "hidden" | "reduced-motion";
+};
+
+export type AgentTheoryPostReturnTrajectorySnapshot = {
+  active: boolean;
+  elapsedMs: number;
+  cameraWriter: "agent-theory-cruise" | "return-anchor" | "none";
+  guidanceEpoch: number;
+  guidanceSource: "frozen" | "worker" | "main-thread-fallback" | "none";
+  acceptedWorkerRevision: number;
+  discardedWorkerResponseCount: number;
+  fallbackTriggerCount: number;
+  extraFramingCount: number;
+  lodHash: string;
+  depthHash: string;
+  maximumTrajectoryResidualPx: number;
+};
 
 export type GalaxyCameraPose = {
   center: [number, number, number];
@@ -90,7 +197,11 @@ export type GalaxyPaperInspectionMode = "none" | "docked" | "centered";
 
 export type GalaxyPaperPanelState = "hidden" | "staged" | "entering" | "visible" | "exiting";
 
-export type GalaxyPaperInspectionVisualType = "none" | "data-sphere" | "energy-core";
+export type GalaxyPaperInspectionVisualType =
+  | "none"
+  | "data-sphere"
+  | "energy-core"
+  | "photosphere";
 
 export type GalaxyPaperVisualOwnerState = "none" | "acquiring" | "owned" | "releasing";
 
@@ -150,6 +261,8 @@ export type AgentTheoryDepthDiagnostics = {
   cruiseCheckpointProjectionErrorPx: number;
   stellarLodCounts: Record<AgentTheoryStellarLod, number>;
   activeSphereHotspotCount: number;
+  currentSphereHotspotCount: number;
+  retiringSphereHotspotCount: number;
   stellarLodTransitionCount: number;
   shaderStatus: "pending" | "ready" | "failed";
   shaderFailureMaterials: string[];
@@ -160,6 +273,134 @@ export type AgentTheoryDepthDiagnostics = {
   perimeterReframeCount: number;
   perimeterDegradationReason: string;
   readyGatePassed: boolean;
+  residentPaperCount: number;
+  perceptiblePaperCount: number;
+  forcedVisibleCount: number;
+  occupiedTileRatio: number;
+  overlapP95: number;
+  screenLodSelectionHash: string;
+  screenLodBackend: "worker" | "main-thread-fallback";
+  screenLodWorkerLatencyMs: number;
+  screenLodRequestedRevision: number;
+  screenLodAcceptedRevision: number;
+  screenLodDiscardedResponses: number;
+  screenLodViewportCount: number;
+  screenLodGuardBandCount: number;
+  screenLodIncomingCount: number;
+  screenLodRetiringCount: number;
+  returnPendingVisualTaskCount: number;
+  returnDepthErrorRatio: number;
+  actualCoreSizeRange: [number, number];
+  actualAlphaRange: [number, number];
+  freeLookPosition: [number, number, number];
+  freeLookDirection: [number, number, number];
+  returnProjectionErrorPx: number;
+  returnDirectionStepDegrees: number;
+  depthTargetP5: number;
+  depthTargetP95: number;
+  depthMaximumFrameDelta: number;
+  cruiseInterpolationAlpha: number;
+  cruiseBacklogTruncationCount: number;
+  visibleHotspotCount: number;
+  hotspotOccupiedCellCount: number;
+  hotspotCoreSizeRange: [number, number];
+  hotspotSphereOffscreenSlotCount: number;
+  visibilityGuard: AgentTheoryVisibilityGuardSnapshot;
+  visibilityLodTargetRejected: boolean;
+  visibilityCheckpointValid: boolean;
+  returnVisibilityGatePassed: boolean;
+  returnPhase: AgentTheoryReturnPhase;
+  returnProgress: number;
+  returnStartPosition: [number, number, number];
+  returnAnchorPosition: [number, number, number];
+  returnDistance: number;
+  returnAngleDegrees: number;
+  returnMaximumSegmentDeviation: number;
+  returnCurrentSelectionCount: number;
+  returnAnchorSelectionCount: number;
+  returnUnionSelectionCount: number;
+  returnActualVisiblePaperCount: number;
+  returnActualVisibleHotspotCount: number;
+  returnActualVisibleHotspotCellCount: number;
+  returnMinimumVisiblePaperCount: number;
+  returnBlackFrameCount: number;
+  returnProjectionSignature: string;
+  returnDiscardedLodResponseCount: number;
+  returnCruiseRestoreDurationMs: number;
+  returnCruiseAdvanceRejectedCount: number;
+  returnCruiseFirstSuccessfulStep: number;
+  returnCruiseCheckpointDelta: number;
+  returnAmbientTimeDelta: number;
+  returnConsecutiveStillFrames: number;
+  returnCruiseGuardEvaluationCount: number;
+  returnCruiseGuardSafeCount: number;
+  postReturnTrajectory: AgentTheoryPostReturnTrajectorySnapshot;
+  cruiseLiveness: AgentTheoryCruiseLivenessSnapshot;
+};
+
+export type AgentTheoryReturnPhase =
+  | "idle"
+  | "return-preparing"
+  | "returning-anchor"
+  | "return-commit";
+
+export type AgentTheoryReturnProgressSnapshot = {
+  phase: AgentTheoryReturnPhase;
+  progress: number;
+};
+
+type AgentTheoryExploreSafeAnchorV2 = {
+  version: "agent-theory-explore-safe-anchor-v2";
+  previousCheckpoint: AgentTheoryCruiseCheckpointV1 | null;
+  currentCheckpoint: AgentTheoryCruiseCheckpointV1;
+  interpolationAlpha: number;
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  lookTarget: THREE.Vector3;
+  lookDistance: number;
+  projection: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
+  depthCurrent: [number, number, number];
+  depthTarget: [number, number, number];
+  lodSelection: AgentTheoryScreenLodResult | null;
+  lodTargetWeights: Float32Array;
+  visibility: AgentTheoryVisibilityCounts;
+  viewport: [number, number];
+  snapshotId: string;
+  tangentWeight: number;
+  verticalAimRatio: number;
+  fallbackToCenter: boolean;
+  centerBlend: number;
+  guidance: AgentTheoryCruiseGuidanceV1;
+  guidanceLifecycle: FrozenCruiseGuidanceState;
+  liveness: FrozenCruiseLivenessState;
+};
+
+type FrozenCruiseGuidanceState = {
+  current: AgentTheoryCruiseGuidanceV1;
+  target: AgentTheoryCruiseGuidanceV1;
+  desiredTangentWeight: number | null;
+  desiredVerticalAimRatio: number;
+  centerBlendTarget: number;
+  safeDurationMs: number;
+  targetHoldRemainingMs: number;
+  nextWorkerEvaluationRemainingMs: number;
+  consecutiveUnsafeResults: number;
+  workerEpoch: number;
+  acceptedRevision: number;
+};
+
+type FrozenCruiseLivenessState = {
+  accumulatorSeconds: number;
+  checkpointSaveAllowed: boolean;
+  checkpointValid: boolean;
+  visibilityGuard: AgentTheoryVisibilityGuardSnapshot;
+  lastSafeCheckpoint: AgentTheoryCruiseCheckpointV1 | null;
+  ambientTimeSeconds: number;
 };
 
 export type GalaxyPerformanceSnapshot = {
@@ -169,10 +410,12 @@ export type GalaxyPerformanceSnapshot = {
   currentFps: number;
   averageFps: number;
   averageFrameMs: number;
+  p50FrameMs: number;
   p95FrameMs: number;
   maxFrameMs: number;
   averageWebglMs: number;
   averageLabelMs: number;
+  longFrames25: number;
   longFrames50: number;
   longFrames100: number;
   drawCalls: number;
@@ -230,6 +473,14 @@ export type GalaxyPerformanceSnapshot = {
   theoryPerimeterReframeCount: number;
   theoryPerimeterDegradationReason: string;
   theoryReadyGatePassed: boolean;
+  theoryResidentPaperCount: number;
+  theoryPerceptiblePaperCount: number;
+  theoryForcedVisibleCount: number;
+  theoryOccupiedTileRatio: number;
+  theoryOverlapP95: number;
+  theoryScreenLodSelectionHash: string;
+  theoryActualCoreSizeRange: [number, number];
+  theoryActualAlphaRange: [number, number];
   ambientMotion: GalaxyAmbientMotion;
   ambientTargetFps: number;
   ambientCadenceMisses: number;
@@ -312,8 +563,11 @@ export type GalaxyPerformanceSnapshot = {
   systemPaperRevealProgress: number;
   systemPaperExposure: number;
   systemPaperTargetExposure: number;
+  systemPaperBaseAlpha: number;
   systemPaperDepthBrightnessFloor: number;
   systemPaperDepthSizeFloor: number;
+  systemPaperStableCoreDiameterPhysicalPixels: number;
+  systemPaperStableCoreEnergy: number;
   systemRepresentativeFocusMode: GalaxySystemPaperFocusMode;
   systemRepresentativeFocusRank: number;
   systemRepresentativeDimFactor: number;
@@ -472,6 +726,7 @@ type App17GalaxyCanvasProps = {
   interactionMode?: GalaxyInteractionMode;
   labelsVisible?: boolean;
   initialCameraPose?: GalaxyCameraPose;
+  viewportOffsetRatio?: number;
   agentTheoryDepthProfile?: AgentTheoryDepthProfileV1;
   agentTheoryPerimeterProfile?: AgentTheoryPerimeterProfileV1;
   agentTheoryQuality?: AgentTheoryQuality;
@@ -480,6 +735,10 @@ type App17GalaxyCanvasProps = {
     checkpoint: AgentTheoryCruiseCheckpointV1,
   ) => void;
   onAgentTheoryDepthDiagnostics?: (diagnostics: AgentTheoryDepthDiagnostics) => void;
+  onAgentTheoryReturnProgress?: (
+    snapshot: AgentTheoryReturnProgressSnapshot,
+  ) => void;
+  agentTheoryFocusVisual?: AgentTheoryFocusVisualState | null;
   onCameraPoseChange?: (pose: GalaxyCameraPose) => void;
   onReady?: () => void;
   onRuntimeError?: (message: string) => void;
@@ -697,6 +956,7 @@ type GalaxySystemResources = {
   hotspotId: string;
   hotspot: App17GalaxyHotspotPoint;
   visualMode: GalaxySystemVisualMode;
+  visualProfile: GalaxyVisualProfile;
   root: THREE.Group;
   cloudLayer: ReturnType<typeof createSystemPaperLayer>;
   farBackgroundLayer?: ReturnType<typeof createTheoryFarBackgroundLayer>;
@@ -911,6 +1171,9 @@ const APP17_INTERACTION_PAUSE_MS = 1_200;
 const APP17_OVERVIEW_FRAME_INTERVAL = 1_000 / 30;
 const APP17_INTERACTION_FRAME_INTERVAL = 1_000 / 60;
 const APP17_LABEL_FRAME_INTERVAL = 1_000 / 20;
+const APP17_AGENT_THEORY_LABEL_FRAME_INTERVAL = 1_000 / 30;
+const APP17_AGENT_THEORY_LABEL_FADE_MS = 160;
+const APP17_AGENT_THEORY_LABEL_COLLISION_HIDE_MS = 250;
 const APP17_DEFAULT_LABEL_LIMIT = 20;
 const APP17_ZOOM_LABEL_LIMIT = 35;
 const APP17_ZOOM_LABEL_RADIUS = 7;
@@ -954,6 +1217,13 @@ const APP17_SYSTEM_PAPER_MINIMUM_SIZE = 2.5;
 const APP17_SYSTEM_PAPER_MAXIMUM_SIZE = 3.9;
 const APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR = 0.82;
 const APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR = 0.9;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_BASE_ALPHA = 0.82;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_FAR_MINIMUM_SIZE = 2.9;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_MEDIUM_MINIMUM_SIZE = 3.1;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_NEAR_MINIMUM_SIZE = 3.25;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_MAXIMUM_SIZE = 5.0;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR = 0.94;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_DEPTH_SIZE_FLOOR = 0.96;
 const APP17_SYSTEM_PAPER_PICK_RADIUS_PX = 12;
 const APP17_SYSTEM_ORDINARY_PAPER_PICK_RADIUS_PX = 7;
 const APP17_SYSTEM_PAPER_PICK_INTERVAL_MS = 1_000 / 30;
@@ -970,6 +1240,13 @@ const APP17_SYSTEM_PAPER_FOCUS_ORDINARY_MAX_SIZE = 52;
 const APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_MAX_SIZE = 62;
 const APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS = 0.34;
 const APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS = 0.55;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS = 0.68;
+const APP17_AGENT_THEORY_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS = 0.8;
+const APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS = 3_000;
+const APP17_AGENT_THEORY_GUIDANCE_RECOVERY_SAFE_MS = 500;
+const APP17_AGENT_THEORY_LIVENESS_PUBLISH_MS = 250;
+const APP17_AGENT_THEORY_LIVENESS_STILL_MS = 500;
+const APP17_AGENT_THEORY_LIVENESS_MOVEMENT_AUDIT_MS = 900;
 const APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_BRIGHTNESS = 0.45;
 const APP17_SYSTEM_PAPER_FOCUS_ORBIT_BRIGHTNESS = 0.28;
 const APP17_SYSTEM_PAPER_FOCUS_RESPONSE = 20;
@@ -981,6 +1258,11 @@ const APP17_PAPER_INSPECTION_TOGGLE_MS = 420;
 const APP17_PAPER_INSPECTION_MOTION_RESUME_MS = 1_000;
 const APP17_PAPER_INSPECTION_WORLD_DIAMETER = 0.08;
 const APP17_PAPER_INSPECTION_ARRIVAL_VIEWPORT_RATIO = 0.62;
+const APP17_AGENT_PAPER_PHOTOSPHERE_MIN_DIAMETER_PX = 160;
+const APP17_AGENT_PAPER_PHOTOSPHERE_MAX_DIAMETER_PX = 240;
+const APP17_AGENT_PAPER_PHOTOSPHERE_VIEWPORT_RATIO = 0.22;
+const APP17_AGENT_PAPER_PHOTOSPHERE_LOD_ENTER_PX = 18;
+const APP17_AGENT_PAPER_PHOTOSPHERE_LOD_EXIT_PX = 14;
 const APP17_REPRESENTATIVE_SYSTEM_SIZE_SCALE = 1.32;
 const APP17_REPRESENTATIVE_OWNERSHIP_START = 0.7;
 const APP17_REPRESENTATIVE_STYLE_DURATION_SECONDS = 0.8;
@@ -1033,10 +1315,37 @@ const APP17_FAR_ORBIT_OPACITY = 0.04;
 const APP17_FAR_ROTATION_RADIANS_PER_SECOND = THREE.MathUtils.degToRad(0.045);
 const APP17_APP14_AMBIENT_FRAME_INTERVAL = 1_000 / 20;
 const APP17_APP15_AMBIENT_FRAME_INTERVAL = 1_000 / 12;
+const APP17_AGENT_THEORY_SYSTEM_AMBIENT_FRAME_INTERVAL = 1_000 / 24;
 const APP17_OVERVIEW_AMBIENT_FRAME_INTERVAL = 1_000 / 24;
-// Overview breathing is a comfort animation, not a correctness feature. If the
-// machine cannot hold it, drop back to the still frame budget for the session
-// rather than letting the whole canvas run at a degraded rate.
+const APP17_AGENT_THEORY_DEGRADED_OVERVIEW_FRAME_INTERVAL = 1_000 / 18;
+const APP17_AGENT_THEORY_LOD_SETTLE_MS = 50;
+const APP17_AGENT_THEORY_CRUISE_LOD_INTERVAL_MS = 250;
+const APP17_AGENT_THEORY_LOD_CHANGE_THRESHOLD = 0.04;
+const APP17_AGENT_THEORY_LOD_CROSSFADE_MS = 300;
+const APP17_AGENT_THEORY_MAIN_THREAD_LOD_BUDGET_MS = 1.5;
+const APP17_AGENT_THEORY_DEPTH_RESPONSE_SECONDS = 0.9;
+const APP17_AGENT_THEORY_VISIBILITY_EVALUATION_MS = 250;
+const APP17_AGENT_THEORY_VISIBILITY_STEERING_DEGREES_PER_SECOND = 0.35;
+const APP17_AGENT_THEORY_GUIDANCE_WORKER_INTERVAL_MS = 500;
+const APP17_AGENT_THEORY_GUIDANCE_TARGET_HOLD_MS = 1_500;
+const APP17_AGENT_THEORY_GUIDANCE_MINIMUM_SCORE_IMPROVEMENT = 0.05;
+const APP17_AGENT_THEORY_GUIDANCE_FALLBACK_INTERVAL_MS = 1_000;
+const APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX = 2.8;
+const APP17_AGENT_THEORY_HOTSPOT_CORE_MAX_CSS_PX = 5.2;
+const APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX = 5.5;
+const APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX = 10;
+const APP17_AGENT_THEORY_FREE_LOOK_RADIANS_PER_PIXEL =
+  THREE.MathUtils.degToRad(0.12);
+const APP17_AGENT_THEORY_FREE_LOOK_WHEEL_IMPULSE_PER_RADIUS = 0.0035;
+const APP17_AGENT_THEORY_FREE_LOOK_WHEEL_MIN_IMPULSE = 0.00075;
+const APP17_AGENT_THEORY_FREE_LOOK_WHEEL_MAX_SPEED_PER_RADIUS = 0.55;
+const APP17_AGENT_THEORY_FREE_LOOK_WHEEL_MIN_MAX_SPEED = 0.015;
+const APP17_AGENT_THEORY_FREE_LOOK_DOLLY_DAMPING_SECONDS = 0.16;
+const APP17_AGENT_THEORY_HOTSPOT_SINGLE_CLICK_DELAY_MS = 500;
+// Overview breathing is a comfort animation, not a correctness feature.
+// Analysis views may fall back to a still frame. Agent theory keeps a reduced
+// cadence instead, because a fully stopped canvas is indistinguishable from a
+// renderer hang in the immersive workspace.
 const APP17_OVERVIEW_AMBIENT_SLOW_FRAME_MS = 55;
 const APP17_OVERVIEW_AMBIENT_SLOW_WINDOWS_BEFORE_DEGRADE = 3;
 const APP17_ENVIRONMENT_STAR_COUNT = 9_000;
@@ -1285,12 +1594,15 @@ export function App17GalaxyCanvas({
   interactionMode = "explore",
   labelsVisible = true,
   initialCameraPose,
+  viewportOffsetRatio = 0,
   agentTheoryDepthProfile,
   agentTheoryPerimeterProfile,
   agentTheoryQuality = "balanced",
   initialAgentTheoryCruiseCheckpoint,
   onAgentTheoryCruiseCheckpointChange,
   onAgentTheoryDepthDiagnostics,
+  onAgentTheoryReturnProgress,
+  agentTheoryFocusVisual,
   onCameraPoseChange,
   onReady,
   onRuntimeError,
@@ -1319,10 +1631,15 @@ export function App17GalaxyCanvas({
   const interactionModeRef = useRef(interactionMode);
   const labelsVisibleRef = useRef(labelsVisible);
   const initialCameraPoseRef = useRef(initialCameraPose);
+  const viewportOffsetRatioRef = useRef(viewportOffsetRatio);
   const onAgentTheoryCruiseCheckpointChangeRef = useRef(
     onAgentTheoryCruiseCheckpointChange,
   );
   const onAgentTheoryDepthDiagnosticsRef = useRef(onAgentTheoryDepthDiagnostics);
+  const onAgentTheoryReturnProgressRef = useRef(
+    onAgentTheoryReturnProgress,
+  );
+  const agentTheoryFocusVisualRef = useRef(agentTheoryFocusVisual);
   const onCameraPoseChangeRef = useRef(onCameraPoseChange);
   const onReadyRef = useRef(onReady);
   const onRuntimeErrorRef = useRef(onRuntimeError);
@@ -1335,6 +1652,20 @@ export function App17GalaxyCanvas({
   const activeControllerRef = useRef<((nextActive: boolean) => void) | null>(null);
   const fullscreenControllerRef = useRef<((nextFullscreen: boolean) => void) | null>(null);
   const inspectionMetadataControllerRef = useRef<(() => void) | null>(null);
+  const agentTheoryFocusVisualControllerRef =
+    useRef<((state: AgentTheoryFocusVisualState | null) => void) | null>(null);
+  const viewportOffsetControllerRef = useRef<((ratio: number) => void) | null>(null);
+  const viewportOffsetCurrentRef = useRef(0);
+  const persistentRenderCoreRef = useRef<{
+    scene: THREE.Scene;
+    camera: THREE.PerspectiveCamera;
+    renderer: THREE.WebGLRenderer;
+  } | null>(null);
+  const persistentSceneFrameRef = useRef<{
+    mode: "nebula" | "galaxy";
+    center: THREE.Vector3;
+    distance: number;
+  } | null>(null);
 
   const sceneData = useMemo(
     () => getCachedSceneData(payload, visualMode, visualProfile),
@@ -1352,6 +1683,15 @@ export function App17GalaxyCanvas({
     prepareSystemRef.current?.(selectedId);
     invalidateRef.current?.();
   }, [selectedId]);
+
+  useEffect(() => {
+    viewportOffsetRatioRef.current = viewportOffsetRatio;
+    viewportOffsetControllerRef.current?.(viewportOffsetRatio);
+  }, [viewportOffsetRatio]);
+
+  useEffect(() => {
+    if (initialCameraPose) initialCameraPoseRef.current = initialCameraPose;
+  }, [initialCameraPose]);
 
   useEffect(() => {
     selectedPaperIdRef.current = selectedPaperId;
@@ -1373,6 +1713,12 @@ export function App17GalaxyCanvas({
     commandRef.current = command;
     invalidateRef.current?.();
   }, [command]);
+
+  useEffect(() => {
+    agentTheoryFocusVisualRef.current = agentTheoryFocusVisual;
+    agentTheoryFocusVisualControllerRef.current?.(agentTheoryFocusVisual ?? null);
+    invalidateRef.current?.();
+  }, [agentTheoryFocusVisual]);
 
   useEffect(() => {
     onSelectRef.current = onSelect;
@@ -1427,6 +1773,10 @@ export function App17GalaxyCanvas({
   }, [onAgentTheoryDepthDiagnostics]);
 
   useEffect(() => {
+    onAgentTheoryReturnProgressRef.current = onAgentTheoryReturnProgress;
+  }, [onAgentTheoryReturnProgress]);
+
+  useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
 
@@ -1444,21 +1794,30 @@ export function App17GalaxyCanvas({
     const labelCanvas = labelCanvasRef.current;
     if (!hostElement || !labelCanvas) return;
 
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(APP17_CAMERA_FOV, 1, 0.1, 240);
+    let renderCore = persistentRenderCoreRef.current;
+    if (!renderCore) {
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(APP17_CAMERA_FOV, 1, 0.1, 240);
+      camera.up.set(0, 0, 1);
+      const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: false });
+      renderer.debug.checkShaderErrors = true;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.domElement.className = "app17-galaxy-canvas";
+      hostElement.appendChild(renderer.domElement);
+      renderer.info.autoReset = false;
+      renderCore = { scene, camera, renderer };
+      persistentRenderCoreRef.current = renderCore;
+    }
+    const { scene, camera, renderer } = renderCore;
+    scene.clear();
+    scene.background = visualProfile === "analysis" ? new THREE.Color(0x000000) : null;
+    camera.fov = APP17_CAMERA_FOV;
     camera.up.set(0, 0, 1);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: false });
-    renderer.debug.checkShaderErrors = true;
     const idlePixelRatio = Math.min(window.devicePixelRatio || 1, 1.25);
     const currentPixelRatio = idlePixelRatio;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(currentPixelRatio);
-    renderer.setClearColor(0x000000, 0);
-    renderer.domElement.className = "app17-galaxy-canvas";
+    renderer.setClearColor(0x000000, visualProfile === "analysis" ? 1 : 0);
     renderer.domElement.dataset.visualProfile = visualProfile;
-    hostElement.appendChild(renderer.domElement);
-    renderer.info.autoReset = false;
     const gpuInfo = readWebglRendererInfo(renderer);
     let bloomPipeline: ReturnType<typeof createGalaxyBloomPipeline> | null = null;
     let bloomAvailable = true;
@@ -1487,6 +1846,11 @@ export function App17GalaxyCanvas({
     if (import.meta.env.DEV && reviewCameraPreset) {
       applyGalaxyReviewCameraPreset(cameraPreset, sceneData, reviewCameraPreset);
     }
+    const targetSceneFrame = {
+      mode: visualMode,
+      center: cameraPreset.center.clone(),
+      distance: Math.max(0.001, cameraPreset.distance),
+    };
     const restoredPose = initialCameraPoseRef.current;
     if (
       restoredPose
@@ -1495,9 +1859,21 @@ export function App17GalaxyCanvas({
       && Number.isFinite(restoredPose.azimuth)
       && Number.isFinite(restoredPose.elevation)
     ) {
-      cameraPreset.center.set(...restoredPose.center);
+      const previousSceneFrame = persistentSceneFrameRef.current;
+      const restoredCenter = new THREE.Vector3(...restoredPose.center);
+      if (previousSceneFrame && previousSceneFrame.mode !== visualMode) {
+        const scale = targetSceneFrame.distance / Math.max(0.001, previousSceneFrame.distance);
+        restoredCenter
+          .sub(previousSceneFrame.center)
+          .multiplyScalar(scale)
+          .add(targetSceneFrame.center);
+      }
+      cameraPreset.center.copy(restoredCenter);
+      const inheritedDistance = previousSceneFrame && previousSceneFrame.mode !== visualMode
+        ? restoredPose.distance * (targetSceneFrame.distance / Math.max(0.001, previousSceneFrame.distance))
+        : restoredPose.distance;
       cameraPreset.distance = THREE.MathUtils.clamp(
-        restoredPose.distance,
+        inheritedDistance,
         cameraPreset.minDistance,
         cameraPreset.maxDistance,
       );
@@ -1508,6 +1884,7 @@ export function App17GalaxyCanvas({
         cameraPreset.maxElevation,
       );
     }
+    persistentSceneFrameRef.current = targetSceneFrame;
     const fixedSystemReview = import.meta.env.DEV
       && Boolean(reviewCameraPreset?.startsWith("system-"));
     const farBackgroundRenderHotspots = sceneData.kind === "app15"
@@ -1536,6 +1913,17 @@ export function App17GalaxyCanvas({
     root.rotation.set(0, 0, 0);
     root.scale.set(1, 1, cameraPreset.zScale);
     overviewRoot.add(root);
+    const agentTheoryDynamicFocusLayer = (
+      visualProfile === "agent-theory" && agentTheoryPerimeterProfile
+    )
+      ? createAgentTheoryDynamicFocusLayer(
+        currentPixelRatio,
+        agentTheoryPerimeterProfile,
+      )
+      : null;
+    if (agentTheoryDynamicFocusLayer) {
+      root.add(agentTheoryDynamicFocusLayer.object);
+    }
 
     const paperLayer = createPaperLayer(
       sceneData.papers,
@@ -1555,10 +1943,43 @@ export function App17GalaxyCanvas({
       visualProfile,
     );
     root.add(hotspotLayer.object);
+    const applyAgentTheoryFocusVisual = (
+      focusState: AgentTheoryFocusVisualState | null,
+    ) => {
+      const evidenceIds = new Set(focusState?.evidenceIds ?? []);
+      const contextIds = new Set(focusState?.contextIds ?? []);
+      const blend = focusState?.blend ?? 0;
+      const backgroundBlend = focusState?.productMode === "sidera-explicit"
+        ? 0
+        : blend;
+      paperLayer.setAgentFocusVisual(
+        focusState?.primaryId,
+        evidenceIds,
+        contextIds,
+        blend,
+        backgroundBlend,
+      );
+      hotspotLayer.setAgentFocusVisual(
+        focusState?.primaryId,
+        evidenceIds,
+        contextIds,
+        blend,
+        backgroundBlend,
+      );
+      agentTheoryDynamicFocusLayer?.setEntities(
+        focusState?.dynamicEntities ?? [],
+        blend,
+      );
+    };
+    agentTheoryFocusVisualControllerRef.current = applyAgentTheoryFocusVisual;
+    applyAgentTheoryFocusVisual(agentTheoryFocusVisualRef.current ?? null);
     const agentTheoryHotspotSphereLayer = visualProfile === "agent-theory"
       ? createAgentTheoryHotspotSphereLayer(sceneData.hotspots)
       : null;
-    if (agentTheoryHotspotSphereLayer) {
+    // Agent overview uses point/PSF hotspots only. The existing local-system
+    // renderer remains the sole owner of true photospheres after system entry.
+    const agentTheoryOverviewSphereEnabled = false;
+    if (agentTheoryHotspotSphereLayer && agentTheoryOverviewSphereEnabled) {
       scene.add(agentTheoryHotspotSphereLayer.object);
     }
 
@@ -1566,7 +1987,7 @@ export function App17GalaxyCanvas({
     focusSprite.visible = false;
     focusSprite.scale.setScalar(0.55);
     scene.add(focusSprite);
-    const paperInspectionVisual = createPaperInspectionVisual();
+    const paperInspectionVisual = createPaperInspectionVisual(visualProfile);
     scene.add(paperInspectionVisual.object);
     const focusViewPosition = new THREE.Vector3();
     const systemCenterViewPosition = new THREE.Vector3();
@@ -1626,13 +2047,36 @@ export function App17GalaxyCanvas({
     };
     const publishCameraPose = () => {
       const callback = onCameraPoseChangeRef.current;
-      if (!callback) return;
-      callback({
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode === "explore-free"
+        && exploration.state === "overview"
+      ) {
+        const center = agentTheoryCurrentLookTarget;
+        const offset = camera.position.clone().sub(center);
+        const distance = Math.max(0.001, offset.length());
+        const pose: GalaxyCameraPose = {
+          center: [center.x, center.y, center.z],
+          distance,
+          azimuth: Math.atan2(offset.y, offset.x),
+          elevation: Math.asin(THREE.MathUtils.clamp(
+            offset.z / distance,
+            -1,
+            1,
+          )),
+        };
+        initialCameraPoseRef.current = pose;
+        callback?.(pose);
+        return;
+      }
+      const pose: GalaxyCameraPose = {
         center: [orbit.center.x, orbit.center.y, orbit.center.z],
         distance: orbit.distance,
         azimuth: orbit.azimuth,
         elevation: orbit.elevation,
-      });
+      };
+      initialCameraPoseRef.current = pose;
+      callback?.(pose);
     };
     let overviewFramingMode: "initial" | "fit" | "manual" = "initial";
     const exploration: GalaxyExplorationRuntime = {
@@ -1707,6 +2151,7 @@ export function App17GalaxyCanvas({
     let lastSystemPaperPickAt = Number.NEGATIVE_INFINITY;
     let lastSystemPaperPickId = "";
     let systemHoverPickTimer = 0;
+    let agentTheoryHotspotClickTimer = 0;
     let lastSystemPaperPickMs = 0;
     let lastSystemPaperPickCandidateCount = 0;
     let lastPaperFocusTransitionMs = 0;
@@ -1756,7 +2201,7 @@ export function App17GalaxyCanvas({
     let agentTheoryCameraMode: AgentTheoryCameraMode =
       visualProfile === "agent-theory" && interactionModeRef.current === "ambient"
         ? "cruise"
-        : "explore";
+        : "explore-free";
     let agentTheoryCruiseCheckpoint = agentTheoryPerimeterProfile
       ? initialAgentTheoryCruiseCheckpoint
         ? cloneAgentTheoryCruiseCheckpoint(initialAgentTheoryCruiseCheckpoint)
@@ -1765,28 +2210,225 @@ export function App17GalaxyCanvas({
           `${payload.snapshotId ?? "unknown"}:fallback`,
         )
       : null;
-    let agentTheoryReturnTransition: AgentTheoryReturnTransitionV1 | null = null;
+    let agentTheoryPreviousCruiseCheckpoint = agentTheoryCruiseCheckpoint
+      ? cloneAgentTheoryCruiseCheckpoint(agentTheoryCruiseCheckpoint)
+      : null;
+    let agentTheoryReturnTransition:
+      | AgentTheoryAnchorReturnTransitionV2
+      | null = null;
+    let agentTheoryReturnOrientation: {
+      fromQuaternion: THREE.Quaternion;
+      toQuaternion: THREE.Quaternion;
+      fromLookDistance: number;
+      toLookDistance: number;
+      fromDepth: [number, number, number];
+      toDepth: [number, number, number];
+    } | null = null;
+    let agentTheoryReturnPreparedAtMs = 0;
+    let agentTheoryReturnAnchorLodResult:
+      | AgentTheoryScreenLodResult
+      | null = null;
+    let agentTheoryReturnUnionIndices: number[] = [];
+    let agentTheoryReturnProjectionSignature = "";
+    let agentTheoryExpectedLodPurpose: AgentTheoryLodPurpose | null = null;
+    let agentTheoryExpectedProjectionSignature = "";
+    let agentTheoryDiscardedLodResponseCount = 0;
+    let agentTheoryLastReturnProgressPublished = -1;
+    let agentTheoryCruiseHealthAuditActive = false;
+    let agentTheoryReturnAwaitingFirstCruiseStep = false;
+    let agentTheoryCruiseResumeStartedAtMs = 0;
+    let agentTheoryCruiseResumeStartStep = 0;
+    let agentTheoryCruiseResumeSuccessfulSteps = 0;
+    let agentTheoryCruiseResumeRejectedSteps = 0;
+    let agentTheoryCruiseResumeFirstSuccessfulStep = -1;
+    let agentTheoryCruiseResumeAmbientStart = 0;
+    let agentTheoryCruiseResumeStillFrames = 0;
+    let agentTheoryCruiseResumeGuardEvaluationCount = 0;
+    let agentTheoryCruiseResumeGuardSafeCount = 0;
+    const agentTheoryCruiseResumeProjectionStart = new THREE.Vector3();
+    const agentTheoryCruiseResumeProjectionCurrent = new THREE.Vector3();
+    const agentTheoryFreeLookPosition = orbitPoseCameraPosition({
+      center: orbit.center,
+      distance: orbit.distance,
+      azimuth: orbit.azimuth,
+      elevation: orbit.elevation,
+    });
+    const agentTheoryFreeLookDirection = orbit.center.clone()
+      .sub(agentTheoryFreeLookPosition)
+      .normalize();
+    let agentTheoryFreeLookYaw = Math.atan2(
+      agentTheoryFreeLookDirection.y,
+      agentTheoryFreeLookDirection.x,
+    );
+    let agentTheoryFreeLookPitch = Math.asin(THREE.MathUtils.clamp(
+      agentTheoryFreeLookDirection.z,
+      -1,
+      1,
+    ));
+    let agentTheoryFreeLookDollyVelocity = 0;
+    let agentTheoryFreeLookLastUpdateAt = performance.now();
+    let agentTheoryFreeLookPointerMode: "look" | "pan" = "look";
+    let agentTheoryFreeLookAim: {
+      startedAtMs: number;
+      durationMs: number;
+      fromPosition: THREE.Vector3;
+      toPosition: THREE.Vector3;
+      fromQuaternion: THREE.Quaternion;
+      toQuaternion: THREE.Quaternion;
+      lookDistance: number;
+    } | null = null;
+    let agentTheorySavedFreeLookPose: {
+      position: THREE.Vector3;
+      direction: THREE.Vector3;
+    } | null = null;
     let agentTheoryCruiseAccumulatorSeconds = 0;
+    let agentTheoryCruiseInterpolationAlpha = 0;
+    let agentTheoryCruiseBacklogTruncationCount = 0;
     let lastAgentTheoryCruisePublishedStep =
       agentTheoryCruiseCheckpoint?.stepIndex ?? 0;
     const agentTheoryLookTarget = cameraPreset.center.clone();
     const agentTheoryCurrentLookTarget = cameraPreset.center.clone();
-    const agentTheoryCruiseHandoffPosition = camera.position.clone();
-    const agentTheoryCruiseHandoffLookTarget = cameraPreset.center.clone();
+    const agentTheoryCruiseOrientationProbe = new THREE.PerspectiveCamera();
+    const agentTheoryCruisePreviousQuaternion = new THREE.Quaternion();
+    const agentTheoryCruiseCurrentQuaternion = new THREE.Quaternion();
+    const agentTheoryCruiseRenderDirection = new THREE.Vector3();
     const agentTheoryPointerOffsetTarget = new THREE.Vector2();
     const agentTheoryPointerOffsetCurrent = new THREE.Vector2();
     let agentTheoryPendingReturnAfterSystemExit = false;
-    let agentTheoryCruiseHandoffSeconds = 0.6;
     let agentTheoryStellarLodTransitionCount = 0;
     let agentTheoryCruiseCheckpointProjectionErrorPx = 0;
     let agentTheoryCruiseCheckpointSaveAllowed = true;
-    let agentTheoryLowVisibilityFrames = 0;
+    let agentTheoryCruiseCheckpointSaveTimer = 0;
+    let agentTheoryCruiseCheckpointSaveIdleId = 0;
     let agentTheoryCruiseViewTangentWeight: number | null = null;
     let agentTheoryCruiseVerticalAimRatio = 0;
     let agentTheoryCruiseFallbackToCenter = false;
-    let agentTheoryReframeStartedAt = Number.NEGATIVE_INFINITY;
-    const agentTheoryReframeFromLookTarget = cameraPreset.center.clone();
+    let agentTheoryCruiseDesiredTangentWeight: number | null = null;
+    let agentTheoryCruiseDesiredVerticalAimRatio = 0;
+    let agentTheoryVisibilityGuardLastEvaluatedAt =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryVisibilityCheckpointValid = false;
+    let agentTheoryVisibilityLodTargetRejected = false;
+    let agentTheoryReturnVisibilityGatePassed = false;
+    let agentTheoryVisibilityGuard =
+      createEmptyAgentTheoryVisibilityGuardSnapshot();
+    let agentTheoryLastSafeCruiseCheckpoint = agentTheoryCruiseCheckpoint
+      ? cloneAgentTheoryCruiseCheckpoint(agentTheoryCruiseCheckpoint)
+      : null;
+    const initialAgentTheoryCruiseDirection = (
+      Math.sign(agentTheoryCruiseCheckpoint?.angularVelocity ?? 1) || 1
+    ) as -1 | 1;
+    let agentTheoryCruiseGuidance: AgentTheoryCruiseGuidanceV1 = {
+      mode: "normal",
+      tangentWeight:
+        agentTheoryCruiseCheckpoint?.tangentWeight ?? 0.7,
+      verticalAimRatio: 0,
+      directionSign: initialAgentTheoryCruiseDirection,
+      speedScale: 1,
+    };
+    let agentTheoryCruiseGuidanceTarget: AgentTheoryCruiseGuidanceV1 = {
+      ...agentTheoryCruiseGuidance,
+    };
+    let agentTheoryCruiseCenterBlend = 0;
+    let agentTheoryCruiseCenterBlendTarget = 0;
+    let agentTheoryGuidanceSafeSinceMs = performance.now();
+    let agentTheoryCruiseRecoveryCount = 0;
+    let agentTheoryCruiseLastLivenessPublishedAt =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryCruiseLivenessBaselineAt = performance.now();
+    let agentTheoryCruiseLivenessBaselineStep =
+      agentTheoryCruiseCheckpoint?.stepIndex ?? 0;
+    const agentTheoryCruiseLivenessBaselineCamera =
+      camera.position.clone();
+    let agentTheoryCruiseLastProgressAt = performance.now();
+    const agentTheoryCruiseProbeProjection = new THREE.Vector2();
+    const agentTheoryCruiseProbePreviousProjection = new THREE.Vector2();
+    const agentTheoryCruiseProbeVelocity = new THREE.Vector2();
+    const agentTheoryCruiseProbePreviousVelocity = new THREE.Vector2();
+    let agentTheoryCruiseProbeLastAt = 0;
+    let agentTheoryCruiseProbeInitialized = false;
+    let agentTheoryCruiseProbeSpeedPxPerSecond = 0;
+    let agentTheoryCruiseProbeAccelerationPxPerSecond2 = 0;
+    let agentTheoryCruiseProbeResidualPx = 0;
+    let agentTheoryExploreEntryAnchor:
+      | AgentTheoryExploreSafeAnchorV2
+      | null = null;
     let lastAgentTheoryDepthUpdateAt = Number.NEGATIVE_INFINITY;
+    let agentTheoryDepthTargetP5 = 0;
+    let agentTheoryDepthTargetP50 = 0;
+    let agentTheoryDepthTargetP95 = 1;
+    let agentTheoryDepthCurrentP5 = 0;
+    let agentTheoryDepthCurrentP50 = 0;
+    let agentTheoryDepthCurrentP95 = 1;
+    let agentTheoryDepthMaximumFrameDelta = 0;
+    let agentTheoryCachedDiagnosticDepthRows: Array<{
+      index: number;
+      depth: number;
+      size: number;
+    }> = [];
+    let lastAgentTheoryScreenLodUpdateAt = Number.NEGATIVE_INFINITY;
+    let lastAgentTheoryScreenLodForcedSignature = "";
+    let agentTheoryScreenLodResult: AgentTheoryScreenLodResult | null = null;
+    const agentTheoryScreenLodCameraPosition = new THREE.Vector3(
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    );
+    const agentTheoryScreenLodCameraQuaternion = new THREE.Quaternion();
+    let agentTheoryScreenLodCameraDistance = 0;
+    const agentTheoryScreenLodWorld = new THREE.Vector3();
+    const agentTheoryScreenLodView = new THREE.Vector3();
+    const agentTheoryScreenLodProjection = new THREE.Vector3();
+    const agentTheoryScreenLodLocalToClip = new THREE.Matrix4();
+    let agentTheoryScreenLodWorker:
+      | AgentTheoryScreenLodWorkerClient
+      | null = null;
+    let agentTheoryScreenLodWorkerReady = false;
+    let agentTheoryScreenLodWorkerFailed = false;
+    let agentTheoryGuidanceLastRequestedAt =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryGuidanceLastAcceptedAt =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryGuidanceTargetChangedAt = performance.now();
+    let agentTheoryGuidanceConsecutiveUnsafeResults = 0;
+    let agentTheoryGuidanceTargetSwitchCount = 0;
+    let agentTheoryGuidanceEmergencyOverrideCount = 0;
+    let agentTheoryGuidanceWorkerLatencyMs = 0;
+    let agentTheoryGuidanceFallbackIdleId = 0;
+    let agentTheoryGuidanceFallbackTimer = 0;
+    let agentTheoryGuidanceFallbackLastScheduledAt =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryGuidanceFallbackCount = 0;
+    let agentTheoryGuidanceWorkerEpoch = 0;
+    let agentTheoryGuidanceLastAcceptedRevision = 0;
+    let agentTheoryGuidanceResumeNotBeforeMs =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryGuidanceSource:
+      AgentTheoryPostReturnTrajectorySnapshot["guidanceSource"] = "none";
+    let agentTheoryPostReturnDiagnosticStartedAtMs =
+      Number.NEGATIVE_INFINITY;
+    let agentTheoryPostReturnExtraFramingCount = 0;
+    let agentTheoryPostReturnAcceptedWorkerRevision = 0;
+    let agentTheoryPostReturnDiscardedWorkerResponses = 0;
+    let agentTheoryPostReturnFallbackTriggerCount = 0;
+    let agentTheoryPostReturnMaximumTrajectoryResidualPx = 0;
+    let agentTheoryMainThreadLodRevision = 0;
+    let agentTheoryMainThreadLodFrame = 0;
+    let agentTheoryMainThreadLodCommitIdleId = 0;
+    let agentTheoryMainThreadLodCommitTimer = 0;
+    let agentTheoryMainThreadLodJob: {
+      revision: number;
+      cursor: number;
+      candidates: AgentTheoryScreenLodCandidate[];
+      localToClipMatrix: Float32Array;
+      purpose: AgentTheoryLodPurpose;
+      projectionSignature: AgentTheoryProjectionSignature;
+      previousVisibleMask: Uint8Array;
+      forcedVisibleMask: Uint8Array;
+      width: number;
+      height: number;
+      quality: AgentTheoryQuality;
+    } | null = null;
     let agentTheoryDepthDiagnostics: AgentTheoryDepthDiagnostics = {
       displaySpace: agentTheoryDepthProfile
         ? "agent-depth-enhanced"
@@ -1832,6 +2474,8 @@ export function App17GalaxyCanvas({
         sphere: 0,
       },
       activeSphereHotspotCount: 0,
+      currentSphereHotspotCount: 0,
+      retiringSphereHotspotCount: 0,
       stellarLodTransitionCount: 0,
       shaderStatus: visualProfile === "agent-theory" ? "pending" : "ready",
       shaderFailureMaterials: [],
@@ -1842,6 +2486,119 @@ export function App17GalaxyCanvas({
       perimeterReframeCount: 0,
       perimeterDegradationReason: "",
       readyGatePassed: false,
+      residentPaperCount: sceneData.papers.length,
+      perceptiblePaperCount: sceneData.papers.length,
+      forcedVisibleCount: 0,
+      occupiedTileRatio: 0,
+      overlapP95: 0,
+      screenLodSelectionHash: "",
+      screenLodBackend: "main-thread-fallback",
+      screenLodWorkerLatencyMs: 0,
+      screenLodRequestedRevision: 0,
+      screenLodAcceptedRevision: 0,
+      screenLodDiscardedResponses: 0,
+      screenLodViewportCount: 0,
+      screenLodGuardBandCount: 0,
+      screenLodIncomingCount: 0,
+      screenLodRetiringCount: 0,
+      returnPendingVisualTaskCount: 0,
+      returnDepthErrorRatio: 0,
+      actualCoreSizeRange: [0, 0],
+      actualAlphaRange: [0, 0],
+      freeLookPosition: camera.position.toArray() as [number, number, number],
+      freeLookDirection: agentTheoryFreeLookDirection.toArray() as [
+        number,
+        number,
+        number,
+      ],
+      returnProjectionErrorPx: 0,
+      returnDirectionStepDegrees: 0,
+      depthTargetP5: 0,
+      depthTargetP95: 1,
+      depthMaximumFrameDelta: 0,
+      cruiseInterpolationAlpha: 0,
+      cruiseBacklogTruncationCount: 0,
+      visibleHotspotCount: 0,
+      hotspotOccupiedCellCount: 0,
+      hotspotCoreSizeRange: [0, 0],
+      hotspotSphereOffscreenSlotCount: 0,
+      visibilityGuard: { ...agentTheoryVisibilityGuard },
+      visibilityLodTargetRejected: false,
+      visibilityCheckpointValid: false,
+      returnVisibilityGatePassed: false,
+      returnPhase: "idle",
+      returnProgress: 0,
+      returnStartPosition: [0, 0, 0],
+      returnAnchorPosition: [0, 0, 0],
+      returnDistance: 0,
+      returnAngleDegrees: 0,
+      returnMaximumSegmentDeviation: 0,
+      returnCurrentSelectionCount: 0,
+      returnAnchorSelectionCount: 0,
+      returnUnionSelectionCount: 0,
+      returnActualVisiblePaperCount: 0,
+      returnActualVisibleHotspotCount: 0,
+      returnActualVisibleHotspotCellCount: 0,
+      returnMinimumVisiblePaperCount: Number.POSITIVE_INFINITY,
+      returnBlackFrameCount: 0,
+      returnProjectionSignature: "",
+      returnDiscardedLodResponseCount: 0,
+      returnCruiseRestoreDurationMs: 0,
+      returnCruiseAdvanceRejectedCount: 0,
+      returnCruiseFirstSuccessfulStep: -1,
+      returnCruiseCheckpointDelta: 0,
+      returnAmbientTimeDelta: 0,
+      returnConsecutiveStillFrames: 0,
+      returnCruiseGuardEvaluationCount: 0,
+      returnCruiseGuardSafeCount: 0,
+      postReturnTrajectory: {
+        active: false,
+        elapsedMs: 0,
+        cameraWriter: "none",
+        guidanceEpoch: 0,
+        guidanceSource: "none",
+        acceptedWorkerRevision: 0,
+        discardedWorkerResponseCount: 0,
+        fallbackTriggerCount: 0,
+        extraFramingCount: 0,
+        lodHash: "",
+        depthHash: "",
+        maximumTrajectoryResidualPx: 0,
+      },
+      cruiseLiveness: {
+        motionVersion: AGENT_THEORY_CRUISE_MOTION_VERSION,
+        cameraMode: agentTheoryCameraMode,
+        guidanceMode: agentTheoryCruiseGuidance.mode,
+        stepIndex: agentTheoryCruiseCheckpoint?.stepIndex ?? 0,
+        stepDeltaLastSecond: 0,
+        projectionMovementPxLastSecond: 0,
+        visibilitySafe: false,
+        predictedPaperCount: 0,
+        predictedHotspotCount: 0,
+        consecutiveStillMs: 0,
+        recoveryCount: 0,
+        randomTargetSecondsRemaining: 0,
+        angularVelocity: agentTheoryCruiseCheckpoint?.angularVelocity ?? 0,
+        angularAcceleration:
+          agentTheoryCruiseCheckpoint?.angularAcceleration ?? 0,
+        verticalAcceleration:
+          agentTheoryCruiseCheckpoint?.verticalAcceleration ?? 0,
+        workerGuidanceLatencyMs: 0,
+        workerGuidancePending: 0,
+        workerGuidanceDiscarded: 0,
+        guidanceTargetHoldMs: 0,
+        guidanceTargetSwitchCount: 0,
+        guidanceEmergencyOverrideCount: 0,
+        mainThreadGuidanceFallbackCount: 0,
+        referenceProjectionSpeedPxPerSecond: 0,
+        referenceProjectionAccelerationPxPerSecond2: 0,
+        referenceTrajectoryResidualPx: 0,
+        pausedReason: interactionModeRef.current === "explore"
+          ? "explore"
+          : reduceMotion
+            ? "reduced-motion"
+            : undefined,
+      },
     };
     root.updateMatrixWorld(true);
     applyCameraOrbit(camera, orbit);
@@ -1850,6 +2607,51 @@ export function App17GalaxyCanvas({
     let width = 1;
     let height = 1;
     let disposed = false;
+    let viewportOffsetCurrent = viewportOffsetCurrentRef.current;
+    let viewportOffsetTransition: {
+      from: number;
+      to: number;
+      startedAt: number;
+    } | null = null;
+
+    const normalizedViewportOffset = (ratio: number) => {
+      const responsiveMaximum = width > 1 && width < 1200 ? 0.05 : 0.08;
+      return THREE.MathUtils.clamp(ratio, 0, responsiveMaximum);
+    };
+
+    const applyViewportComposition = (now: number, force = false) => {
+      if (viewportOffsetTransition) {
+        const progress = THREE.MathUtils.clamp(
+          (now - viewportOffsetTransition.startedAt) / 320,
+          0,
+          1,
+        );
+        viewportOffsetCurrent = THREE.MathUtils.lerp(
+          viewportOffsetTransition.from,
+          viewportOffsetTransition.to,
+          smootherStep(progress),
+        );
+        if (progress >= 1) viewportOffsetTransition = null;
+      }
+      viewportOffsetCurrentRef.current = viewportOffsetCurrent;
+      const offsetPixels = Math.round(width * viewportOffsetCurrent);
+      if (offsetPixels === 0) camera.clearViewOffset();
+      else camera.setViewOffset(width, height, offsetPixels, 0, width, height);
+      if (force) camera.updateProjectionMatrix();
+      return Boolean(viewportOffsetTransition);
+    };
+
+    viewportOffsetControllerRef.current = (ratio) => {
+      const target = normalizedViewportOffset(ratio);
+      if (Math.abs(target - viewportOffsetCurrent) < 0.00001) return;
+      viewportOffsetTransition = {
+        from: viewportOffsetCurrent,
+        to: target,
+        startedAt: performance.now(),
+      };
+      invalidateRef.current?.();
+    };
+    viewportOffsetControllerRef.current(viewportOffsetRatioRef.current);
     let runtimeActive = active;
     let renderRequested = true;
     let readyReported = false;
@@ -1859,7 +2661,11 @@ export function App17GalaxyCanvas({
     let labelDirty = true;
     let lastRenderTime = 0;
     let lastLabelRenderTime = Number.NEGATIVE_INFINITY;
+    const agentTheoryLabelRuntimeStates =
+      new Map<string, AgentTheoryLabelRuntimeState>();
     let autoResumeTimer = 0;
+    let agentTheoryLodRefreshTimer = 0;
+    let agentTheoryLodRefreshPending = false;
     let diagnosticsTimer = 0;
     let diagnosticsActive = false;
     let performanceScenario: GalaxyPerformanceScenario = "overview-auto";
@@ -1947,13 +2753,34 @@ export function App17GalaxyCanvas({
 
     function overviewAmbientActive() {
       return !reduceMotion
-        && !overviewAmbientDegraded
+        && (
+          !overviewAmbientDegraded
+          || visualProfile === "agent-theory"
+        )
         && (exploration.state === "overview" || exploration.state === "preparing");
+    }
+
+    function getOverviewAmbientFrameInterval() {
+      // Perimeter cruise is camera motion, not a decorative breathing pass.
+      // Render it on every display RAF and degrade decoration/labels instead
+      // of quantising the camera to the former 24/18 FPS cadence.
+      if (visualProfile === "agent-theory") return 0;
+      return APP17_OVERVIEW_AMBIENT_FRAME_INTERVAL;
+    }
+
+    function getSystemAmbientFrameInterval() {
+      if (sceneData.kind === "app14") {
+        return APP17_APP14_AMBIENT_FRAME_INTERVAL;
+      }
+      return visualProfile === "agent-theory"
+        ? APP17_AGENT_THEORY_SYSTEM_AMBIENT_FRAME_INTERVAL
+        : APP17_APP15_AMBIENT_FRAME_INTERVAL;
     }
 
     // Watches the real cadence of the overview breathing frames. The diagnostics
     // samplers only run while the panel is open, so this keeps its own window.
     function trackOverviewAmbientCadence(now: number) {
+      if (overviewAmbientDegraded) return;
       const previous = overviewAmbientLastFrameTime;
       overviewAmbientLastFrameTime = now;
       if (previous <= 0) return;
@@ -1983,7 +2810,9 @@ export function App17GalaxyCanvas({
     function getAmbientMotion(): GalaxyAmbientMotion {
       if (reduceMotion) return "none";
       if (exploration.state === "overview" || exploration.state === "preparing") {
-        return overviewAmbientDegraded ? "none" : "breath";
+        return overviewAmbientDegraded && visualProfile !== "agent-theory"
+          ? "none"
+          : "breath";
       }
       return sceneData.kind === "app14" ? "rotation-breath" : "breath";
     }
@@ -2017,8 +2846,12 @@ export function App17GalaxyCanvas({
 
     function getAmbientTargetFps() {
       if (reduceMotion) return 0;
-      if (exploration.state !== "system") return overviewAmbientActive() ? 24 : 0;
-      return sceneData.kind === "app14" ? 20 : 12;
+      if (exploration.state !== "system") {
+        if (!overviewAmbientActive()) return 0;
+        const interval = getOverviewAmbientFrameInterval();
+        return interval <= 0 ? 60 : Math.round(1_000 / interval);
+      }
+      return Math.round(1_000 / getSystemAmbientFrameInterval());
     }
 
     function getEnvironmentMotion(): GalaxyEnvironmentMotion {
@@ -2212,16 +3045,23 @@ export function App17GalaxyCanvas({
     const agentTheoryVisibilityFrustum = new THREE.Frustum();
     const agentTheoryVisibilityProjection = new THREE.Matrix4();
     const agentTheoryVisibilityWorld = new THREE.Vector3();
+    const agentTheoryReturnProjectionWorld = new THREE.Vector3();
+    const agentTheoryReturnProjectionBefore = new THREE.Vector3();
+    const agentTheoryReturnProjectionAfter = new THREE.Vector3();
 
     function createAgentTheoryCruiseLookTarget(
       sample: ReturnType<typeof sampleAgentTheoryCruise>,
       tangentWeight = sample.tangentWeight,
       verticalAimRatio = 0,
-      fallbackToCenter = false,
+      fallbackToCenter: boolean | number = false,
+      directionSign?: number,
     ) {
-      if (!agentTheoryPerimeterProfile || fallbackToCenter) {
+      if (!agentTheoryPerimeterProfile) {
         return cameraPreset.center.clone();
       }
+      const centerBlend = typeof fallbackToCenter === "number"
+        ? THREE.MathUtils.clamp(fallbackToCenter, 0, 1)
+        : fallbackToCenter ? 1 : 0;
       const position = new THREE.Vector3().fromArray(sample.position);
       const center = new THREE.Vector3().fromArray(
         agentTheoryPerimeterProfile.center,
@@ -2241,9 +3081,15 @@ export function App17GalaxyCanvas({
       );
       const planeX = radial.dot(axisX);
       const planeY = radial.dot(axisY);
-      const tangentSign = Math.sign(
-        agentTheoryCruiseCheckpoint?.angularVelocity ?? 1,
-      ) || 1;
+      const tangentSign = directionSign ?? THREE.MathUtils.clamp(
+        (agentTheoryCruiseCheckpoint?.angularVelocity ?? 0.0045)
+          / Math.max(
+            0.001575,
+            0.0045 * agentTheoryCruiseGuidance.speedScale,
+          ),
+        -1,
+        1,
+      );
       const tangent = axisX.clone().multiplyScalar(-planeY)
         .addScaledVector(axisY, planeX)
         .multiplyScalar(tangentSign)
@@ -2255,19 +3101,24 @@ export function App17GalaxyCanvas({
       const direction = tangent.multiplyScalar(boundedTangent)
         .addScaledVector(radial, -inwardWeight)
         .normalize();
-      return position.add(
+      const framedTarget = position.add(
         direction.multiplyScalar(
-          Math.max(18, agentTheoryPerimeterProfile.medianRadius * 0.88),
+          Math.max(
+            APP15_THEORY_COORDINATE_SCALE * 18,
+            agentTheoryPerimeterProfile.medianRadius * 0.88,
+          ),
         ),
       ).addScaledVector(
         verticalAxis,
         verticalAimRatio * agentTheoryPerimeterProfile.verticalExtent,
       );
+      return framedTarget.lerp(cameraPreset.center, centerBlend);
     }
 
     function measureAgentTheoryVisibility(
       position: THREE.Vector3,
       lookTarget: THREE.Vector3,
+      paperSampleLimit = 2_048,
     ) {
       agentTheoryVisibilityProbeCamera.aspect = camera.aspect;
       agentTheoryVisibilityProbeCamera.zoom = camera.zoom;
@@ -2285,28 +3136,73 @@ export function App17GalaxyCanvas({
         agentTheoryVisibilityProjection,
       );
       root.updateMatrixWorld(true);
-      let paperCount = 0;
+      let sampledVisiblePaperCount = 0;
       let hotspotCount = 0;
-      sceneData.papers.forEach((paper) => {
+      const hotspotCells = new Set<string>();
+      const paperStride = Math.max(
+        1,
+        Math.ceil(sceneData.papers.length / paperSampleLimit),
+      );
+      let sampledPaperCount = 0;
+      for (
+        let paperIndex = 0;
+        paperIndex < sceneData.papers.length;
+        paperIndex += paperStride
+      ) {
+        const paper = sceneData.papers[paperIndex];
+        sampledPaperCount += 1;
         agentTheoryVisibilityWorld
           .set(paper.x, paper.y, paper.z)
           .applyMatrix4(root.matrixWorld);
         if (agentTheoryVisibilityFrustum.containsPoint(agentTheoryVisibilityWorld)) {
-          paperCount += 1;
+          sampledVisiblePaperCount += 1;
         }
-      });
+      }
       sceneData.hotspots.forEach((hotspot) => {
         agentTheoryVisibilityWorld
           .copy(hotspot.position)
           .applyMatrix4(root.matrixWorld);
-        if (agentTheoryVisibilityFrustum.containsPoint(agentTheoryVisibilityWorld)) {
+        const coreCssSize = resolveAgentTheoryHotspotCoreCssSize(
+          hotspot.importance,
+        );
+        const coreAlpha = 0.82;
+        if (
+          agentTheoryVisibilityFrustum.containsPoint(agentTheoryVisibilityWorld)
+          && coreCssSize >= APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX
+          && coreAlpha >= 0.82
+        ) {
           hotspotCount += 1;
+          agentTheoryCurrentProjection
+            .copy(agentTheoryVisibilityWorld)
+            .project(agentTheoryVisibilityProbeCamera);
+          const cellX = THREE.MathUtils.clamp(
+            Math.floor((agentTheoryCurrentProjection.x * 0.5 + 0.5) * 6),
+            0,
+            5,
+          );
+          const cellY = THREE.MathUtils.clamp(
+            Math.floor((-agentTheoryCurrentProjection.y * 0.5 + 0.5) * 4),
+            0,
+            3,
+          );
+          hotspotCells.add(`${cellX}:${cellY}`);
         }
       });
-      const semanticCount = paperCount + hotspotCount;
+      const projectedPaperCount = Math.round(
+        sampledVisiblePaperCount / Math.max(1, sampledPaperCount)
+          * sceneData.papers.length,
+      );
+      const paperCount = Math.min(
+        projectedPaperCount,
+        resolveAgentTheoryScreenLodTarget(width, height, agentTheoryQuality),
+      );
+      const semanticCount = sampledVisiblePaperCount + hotspotCount;
       return {
         paperCount,
+        sampledVisiblePaperCount,
+        projectedPaperCount,
         hotspotCount,
+        hotspotCellCount: hotspotCells.size,
         decorativeCount:
           agentTheoryDecorativeLayer?.countVisible(
             agentTheoryVisibilityProbeCamera,
@@ -2314,84 +3210,1993 @@ export function App17GalaxyCanvas({
         semanticCount,
         ratio: semanticCount / Math.max(
           1,
-          sceneData.papers.length + sceneData.hotspots.length,
+          sampledPaperCount + sceneData.hotspots.length,
         ),
       };
+    }
+
+    function visibilityCounts(
+      visibility: ReturnType<typeof measureAgentTheoryVisibility>,
+    ): AgentTheoryVisibilityCounts {
+      return {
+        paperCount: visibility.paperCount,
+        hotspotCount: visibility.hotspotCount,
+        hotspotCellCount: visibility.hotspotCellCount,
+      };
+    }
+
+    function evaluateAgentTheoryVisibilityHorizon(
+      checkpoint: AgentTheoryCruiseCheckpointV1,
+      tangentWeight: number,
+      verticalAimRatio: number,
+      fallbackToCenter: boolean | number = false,
+      directionSign = (
+        Math.sign(checkpoint.angularVelocity) || 1
+      ) as -1 | 1,
+      speedScale = 1,
+      options?: {
+        horizonOffsetsSeconds?: number[];
+        paperSampleLimit?: number;
+      },
+    ) {
+      if (!agentTheoryPerimeterProfile) return null;
+      const envelope = createAgentTheoryVisibilityEnvelope(width, height);
+      const horizonOffsetsSeconds =
+        options?.horizonOffsetsSeconds ?? [0, 1.5, 3, 4.5, 6];
+      let futureCheckpoint = cloneAgentTheoryCruiseCheckpoint(checkpoint);
+      let previousOffsetSeconds = 0;
+      const rows: Array<{
+        counts: AgentTheoryVisibilityCounts;
+        visibility: ReturnType<typeof measureAgentTheoryVisibility>;
+      }> = [];
+      for (const offsetSeconds of horizonOffsetsSeconds) {
+        const deltaSteps = Math.max(
+          0,
+          Math.round(
+            (offsetSeconds - previousOffsetSeconds)
+              / AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS,
+          ),
+        );
+        if (deltaSteps > 0) {
+          futureCheckpoint = advanceAgentTheoryCruise(
+            agentTheoryPerimeterProfile,
+            futureCheckpoint,
+            deltaSteps,
+            {
+              directionSign,
+              speedScale,
+            },
+          );
+        }
+        previousOffsetSeconds = offsetSeconds;
+        const sample = sampleAgentTheoryCruise(
+          agentTheoryPerimeterProfile,
+          futureCheckpoint,
+        );
+        const position = new THREE.Vector3().fromArray(sample.position);
+        const lookTarget = createAgentTheoryCruiseLookTarget(
+          sample,
+          tangentWeight,
+          verticalAimRatio,
+          fallbackToCenter,
+          directionSign,
+        );
+        const visibility = measureAgentTheoryVisibility(
+          position,
+          lookTarget,
+          options?.paperSampleLimit,
+        );
+        rows.push({
+          visibility,
+          counts: visibilityCounts(visibility),
+        });
+      }
+      const minimum: AgentTheoryVisibilityCounts = {
+        paperCount: Math.min(...rows.map((row) => row.counts.paperCount)),
+        hotspotCount: Math.min(...rows.map((row) => row.counts.hotspotCount)),
+        hotspotCellCount: Math.min(
+          ...rows.map((row) => row.counts.hotspotCellCount),
+        ),
+      };
+      return {
+        current: rows[0],
+        minimum,
+        rows,
+        safe: rows.every((row) => (
+          isAgentTheoryVisibilitySafe(row.counts, envelope)
+        )),
+        score: rows.reduce(
+          (total, row) => (
+            total + scoreAgentTheoryVisibility(row.counts, envelope)
+          ),
+          0,
+        )
+          + (Number(fallbackToCenter) > 0 ? 4 : 0)
+          + (
+            directionSign === (Math.sign(checkpoint.angularVelocity) || 1)
+              ? 0
+              : 0.35
+          ),
+        envelope,
+      };
+    }
+
+    function findBestAgentTheoryVisibilityFraming(
+      checkpoint: AgentTheoryCruiseCheckpointV1,
+      broadSearch: boolean,
+      options?: {
+        horizonOffsetsSeconds?: number[];
+        paperSampleLimit?: number;
+      },
+    ) {
+      const sample = sampleAgentTheoryCruise(
+        agentTheoryPerimeterProfile!,
+        checkpoint,
+      );
+      const currentTangent = agentTheoryCruiseDesiredTangentWeight
+        ?? agentTheoryCruiseViewTangentWeight
+        ?? sample.tangentWeight;
+      const currentVertical = agentTheoryCruiseDesiredVerticalAimRatio;
+      const currentDirection = (
+        Math.sign(checkpoint.angularVelocity) || 1
+      ) as -1 | 1;
+      const directionSigns: Array<-1 | 1> = broadSearch
+        ? [currentDirection, (currentDirection * -1) as -1 | 1]
+        : [currentDirection];
+      const tangentWeights = broadSearch
+        ? [0.55, 0.60, 0.65, 0.70, 0.75]
+        : [
+          THREE.MathUtils.clamp(currentTangent - 0.05, 0.55, 0.75),
+          THREE.MathUtils.clamp(currentTangent, 0.55, 0.75),
+          THREE.MathUtils.clamp(currentTangent + 0.05, 0.55, 0.75),
+        ];
+      const verticalAimRatios = broadSearch
+        ? [-0.28, -0.14, 0, 0.14, 0.28]
+        : [
+          THREE.MathUtils.clamp(currentVertical - 0.14, -0.28, 0.28),
+          THREE.MathUtils.clamp(currentVertical, -0.28, 0.28),
+          THREE.MathUtils.clamp(currentVertical + 0.14, -0.28, 0.28),
+        ];
+      let best: {
+        tangentWeight: number;
+        verticalAimRatio: number;
+        fallbackToCenter: boolean;
+        directionSign: -1 | 1;
+        horizon: NonNullable<
+          ReturnType<typeof evaluateAgentTheoryVisibilityHorizon>
+        >;
+      } | null = null;
+      for (const directionSign of directionSigns) {
+        for (const tangentWeight of [...new Set(tangentWeights)]) {
+          for (const verticalAimRatio of [...new Set(verticalAimRatios)]) {
+            const horizon = evaluateAgentTheoryVisibilityHorizon(
+              checkpoint,
+              tangentWeight,
+              verticalAimRatio,
+              false,
+              directionSign,
+              directionSign === currentDirection ? 1 : 0.55,
+              options,
+            );
+            if (!horizon) continue;
+            const candidate = {
+              tangentWeight,
+              verticalAimRatio,
+              fallbackToCenter: false,
+              directionSign,
+              horizon,
+            };
+            if (
+              !best
+              || (
+                candidate.horizon.safe !== best.horizon.safe
+                  ? candidate.horizon.safe
+                  : candidate.horizon.score < best.horizon.score
+              )
+            ) {
+              best = candidate;
+            }
+          }
+        }
+      }
+      if (broadSearch && (!best || !best.horizon.safe)) {
+        for (const directionSign of directionSigns) {
+          const centerHorizon = evaluateAgentTheoryVisibilityHorizon(
+            checkpoint,
+            currentTangent,
+            0,
+            true,
+            directionSign,
+            0.35,
+            options,
+          );
+          if (
+            centerHorizon
+            && (
+              !best
+              || (
+                centerHorizon.safe !== best.horizon.safe
+                  ? centerHorizon.safe
+                  : centerHorizon.score < best.horizon.score
+              )
+            )
+          ) {
+            best = {
+              tangentWeight: currentTangent,
+              verticalAimRatio: 0,
+              fallbackToCenter: true,
+              directionSign,
+              horizon: centerHorizon,
+            };
+          }
+        }
+      }
+      return best;
     }
 
     function selectAgentTheoryCruiseFraming(
       sample: ReturnType<typeof sampleAgentTheoryCruise>,
       initial = false,
     ) {
-      if (!agentTheoryPerimeterProfile) return null;
-      const position = new THREE.Vector3().fromArray(sample.position);
-      let best: {
-        tangentWeight: number;
-        verticalAimRatio: number;
-        lookTarget: THREE.Vector3;
-        visibility: ReturnType<typeof measureAgentTheoryVisibility>;
-        score: number;
-      } | null = null;
-      const tangentWeights = [0.55, 0.60, 0.65, 0.70, 0.75];
-      const verticalAimRatios = [-0.28, -0.14, 0, 0.14, 0.28];
-      for (const tangentWeight of tangentWeights) {
-        for (const verticalAimRatio of verticalAimRatios) {
-          const lookTarget = createAgentTheoryCruiseLookTarget(
-            sample,
-            tangentWeight,
-            verticalAimRatio,
-          );
-          const visibility = measureAgentTheoryVisibility(position, lookTarget);
-          const outsideTarget = visibility.ratio < 0.35
-            ? 0.35 - visibility.ratio
-            : visibility.ratio > 0.65
-              ? visibility.ratio - 0.65
-              : 0;
-          const score = outsideTarget * 20
-            + Math.abs(visibility.ratio - 0.5)
-            + Math.abs(verticalAimRatio) * 0.025
-            + Math.abs(tangentWeight - sample.tangentWeight) * 0.01;
-          if (!best || score < best.score) {
-            best = {
-              tangentWeight,
-              verticalAimRatio,
-              lookTarget,
-              visibility,
-              score,
-            };
-          }
-        }
+      if (!agentTheoryPerimeterProfile || !agentTheoryCruiseCheckpoint) {
+        return null;
       }
+      const best = findBestAgentTheoryVisibilityFraming(
+        agentTheoryCruiseCheckpoint,
+        true,
+      );
       if (!best) return null;
-      let fallbackToCenter = false;
-      if (best.visibility.ratio < 0.05) {
-        const lookTarget = new THREE.Vector3().fromArray(
-          agentTheoryPerimeterProfile.center,
-        );
-        const visibility = measureAgentTheoryVisibility(position, lookTarget);
-        best = {
-          tangentWeight: best.tangentWeight,
-          verticalAimRatio: 0,
-          lookTarget,
-          visibility,
-          score: best.score,
-        };
-        fallbackToCenter = true;
-      }
       agentTheoryCruiseViewTangentWeight = best.tangentWeight;
       agentTheoryCruiseVerticalAimRatio = best.verticalAimRatio;
-      agentTheoryCruiseFallbackToCenter = fallbackToCenter;
-      agentTheoryCruiseCheckpointSaveAllowed = best.visibility.ratio >= 0.05;
-      if (!initial) {
-        agentTheoryReframeFromLookTarget.copy(agentTheoryCurrentLookTarget);
-        agentTheoryReframeStartedAt = performance.now();
-        agentTheoryDepthDiagnostics.perimeterReframeCount += 1;
-      } else {
-        agentTheoryReframeStartedAt = Number.NEGATIVE_INFINITY;
+      agentTheoryCruiseDesiredTangentWeight = best.tangentWeight;
+      agentTheoryCruiseDesiredVerticalAimRatio = best.verticalAimRatio;
+      agentTheoryCruiseFallbackToCenter = best.fallbackToCenter;
+      agentTheoryCruiseCenterBlend = best.fallbackToCenter ? 1 : 0;
+      agentTheoryCruiseCenterBlendTarget = agentTheoryCruiseCenterBlend;
+      agentTheoryCruiseGuidance = {
+        mode: best.fallbackToCenter ? "fallback" : "normal",
+        tangentWeight: best.tangentWeight,
+        verticalAimRatio: best.verticalAimRatio,
+        directionSign: best.directionSign,
+        speedScale: best.fallbackToCenter ? 0.35 : 1,
+        reason: best.fallbackToCenter
+          ? "no-safe-candidate"
+          : undefined,
+      };
+      agentTheoryCruiseGuidanceTarget = {
+        ...agentTheoryCruiseGuidance,
+      };
+      if (
+        initial
+        && agentTheoryCruiseCheckpoint
+        && Math.sign(agentTheoryCruiseCheckpoint.angularVelocity)
+          !== best.directionSign
+      ) {
+        agentTheoryCruiseCheckpoint.angularVelocity =
+          best.directionSign
+          * Math.max(
+            0.0045,
+            Math.abs(agentTheoryCruiseCheckpoint.angularVelocity),
+          );
+        agentTheoryPreviousCruiseCheckpoint =
+          cloneAgentTheoryCruiseCheckpoint(agentTheoryCruiseCheckpoint);
+      }
+      agentTheoryCruiseCheckpointSaveAllowed = best.horizon.safe;
+      agentTheoryVisibilityCheckpointValid = best.horizon.safe;
+      agentTheoryVisibilityGuard = {
+        ...agentTheoryVisibilityGuard,
+        currentPaperCount: best.horizon.current.counts.paperCount,
+        currentHotspotCount: best.horizon.current.counts.hotspotCount,
+        currentHotspotCellCount:
+          best.horizon.current.counts.hotspotCellCount,
+        predictedMinimumPaperCount: best.horizon.minimum.paperCount,
+        predictedMinimumHotspotCount: best.horizon.minimum.hotspotCount,
+        predictedMinimumHotspotCellCount:
+          best.horizon.minimum.hotspotCellCount,
+        steeringBlend: initial ? 1 : agentTheoryVisibilityGuard.steeringBlend,
+        lastSafeStepIndex: best.horizon.safe
+          ? agentTheoryCruiseCheckpoint.stepIndex
+          : agentTheoryVisibilityGuard.lastSafeStepIndex,
+        safe: best.horizon.safe,
+      };
+      if (best.horizon.safe) {
+        agentTheoryLastSafeCruiseCheckpoint =
+          cloneAgentTheoryCruiseCheckpoint(agentTheoryCruiseCheckpoint);
       }
       agentTheoryDepthDiagnostics.perimeterDegradationReason =
-        fallbackToCenter ? "perimeter-reframe" : "";
+        best.fallbackToCenter ? "visibility-envelope-center-fallback" : "";
       return best;
+    }
+
+    function setAgentTheoryCruiseGuidanceTarget(
+      next: AgentTheoryCruiseGuidanceV1,
+      centerBlendTarget = 0,
+    ) {
+      const normalizedNext: AgentTheoryCruiseGuidanceV1 = {
+        ...next,
+        tangentWeight: THREE.MathUtils.clamp(
+          next.tangentWeight,
+          0.55,
+          0.75,
+        ),
+        verticalAimRatio: THREE.MathUtils.clamp(
+          next.verticalAimRatio,
+          -0.28,
+          0.28,
+        ),
+        speedScale: THREE.MathUtils.clamp(next.speedScale, 0.35, 1),
+      };
+      const enteringFallback = (
+        normalizedNext.mode === "fallback"
+        && agentTheoryCruiseGuidanceTarget.mode !== "fallback"
+      );
+      if (enteringFallback) {
+        agentTheoryCruiseRecoveryCount += 1;
+      }
+      const materiallyChanged = (
+        normalizedNext.mode !== agentTheoryCruiseGuidanceTarget.mode
+        || normalizedNext.directionSign
+          !== agentTheoryCruiseGuidanceTarget.directionSign
+        || Math.abs(
+          normalizedNext.tangentWeight
+            - agentTheoryCruiseGuidanceTarget.tangentWeight,
+        ) > 1e-4
+        || Math.abs(
+          normalizedNext.verticalAimRatio
+            - agentTheoryCruiseGuidanceTarget.verticalAimRatio,
+        ) > 1e-4
+        || Math.abs(
+          normalizedNext.speedScale
+            - agentTheoryCruiseGuidanceTarget.speedScale,
+        ) > 1e-4
+        || Math.abs(
+          centerBlendTarget - agentTheoryCruiseCenterBlendTarget,
+        ) > 1e-4
+      );
+      agentTheoryCruiseGuidanceTarget = normalizedNext;
+      if (materiallyChanged) {
+        agentTheoryGuidanceTargetChangedAt = performance.now();
+        agentTheoryGuidanceTargetSwitchCount += 1;
+        if (
+          Number.isFinite(agentTheoryPostReturnDiagnosticStartedAtMs)
+          && performance.now() - agentTheoryPostReturnDiagnosticStartedAtMs
+            < APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS
+        ) {
+          agentTheoryPostReturnExtraFramingCount += 1;
+        }
+      }
+      agentTheoryCruiseDesiredTangentWeight =
+        agentTheoryCruiseGuidanceTarget.tangentWeight;
+      agentTheoryCruiseDesiredVerticalAimRatio =
+        agentTheoryCruiseGuidanceTarget.verticalAimRatio;
+      agentTheoryCruiseCenterBlendTarget = THREE.MathUtils.clamp(
+        centerBlendTarget,
+        0,
+        1,
+      );
+      agentTheoryCruiseFallbackToCenter =
+        agentTheoryCruiseCenterBlendTarget > 0.001;
+    }
+
+    function requestAgentTheoryFallbackGuidance(
+      reason: AgentTheoryCruiseGuidanceV1["reason"] =
+        "no-safe-candidate",
+    ) {
+      const now = performance.now();
+      const postReturnDiagnosticActive = (
+        Number.isFinite(agentTheoryPostReturnDiagnosticStartedAtMs)
+        && now - agentTheoryPostReturnDiagnosticStartedAtMs
+          < APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS
+      );
+      const currentCounts = {
+        paperCount: agentTheoryVisibilityGuard.currentPaperCount,
+        hotspotCount: agentTheoryVisibilityGuard.currentHotspotCount,
+        hotspotCellCount:
+          agentTheoryVisibilityGuard.currentHotspotCellCount,
+      };
+      if (
+        postReturnDiagnosticActive
+        && isAgentTheoryVisibilitySafe(
+          currentCounts,
+          createAgentTheoryVisibilityEnvelope(width, height),
+        )
+      ) {
+        return;
+      }
+      const currentDirection = (
+        Math.sign(agentTheoryCruiseCheckpoint?.angularVelocity ?? 1) || 1
+      ) as -1 | 1;
+      const fallbackDirection =
+        agentTheoryCruiseGuidanceTarget.mode === "fallback"
+          ? agentTheoryCruiseGuidanceTarget.directionSign
+          : (currentDirection * -1) as -1 | 1;
+      setAgentTheoryCruiseGuidanceTarget({
+        mode: "fallback",
+        tangentWeight:
+          agentTheoryCruiseViewTangentWeight
+          ?? agentTheoryCruiseCheckpoint?.tangentWeight
+          ?? 0.7,
+        verticalAimRatio: 0,
+        directionSign: fallbackDirection,
+        speedScale: 0.35,
+        reason,
+      }, 1);
+      agentTheoryGuidanceSource = "main-thread-fallback";
+      if (postReturnDiagnosticActive) {
+        agentTheoryPostReturnFallbackTriggerCount += 1;
+      }
+      agentTheoryGuidanceSafeSinceMs = 0;
+      agentTheoryDepthDiagnostics.perimeterDegradationReason =
+        `continuous-guidance-${reason}`;
+    }
+
+    function advanceAgentTheoryVisibilitySteering(elapsedSeconds: number) {
+      if (
+        !agentTheoryPerimeterProfile
+        || !agentTheoryCruiseCheckpoint
+        || agentTheoryCruiseDesiredTangentWeight === null
+      ) return;
+      const currentTangent = agentTheoryCruiseViewTangentWeight
+        ?? agentTheoryCruiseCheckpoint.tangentWeight;
+      const currentVertical = agentTheoryCruiseVerticalAimRatio;
+      const sample = sampleAgentTheoryCruise(
+        agentTheoryPerimeterProfile,
+        agentTheoryCruiseCheckpoint,
+      );
+      const position = new THREE.Vector3().fromArray(sample.position);
+      const currentDirection = createAgentTheoryCruiseLookTarget(
+        sample,
+        currentTangent,
+        currentVertical,
+        agentTheoryCruiseCenterBlend,
+      ).sub(position).normalize();
+      const desiredDirection = createAgentTheoryCruiseLookTarget(
+        sample,
+        agentTheoryCruiseDesiredTangentWeight,
+        agentTheoryCruiseDesiredVerticalAimRatio,
+        agentTheoryCruiseCenterBlendTarget,
+        agentTheoryCruiseGuidanceTarget.directionSign,
+      ).sub(position).normalize();
+      const angularDistance = currentDirection.angleTo(desiredDirection);
+      if (angularDistance <= 1e-7) {
+        agentTheoryCruiseViewTangentWeight =
+          agentTheoryCruiseDesiredTangentWeight;
+        agentTheoryCruiseVerticalAimRatio =
+          agentTheoryCruiseDesiredVerticalAimRatio;
+        agentTheoryVisibilityGuard.steeringBlend = 1;
+      } else {
+        const maximumStep = THREE.MathUtils.degToRad(
+          APP17_AGENT_THEORY_VISIBILITY_STEERING_DEGREES_PER_SECOND
+            * Math.max(0, elapsedSeconds),
+        );
+        const blend = THREE.MathUtils.clamp(
+          maximumStep / angularDistance,
+          0,
+          1,
+        );
+        agentTheoryCruiseViewTangentWeight = THREE.MathUtils.lerp(
+          currentTangent,
+          agentTheoryCruiseDesiredTangentWeight,
+          blend,
+        );
+        agentTheoryCruiseVerticalAimRatio = THREE.MathUtils.lerp(
+          currentVertical,
+          agentTheoryCruiseDesiredVerticalAimRatio,
+          blend,
+        );
+        agentTheoryVisibilityGuard.steeringBlend = blend;
+      }
+      const responseBlend = 1 - Math.exp(
+        -Math.max(0, elapsedSeconds) / 0.65,
+      );
+      agentTheoryCruiseCenterBlend = THREE.MathUtils.lerp(
+        agentTheoryCruiseCenterBlend,
+        agentTheoryCruiseCenterBlendTarget,
+        responseBlend,
+      );
+      agentTheoryCruiseGuidance = {
+        ...agentTheoryCruiseGuidance,
+        mode: agentTheoryCruiseGuidanceTarget.mode,
+        reason: agentTheoryCruiseGuidanceTarget.reason,
+        tangentWeight:
+          agentTheoryCruiseViewTangentWeight
+          ?? agentTheoryCruiseGuidanceTarget.tangentWeight,
+        verticalAimRatio: agentTheoryCruiseVerticalAimRatio,
+        directionSign: (
+          Math.sign(agentTheoryCruiseCheckpoint.angularVelocity)
+          || agentTheoryCruiseGuidance.directionSign
+        ) as -1 | 1,
+        speedScale: THREE.MathUtils.lerp(
+          agentTheoryCruiseGuidance.speedScale,
+          agentTheoryCruiseGuidanceTarget.speedScale,
+          responseBlend,
+        ),
+      };
+    }
+
+    function updateAgentTheoryPostReturnTrajectoryDiagnostics(
+      now: number,
+      cameraWriter:
+        AgentTheoryPostReturnTrajectorySnapshot["cameraWriter"],
+    ) {
+      if (!Number.isFinite(agentTheoryPostReturnDiagnosticStartedAtMs)) {
+        return;
+      }
+      const elapsedMs = Math.max(
+        0,
+        now - agentTheoryPostReturnDiagnosticStartedAtMs,
+      );
+      const active = (
+        elapsedMs < APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS
+      );
+      if (
+        !active
+        && !agentTheoryDepthDiagnostics.postReturnTrajectory.active
+      ) {
+        return;
+      }
+      agentTheoryPostReturnMaximumTrajectoryResidualPx = Math.max(
+        agentTheoryPostReturnMaximumTrajectoryResidualPx,
+        agentTheoryCruiseProbeResidualPx,
+      );
+      agentTheoryDepthDiagnostics.postReturnTrajectory = {
+        active,
+        elapsedMs: Math.min(
+          elapsedMs,
+          APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS,
+        ),
+        cameraWriter,
+        guidanceEpoch: agentTheoryGuidanceWorkerEpoch,
+        guidanceSource: agentTheoryGuidanceSource,
+        acceptedWorkerRevision:
+          agentTheoryPostReturnAcceptedWorkerRevision,
+        discardedWorkerResponseCount:
+          agentTheoryPostReturnDiscardedWorkerResponses,
+        fallbackTriggerCount:
+          agentTheoryPostReturnFallbackTriggerCount,
+        extraFramingCount: agentTheoryPostReturnExtraFramingCount,
+        lodHash:
+          agentTheoryScreenLodResult?.selectionHash
+          ?? agentTheoryExploreEntryAnchor?.lodSelection?.selectionHash
+          ?? "",
+        depthHash: [
+          agentTheoryDepthCurrentP5.toFixed(6),
+          agentTheoryDepthCurrentP50.toFixed(6),
+          agentTheoryDepthCurrentP95.toFixed(6),
+        ].join(":"),
+        maximumTrajectoryResidualPx:
+          agentTheoryPostReturnMaximumTrajectoryResidualPx,
+      };
+    }
+
+    function updateAgentTheoryVisibilityGuard(
+      now: number,
+      force = false,
+      lightweightFallback = false,
+    ) {
+      if (
+        visualProfile !== "agent-theory"
+        || interactionModeRef.current !== "ambient"
+        || exploration.state !== "overview"
+        || !agentTheoryPerimeterProfile
+        || !agentTheoryCruiseCheckpoint
+      ) return false;
+      if (
+        !force
+        && now - agentTheoryVisibilityGuardLastEvaluatedAt
+          < APP17_AGENT_THEORY_VISIBILITY_EVALUATION_MS
+      ) return agentTheoryVisibilityGuard.safe;
+      agentTheoryVisibilityGuardLastEvaluatedAt = now;
+      const tangentWeight = agentTheoryCruiseViewTangentWeight
+        ?? agentTheoryCruiseCheckpoint.tangentWeight;
+      const currentHorizon = evaluateAgentTheoryVisibilityHorizon(
+        agentTheoryCruiseCheckpoint,
+        tangentWeight,
+        agentTheoryCruiseVerticalAimRatio,
+        agentTheoryCruiseCenterBlend,
+        agentTheoryCruiseGuidance.directionSign,
+        agentTheoryCruiseGuidance.speedScale,
+        lightweightFallback
+          ? {
+            horizonOffsetsSeconds: [0, 3, 6],
+            paperSampleLimit: 512,
+          }
+          : undefined,
+      );
+      if (!currentHorizon) return false;
+      let chosenHorizon = currentHorizon;
+      let chosenCandidate: ReturnType<
+        typeof findBestAgentTheoryVisibilityFraming
+      > = null;
+      const belowTarget = (
+        currentHorizon.minimum.paperCount
+          < currentHorizon.envelope.paperTarget
+        || currentHorizon.minimum.hotspotCount
+          < currentHorizon.envelope.hotspotTarget
+        || currentHorizon.minimum.hotspotCellCount
+          < currentHorizon.envelope.hotspotCellTarget
+      );
+      if (!currentHorizon.safe || belowTarget) {
+        const candidate = findBestAgentTheoryVisibilityFraming(
+          agentTheoryCruiseCheckpoint,
+          lightweightFallback
+            ? false
+            : !currentHorizon.safe,
+          lightweightFallback
+            ? {
+              horizonOffsetsSeconds: [0, 3, 6],
+              paperSampleLimit: 512,
+            }
+            : undefined,
+        );
+        if (
+          candidate
+          && (
+            candidate.horizon.safe && !currentHorizon.safe
+            || candidate.horizon.score + 0.01 < currentHorizon.score
+          )
+        ) {
+          agentTheoryCruiseDesiredTangentWeight = candidate.tangentWeight;
+          agentTheoryCruiseDesiredVerticalAimRatio =
+            candidate.verticalAimRatio;
+          chosenHorizon = candidate.horizon;
+          chosenCandidate = candidate;
+        }
+      }
+      if (currentHorizon.safe) {
+        if (agentTheoryGuidanceSafeSinceMs <= 0) {
+          agentTheoryGuidanceSafeSinceMs = now;
+        }
+        const safeLongEnough = (
+          now - agentTheoryGuidanceSafeSinceMs
+            >= APP17_AGENT_THEORY_GUIDANCE_RECOVERY_SAFE_MS
+        );
+        if (chosenCandidate && belowTarget) {
+          setAgentTheoryCruiseGuidanceTarget({
+            mode: "steering",
+            tangentWeight: chosenCandidate.tangentWeight,
+            verticalAimRatio: chosenCandidate.verticalAimRatio,
+            directionSign: chosenCandidate.directionSign,
+            speedScale: 0.78,
+            reason: "below-target",
+          }, chosenCandidate.fallbackToCenter ? 1 : 0);
+        } else if (safeLongEnough) {
+          const currentDirection = (
+            Math.sign(agentTheoryCruiseCheckpoint.angularVelocity) || 1
+          ) as -1 | 1;
+          setAgentTheoryCruiseGuidanceTarget({
+            mode: "normal",
+            tangentWeight:
+              agentTheoryCruiseViewTangentWeight
+              ?? tangentWeight,
+            verticalAimRatio: agentTheoryCruiseVerticalAimRatio,
+            directionSign: currentDirection,
+            speedScale: 1,
+          });
+          agentTheoryDepthDiagnostics.perimeterDegradationReason = "";
+        }
+      } else {
+        agentTheoryGuidanceSafeSinceMs = 0;
+        if (chosenCandidate?.horizon.safe) {
+          setAgentTheoryCruiseGuidanceTarget({
+            mode: "steering",
+            tangentWeight: chosenCandidate.tangentWeight,
+            verticalAimRatio: chosenCandidate.verticalAimRatio,
+            directionSign: chosenCandidate.directionSign,
+            speedScale: 0.55,
+            reason: "unsafe-horizon",
+          }, chosenCandidate.fallbackToCenter ? 1 : 0);
+        } else {
+          requestAgentTheoryFallbackGuidance("no-safe-candidate");
+        }
+      }
+      agentTheoryCruiseCheckpointSaveAllowed = currentHorizon.safe;
+      agentTheoryVisibilityCheckpointValid = currentHorizon.safe;
+      agentTheoryVisibilityGuard = {
+        ...agentTheoryVisibilityGuard,
+        currentPaperCount: currentHorizon.current.counts.paperCount,
+        currentHotspotCount: currentHorizon.current.counts.hotspotCount,
+        currentHotspotCellCount:
+          currentHorizon.current.counts.hotspotCellCount,
+        predictedMinimumPaperCount: chosenHorizon.minimum.paperCount,
+        predictedMinimumHotspotCount: chosenHorizon.minimum.hotspotCount,
+        predictedMinimumHotspotCellCount:
+          chosenHorizon.minimum.hotspotCellCount,
+        lastSafeStepIndex: currentHorizon.safe
+          ? agentTheoryCruiseCheckpoint.stepIndex
+          : agentTheoryVisibilityGuard.lastSafeStepIndex,
+        safe: currentHorizon.safe || chosenHorizon.safe,
+      };
+      if (currentHorizon.safe) {
+        agentTheoryLastSafeCruiseCheckpoint =
+          cloneAgentTheoryCruiseCheckpoint(agentTheoryCruiseCheckpoint);
+      }
+      agentTheoryDepthDiagnostics.visibilityGuard = {
+        ...agentTheoryVisibilityGuard,
+      };
+      agentTheoryDepthDiagnostics.visibilityCheckpointValid =
+        agentTheoryVisibilityCheckpointValid;
+      if (agentTheoryCruiseHealthAuditActive) {
+        agentTheoryCruiseResumeGuardEvaluationCount += 1;
+        if (currentHorizon.safe || chosenHorizon.safe) {
+          agentTheoryCruiseResumeGuardSafeCount += 1;
+        }
+        agentTheoryDepthDiagnostics.returnCruiseGuardEvaluationCount =
+          agentTheoryCruiseResumeGuardEvaluationCount;
+        agentTheoryDepthDiagnostics.returnCruiseGuardSafeCount =
+          agentTheoryCruiseResumeGuardSafeCount;
+      }
+      return currentHorizon.safe || chosenHorizon.safe;
+    }
+
+    function applyAgentTheoryGuidanceDepthPercentiles(
+      result: AgentTheoryCruiseGuidanceResult,
+    ) {
+      const next = result.depthPercentiles;
+      const current = [
+        agentTheoryDepthTargetP5,
+        agentTheoryDepthTargetP50,
+        agentTheoryDepthTargetP95,
+      ];
+      const relativeDelta = Math.max(
+        ...next.map((value, index) => (
+          Math.abs(value - current[index])
+            / Math.max(0.001, Math.abs(current[index]))
+        )),
+      );
+      if (
+        !Number.isFinite(relativeDelta)
+        || relativeDelta >= 0.01
+      ) {
+        agentTheoryDepthTargetP5 = next[0];
+        agentTheoryDepthTargetP50 = next[1];
+        agentTheoryDepthTargetP95 = Math.max(next[0] + 0.001, next[2]);
+      }
+    }
+
+    function applyAgentTheoryCruiseGuidanceWorkerResponse(
+      response: AgentTheoryCruiseGuidanceWorkerResponse,
+      requestedAtMs: number,
+    ) {
+      if (
+        disposed
+        || visualProfile !== "agent-theory"
+        || interactionModeRef.current !== "ambient"
+        || exploration.state !== "overview"
+        || agentTheoryCameraMode !== "cruise"
+        || !agentTheoryCruiseCheckpoint
+      ) return;
+      const now = performance.now();
+      const result = response.result;
+      const envelope = createAgentTheoryVisibilityEnvelope(width, height);
+      const currentBelowHardFloor = !isAgentTheoryVisibilitySafe(
+        result.currentCounts,
+        envelope,
+      );
+      agentTheoryGuidanceWorkerLatencyMs = Math.max(
+        response.computeMs,
+        now - requestedAtMs,
+      );
+      agentTheoryGuidanceLastAcceptedAt = now;
+      agentTheoryGuidanceLastAcceptedRevision = response.revision;
+      agentTheoryGuidanceSource = "worker";
+      if (
+        Number.isFinite(agentTheoryPostReturnDiagnosticStartedAtMs)
+        && now - agentTheoryPostReturnDiagnosticStartedAtMs
+          < APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS
+      ) {
+        agentTheoryPostReturnAcceptedWorkerRevision = response.revision;
+      }
+      applyAgentTheoryGuidanceDepthPercentiles(result);
+      if (result.recommendedSafe) {
+        agentTheoryGuidanceConsecutiveUnsafeResults = 0;
+      } else {
+        agentTheoryGuidanceConsecutiveUnsafeResults += 1;
+      }
+      const targetHeldLongEnough = (
+        now - agentTheoryGuidanceTargetChangedAt
+          >= APP17_AGENT_THEORY_GUIDANCE_TARGET_HOLD_MS
+      );
+      const materiallyBetter = (
+        result.scoreImprovementRatio
+          >= APP17_AGENT_THEORY_GUIDANCE_MINIMUM_SCORE_IMPROVEMENT
+      );
+      if (
+        currentBelowHardFloor
+        || agentTheoryGuidanceConsecutiveUnsafeResults >= 2
+      ) {
+        agentTheoryGuidanceEmergencyOverrideCount += 1;
+        if (result.recommendedSafe) {
+          setAgentTheoryCruiseGuidanceTarget({
+            mode: "steering",
+            tangentWeight: result.tangentWeight,
+            verticalAimRatio: result.verticalAimRatio,
+            directionSign: result.directionSign,
+            speedScale: THREE.MathUtils.clamp(
+              result.speedScale,
+              0.55,
+              1,
+            ),
+            reason: "unsafe-horizon",
+          }, result.fallbackToCenter ? 1 : 0);
+        } else {
+          setAgentTheoryCruiseGuidanceTarget({
+            mode: "fallback",
+            tangentWeight: result.tangentWeight,
+            verticalAimRatio: result.verticalAimRatio,
+            directionSign: result.directionSign,
+            speedScale: THREE.MathUtils.clamp(
+              result.speedScale,
+              0.35,
+              0.55,
+            ),
+            reason: "no-safe-candidate",
+          }, result.fallbackToCenter ? 1 : 0);
+        }
+      } else if (
+        result.belowTarget
+        && result.recommendedSafe
+        && materiallyBetter
+        && targetHeldLongEnough
+      ) {
+        setAgentTheoryCruiseGuidanceTarget({
+          mode: "steering",
+          tangentWeight: result.tangentWeight,
+          verticalAimRatio: result.verticalAimRatio,
+          directionSign: result.directionSign,
+          speedScale: THREE.MathUtils.clamp(result.speedScale, 0.55, 1),
+          reason: "below-target",
+        }, result.fallbackToCenter ? 1 : 0);
+      } else if (
+        !result.belowTarget
+        && result.currentSafe
+        && targetHeldLongEnough
+        && agentTheoryCruiseGuidanceTarget.mode !== "normal"
+      ) {
+        setAgentTheoryCruiseGuidanceTarget({
+          mode: "normal",
+          tangentWeight:
+            agentTheoryCruiseViewTangentWeight
+              ?? result.tangentWeight,
+          verticalAimRatio: agentTheoryCruiseVerticalAimRatio,
+          directionSign: result.directionSign,
+          speedScale: 1,
+        });
+      }
+      agentTheoryCruiseCheckpointSaveAllowed = result.currentSafe;
+      agentTheoryVisibilityCheckpointValid = result.currentSafe;
+      agentTheoryVisibilityGuard = {
+        ...agentTheoryVisibilityGuard,
+        currentPaperCount: result.currentCounts.paperCount,
+        currentHotspotCount: result.currentCounts.hotspotCount,
+        currentHotspotCellCount: result.currentCounts.hotspotCellCount,
+        predictedMinimumPaperCount: result.predictedMinimumPaperCount,
+        predictedMinimumHotspotCount: result.predictedMinimumHotspotCount,
+        predictedMinimumHotspotCellCount:
+          result.predictedMinimumHotspotCellCount,
+        lastSafeStepIndex: result.currentSafe
+          ? agentTheoryCruiseCheckpoint.stepIndex
+          : agentTheoryVisibilityGuard.lastSafeStepIndex,
+        safe: result.currentSafe || result.recommendedSafe,
+      };
+      if (result.currentSafe) {
+        agentTheoryLastSafeCruiseCheckpoint =
+          cloneAgentTheoryCruiseCheckpoint(agentTheoryCruiseCheckpoint);
+      }
+      agentTheoryDepthDiagnostics.visibilityGuard = {
+        ...agentTheoryVisibilityGuard,
+      };
+      agentTheoryDepthDiagnostics.visibilityCheckpointValid =
+        agentTheoryVisibilityCheckpointValid;
+      if (agentTheoryCruiseHealthAuditActive) {
+        agentTheoryCruiseResumeGuardEvaluationCount += 1;
+        if (result.currentSafe || result.recommendedSafe) {
+          agentTheoryCruiseResumeGuardSafeCount += 1;
+        }
+        agentTheoryDepthDiagnostics.returnCruiseGuardEvaluationCount =
+          agentTheoryCruiseResumeGuardEvaluationCount;
+        agentTheoryDepthDiagnostics.returnCruiseGuardSafeCount =
+          agentTheoryCruiseResumeGuardSafeCount;
+      }
+    }
+
+    function cancelAgentTheoryGuidanceFallback() {
+      if (agentTheoryGuidanceFallbackTimer) {
+        window.clearTimeout(agentTheoryGuidanceFallbackTimer);
+        agentTheoryGuidanceFallbackTimer = 0;
+      }
+      if (agentTheoryGuidanceFallbackIdleId) {
+        const idleWindow = window as IdleCapableWindow;
+        idleWindow.cancelIdleCallback?.(agentTheoryGuidanceFallbackIdleId);
+        agentTheoryGuidanceFallbackIdleId = 0;
+      }
+    }
+
+    function scheduleAgentTheoryGuidanceFallback(now: number) {
+      if (
+        agentTheoryGuidanceFallbackTimer
+        || agentTheoryGuidanceFallbackIdleId
+        || now < agentTheoryGuidanceResumeNotBeforeMs
+        || now - agentTheoryGuidanceFallbackLastScheduledAt
+          < APP17_AGENT_THEORY_GUIDANCE_FALLBACK_INTERVAL_MS
+      ) return;
+      agentTheoryGuidanceFallbackLastScheduledAt = now;
+      const runFallback = () => {
+        agentTheoryGuidanceFallbackTimer = 0;
+        agentTheoryGuidanceFallbackIdleId = 0;
+        if (
+          disposed
+          || interactionModeRef.current !== "ambient"
+          || exploration.state !== "overview"
+          || agentTheoryCameraMode !== "cruise"
+          || performance.now() < agentTheoryGuidanceResumeNotBeforeMs
+        ) return;
+        agentTheoryGuidanceFallbackCount += 1;
+        agentTheoryGuidanceSource = "main-thread-fallback";
+        updateAgentTheoryVisibilityGuard(performance.now(), true, true);
+        invalidate(true);
+      };
+      const idleWindow = window as IdleCapableWindow;
+      if (idleWindow.requestIdleCallback) {
+        agentTheoryGuidanceFallbackIdleId =
+          idleWindow.requestIdleCallback(runFallback, { timeout: 250 });
+      } else {
+        agentTheoryGuidanceFallbackTimer =
+          window.setTimeout(runFallback, 16);
+      }
+    }
+
+    function requestAgentTheoryCruiseGuidance(now: number) {
+      if (
+        visualProfile !== "agent-theory"
+        || interactionModeRef.current !== "ambient"
+        || exploration.state !== "overview"
+        || agentTheoryCameraMode !== "cruise"
+        || !agentTheoryCruiseCheckpoint
+        || now < agentTheoryGuidanceResumeNotBeforeMs
+      ) return false;
+      const client = agentTheoryScreenLodWorker;
+      if (
+        !client
+        || !agentTheoryScreenLodWorkerReady
+        || agentTheoryScreenLodWorkerFailed
+      ) {
+        scheduleAgentTheoryGuidanceFallback(now);
+        return false;
+      }
+      if (
+        now - agentTheoryGuidanceLastRequestedAt
+          < APP17_AGENT_THEORY_GUIDANCE_WORKER_INTERVAL_MS
+        || !client.canRequestGuidance(now)
+      ) return false;
+      cancelAgentTheoryGuidanceFallback();
+      agentTheoryGuidanceLastRequestedAt = now;
+      const requestedAtMs = now;
+      const requestedEpoch = agentTheoryGuidanceWorkerEpoch;
+      const currentTangent = agentTheoryCruiseViewTangentWeight
+        ?? agentTheoryCruiseCheckpoint.tangentWeight;
+      void client.requestGuidance({
+        checkpoint: cloneAgentTheoryCruiseCheckpoint(
+          agentTheoryCruiseCheckpoint,
+        ),
+        tangentWeight: currentTangent,
+        verticalAimRatio: agentTheoryCruiseVerticalAimRatio,
+        centerBlend: agentTheoryCruiseCenterBlend,
+        directionSign: agentTheoryCruiseGuidanceTarget.directionSign,
+        speedScale: agentTheoryCruiseGuidance.speedScale,
+        width,
+        height,
+        quality: agentTheoryQuality,
+        fovDegrees: camera.fov,
+        near: camera.near,
+        far: camera.far,
+        broadSearch: !agentTheoryVisibilityGuard.safe,
+      }, now).then((response) => {
+        if (!response) return;
+        if (
+          requestedEpoch !== agentTheoryGuidanceWorkerEpoch
+          || response.revision <= agentTheoryGuidanceLastAcceptedRevision
+        ) {
+          agentTheoryPostReturnDiscardedWorkerResponses += 1;
+          return;
+        }
+        applyAgentTheoryCruiseGuidanceWorkerResponse(
+          response,
+          requestedAtMs,
+        );
+        invalidate(true);
+      }).catch(() => {
+        if (
+          disposed
+          || requestedEpoch !== agentTheoryGuidanceWorkerEpoch
+        ) return;
+        scheduleAgentTheoryGuidanceFallback(performance.now());
+      });
+      return true;
+    }
+
+    function applyAgentTheoryScreenLodDiagnostics(
+      nextResult: AgentTheoryScreenLodResult,
+    ) {
+      root.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const selectedDepths: Array<{
+        depth: number;
+        size: number;
+        alpha: number;
+      }> = [];
+      const sampleStride = Math.max(
+        1,
+        Math.ceil(nextResult.selectedIndices.length / 2_048),
+      );
+      for (
+        let sampleIndex = 0;
+        sampleIndex < nextResult.selectedIndices.length;
+        sampleIndex += sampleStride
+      ) {
+        const paperIndex = nextResult.selectedIndices[sampleIndex];
+        const paper = sceneData.papers[paperIndex];
+        if (!paper) continue;
+        agentTheoryScreenLodWorld
+          .set(paper.x, paper.y, paper.z)
+          .applyMatrix4(root.matrixWorld);
+        agentTheoryScreenLodView
+          .copy(agentTheoryScreenLodWorld)
+          .applyMatrix4(camera.matrixWorldInverse);
+        selectedDepths.push({
+          depth: Math.max(camera.near, -agentTheoryScreenLodView.z),
+          size: paper.size,
+          alpha: paper.alpha,
+        });
+      }
+      const depthDenominator = Math.max(
+        0.001,
+        agentTheoryDepthDiagnostics.viewDepthP95
+          - agentTheoryDepthDiagnostics.viewDepthP5,
+      );
+      const actualSizes: number[] = [];
+      const actualAlphas: number[] = [];
+      selectedDepths.forEach((row) => {
+        const normalizedDepth = THREE.MathUtils.clamp(
+          (row.depth - agentTheoryDepthDiagnostics.viewDepthP5)
+            / depthDenominator,
+          0,
+          1,
+        );
+        const style = resolveAgentTheoryPaperCoreStyle(normalizedDepth);
+        actualSizes.push(THREE.MathUtils.clamp(
+          Math.max(
+            row.size
+              * style.sizeMultiplier
+              * THREE.MathUtils.clamp(
+                0.42 / Math.max(0.08, row.depth),
+                0.78,
+                1.8,
+              ),
+            style.minimumCssSize,
+          ),
+          style.minimumCssSize,
+          4.8,
+        ));
+        actualAlphas.push(Math.min(
+          1,
+          Math.max(
+            row.alpha * style.alphaMultiplier,
+            style.minimumAlpha,
+          ),
+        ));
+      });
+      agentTheoryDepthDiagnostics.residentPaperCount = sceneData.papers.length;
+      agentTheoryDepthDiagnostics.perceptiblePaperCount =
+        nextResult.viewportSelectedCount;
+      agentTheoryDepthDiagnostics.forcedVisibleCount =
+        nextResult.forcedVisibleCount;
+      agentTheoryDepthDiagnostics.occupiedTileRatio =
+        nextResult.occupiedTileRatio;
+      agentTheoryDepthDiagnostics.overlapP95 = nextResult.overlapP95;
+      agentTheoryDepthDiagnostics.screenLodSelectionHash =
+        nextResult.selectionHash;
+      agentTheoryDepthDiagnostics.screenLodViewportCount =
+        nextResult.viewportSelectedCount;
+      agentTheoryDepthDiagnostics.screenLodGuardBandCount = Math.max(
+        0,
+        nextResult.selectedIndices.length - nextResult.viewportSelectedCount,
+      );
+      agentTheoryDepthDiagnostics.actualCoreSizeRange = actualSizes.length > 0
+        ? [Math.min(...actualSizes), Math.max(...actualSizes)]
+        : [0, 0];
+      agentTheoryDepthDiagnostics.actualAlphaRange = actualAlphas.length > 0
+        ? [Math.min(...actualAlphas), Math.max(...actualAlphas)]
+        : [0, 0];
+    }
+
+    function cloneAgentTheoryScreenLodResult(
+      result: AgentTheoryScreenLodResult | null,
+    ): AgentTheoryScreenLodResult | null {
+      return result
+        ? {
+          ...result,
+          selectedIndices: [...result.selectedIndices],
+        }
+        : null;
+    }
+
+    function publishAgentTheoryReturnProgress(
+      phase: AgentTheoryReturnPhase,
+      progress: number,
+      force = false,
+    ) {
+      const boundedProgress = THREE.MathUtils.clamp(progress, 0, 1);
+      if (
+        !force
+        && agentTheoryDepthDiagnostics.returnPhase === phase
+        && Math.abs(
+          boundedProgress - agentTheoryLastReturnProgressPublished,
+        ) < 1e-4
+      ) return;
+      agentTheoryLastReturnProgressPublished = boundedProgress;
+      agentTheoryDepthDiagnostics.returnPhase = phase;
+      agentTheoryDepthDiagnostics.returnProgress = boundedProgress;
+      onAgentTheoryReturnProgressRef.current?.({
+        phase,
+        progress: boundedProgress,
+      });
+    }
+
+    function createAgentTheoryProjectionSignature(
+      matrix: THREE.Matrix4,
+      purpose: AgentTheoryLodPurpose,
+      projectionWidth = width,
+      projectionHeight = height,
+    ): AgentTheoryProjectionSignature {
+      const matrixIdentity = matrix.elements
+        .map((value) => value.toFixed(6))
+        .join(",");
+      return [
+        purpose,
+        projectionWidth,
+        projectionHeight,
+        stableHash(matrixIdentity).toString(16).padStart(8, "0"),
+      ].join(":");
+    }
+
+    function measureAgentTheoryActualReturnVisibility(
+      indices: readonly number[],
+      projectionCamera: THREE.PerspectiveCamera = camera,
+    ) {
+      root.updateMatrixWorld(true);
+      projectionCamera.updateMatrixWorld(true);
+      projectionCamera.updateProjectionMatrix();
+      agentTheoryScreenLodLocalToClip
+        .multiplyMatrices(
+          projectionCamera.projectionMatrix,
+          projectionCamera.matrixWorldInverse,
+        )
+        .multiply(root.matrixWorld);
+      const matrix = agentTheoryScreenLodLocalToClip.elements;
+      const actualWeights = paperLayer.getAgentLodWeights();
+      let paperCount = 0;
+      for (const index of indices) {
+        if ((actualWeights[index] ?? 0) < 0.12) continue;
+        const paper = sceneData.papers[index];
+        if (!paper) continue;
+        const clipW = matrix[3] * paper.x
+          + matrix[7] * paper.y
+          + matrix[11] * paper.z
+          + matrix[15];
+        if (!Number.isFinite(clipW) || clipW <= 1e-7) continue;
+        const inverseW = 1 / clipW;
+        const ndcX = (
+          matrix[0] * paper.x
+          + matrix[4] * paper.y
+          + matrix[8] * paper.z
+          + matrix[12]
+        ) * inverseW;
+        const ndcY = (
+          matrix[1] * paper.x
+          + matrix[5] * paper.y
+          + matrix[9] * paper.z
+          + matrix[13]
+        ) * inverseW;
+        const ndcZ = (
+          matrix[2] * paper.x
+          + matrix[6] * paper.y
+          + matrix[10] * paper.z
+          + matrix[14]
+        ) * inverseW;
+        if (
+          ndcX >= -1
+          && ndcX <= 1
+          && ndcY >= -1
+          && ndcY <= 1
+          && ndcZ >= -1
+          && ndcZ <= 1
+        ) paperCount += 1;
+      }
+      const hotspotVisibility = measureAgentTheoryVisibility(
+        projectionCamera.position,
+        agentTheoryCurrentLookTarget,
+      );
+      return {
+        paperCount,
+        hotspotCount: hotspotVisibility.hotspotCount,
+        hotspotCellCount: hotspotVisibility.hotspotCellCount,
+      };
+    }
+
+    function applyAgentTheoryScreenLodResult(
+      nextResult: AgentTheoryScreenLodResult,
+      now: number,
+      transitionOptions?: {
+        incomingDurationMs?: number;
+        retiringDurationMs?: number;
+        retiringDelayMs?: number;
+      },
+    ) {
+      const visibilityEnvelope = createAgentTheoryVisibilityEnvelope(
+        width,
+        height,
+      );
+      const protectsAmbientVisibility = (
+        visualProfile === "agent-theory"
+        && interactionModeRef.current === "ambient"
+        && exploration.state === "overview"
+      );
+      if (
+        protectsAmbientVisibility
+        && nextResult.viewportSelectedCount
+          < visibilityEnvelope.paperHardFloor
+      ) {
+        agentTheoryVisibilityLodTargetRejected = true;
+        agentTheoryDepthDiagnostics.visibilityLodTargetRejected = true;
+        if (!agentTheoryScreenLodResult) {
+          // Preserve the diagnostic failure count for the initial ready gate,
+          // but never cross-fade the resident geometry to an empty selection.
+          agentTheoryDepthDiagnostics.perceptiblePaperCount =
+            nextResult.viewportSelectedCount;
+          agentTheoryDepthDiagnostics.screenLodSelectionHash =
+            nextResult.selectionHash;
+        }
+        agentTheoryLodRefreshPending = false;
+        return false;
+      }
+      agentTheoryVisibilityLodTargetRejected = false;
+      agentTheoryDepthDiagnostics.visibilityLodTargetRejected = false;
+      const initial = agentTheoryScreenLodResult === null;
+      const selectionChanged = (
+        initial
+        || nextResult.selectionHash
+          !== agentTheoryScreenLodResult?.selectionHash
+      );
+      if (selectionChanged) {
+        paperLayer.setAgentLodSelection(
+          nextResult.selectedIndices,
+          now,
+          initial,
+          transitionOptions,
+        );
+      }
+      agentTheoryScreenLodResult = nextResult;
+      lastAgentTheoryScreenLodUpdateAt = now;
+      agentTheoryScreenLodCameraPosition.copy(camera.position);
+      agentTheoryScreenLodCameraQuaternion.copy(camera.quaternion);
+      agentTheoryScreenLodCameraDistance = camera.position.distanceTo(
+        agentTheoryCurrentLookTarget,
+      );
+      applyAgentTheoryScreenLodDiagnostics(nextResult);
+      labelDirty = true;
+      invalidate(selectionChanged || paperLayer.isAgentLodTransitioning());
+      return selectionChanged;
+    }
+
+    function applyAgentTheoryScreenLodWorkerResponse(
+      response: AgentTheoryScreenLodWorkerSelectionResponse,
+      requestedAtMs: number,
+    ) {
+      if (disposed || !runtimeActive) return;
+      const now = performance.now();
+      const nextResult: AgentTheoryScreenLodResult = {
+        selectedIndices: Array.from(response.visibleIndices),
+        candidateCount: response.candidateCount,
+        guardBandCandidateCount: response.guardBandCandidateCount,
+        viewportCandidateCount: response.viewportCandidateCount,
+        viewportSelectedCount: response.viewportSelectedCount,
+        forcedVisibleCount: response.forcedVisibleCount,
+        perceptiblePaperCount: response.perceptiblePaperCount,
+        occupiedTileRatio: response.occupiedTileRatio,
+        overlapP95: response.overlapP95,
+        selectionHash: response.selectionHash,
+        tileSizeCssPx: agentTheoryScreenLodResult?.tileSizeCssPx ?? 28,
+        targetCount: response.targetCount,
+        viewportTargetCount: response.viewportTargetCount,
+        guardBandNdc: response.guardBandNdc,
+      };
+      if (response.purpose === "return-anchor") {
+        const validAnchorResponse = (
+          agentTheoryCameraMode === "return-preparing"
+          && response.purpose === agentTheoryExpectedLodPurpose
+          && response.projectionSignature
+            === agentTheoryExpectedProjectionSignature
+        );
+        if (!validAnchorResponse) {
+          agentTheoryDiscardedLodResponseCount += 1;
+          agentTheoryDepthDiagnostics.returnDiscardedLodResponseCount =
+            agentTheoryDiscardedLodResponseCount;
+          return;
+        }
+        completeAgentTheoryReturnPreparation(nextResult, now);
+      } else if (
+        agentTheoryCameraMode === "return-preparing"
+        || agentTheoryCameraMode === "returning-anchor"
+        || agentTheoryCameraMode === "return-commit"
+      ) {
+        agentTheoryDiscardedLodResponseCount += 1;
+        agentTheoryDepthDiagnostics.returnDiscardedLodResponseCount =
+          agentTheoryDiscardedLodResponseCount;
+        return;
+      } else {
+        applyAgentTheoryScreenLodResult(nextResult, now, {
+          incomingDurationMs: 90,
+          retiringDurationMs: 300,
+          retiringDelayMs: 300,
+        });
+      }
+      agentTheoryDepthDiagnostics.screenLodWorkerLatencyMs = Math.max(
+        0,
+        now - requestedAtMs,
+      );
+      agentTheoryDepthDiagnostics.screenLodIncomingCount =
+        response.incomingIndices.length;
+      agentTheoryDepthDiagnostics.screenLodRetiringCount =
+        response.retiringIndices.length;
+      const workerSnapshot = agentTheoryScreenLodWorker?.getSnapshot();
+      if (workerSnapshot) {
+        agentTheoryDepthDiagnostics.screenLodRequestedRevision =
+          workerSnapshot.latestRequestedRevision;
+        agentTheoryDepthDiagnostics.screenLodAcceptedRevision =
+          workerSnapshot.latestAcceptedRevision;
+        agentTheoryDepthDiagnostics.screenLodDiscardedResponses =
+          workerSnapshot.discardedResponseCount;
+        agentTheoryLodRefreshPending =
+          workerSnapshot.pendingRequestCount > 0;
+      } else {
+        agentTheoryLodRefreshPending = false;
+      }
+    }
+
+    function requestAgentTheoryScreenLodWorker(
+      now = performance.now(),
+      force = false,
+      projectionCamera: THREE.PerspectiveCamera = camera,
+      purpose: AgentTheoryLodPurpose = (
+        interactionModeRef.current === "explore" ? "explore" : "cruise"
+      ),
+    ) {
+      if (
+        !agentTheoryScreenLodWorker
+        || !agentTheoryScreenLodWorkerReady
+        || agentTheoryScreenLodWorkerFailed
+        || visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || exploration.state !== "overview"
+      ) return false;
+      if (
+        purpose !== "return-anchor"
+        && (
+          agentTheoryCameraMode === "return-preparing"
+          || agentTheoryCameraMode === "returning-anchor"
+          || agentTheoryCameraMode === "return-commit"
+        )
+      ) return false;
+      const activeCadence = (
+        agentTheoryCameraMode === "return-preparing"
+        || agentTheoryCameraMode === "returning-anchor"
+        || agentTheoryCameraMode === "return-commit"
+        || agentTheoryCameraMode === "explore-free"
+          && (
+            orbit.pointerPressed
+            || orbit.dragging
+            || agentTheoryFreeLookAim !== null
+            || Math.abs(agentTheoryFreeLookDollyVelocity) > 1e-5
+          )
+      );
+      const cadence = activeCadence ? "active" : "idle";
+      if (
+        !force
+        && !agentTheoryScreenLodWorker.canRequest(cadence, now)
+      ) return false;
+
+      root.updateMatrixWorld(true);
+      projectionCamera.updateMatrixWorld(true);
+      projectionCamera.updateProjectionMatrix();
+      agentTheoryScreenLodLocalToClip
+        .multiplyMatrices(
+          projectionCamera.projectionMatrix,
+          projectionCamera.matrixWorldInverse,
+        )
+        .multiply(root.matrixWorld);
+      const projectionSignature = createAgentTheoryProjectionSignature(
+        agentTheoryScreenLodLocalToClip,
+        purpose,
+      );
+      if (purpose === "return-anchor") {
+        agentTheoryExpectedLodPurpose = purpose;
+        agentTheoryExpectedProjectionSignature = projectionSignature;
+        agentTheoryReturnProjectionSignature = projectionSignature;
+        agentTheoryDepthDiagnostics.returnProjectionSignature =
+          projectionSignature;
+      }
+      const currentWeights = paperLayer.getAgentLodTargetWeights();
+      const previousVisibleMask = new Uint8Array(currentWeights.length);
+      for (let index = 0; index < currentWeights.length; index += 1) {
+        previousVisibleMask[index] = currentWeights[index] >= 0.5 ? 1 : 0;
+      }
+      const forcedVisibleMask = new Uint8Array(currentWeights.length);
+      [
+        selectedPaperIdRef.current,
+        paperJourney.getTargetId(),
+      ].filter(Boolean).forEach((paperId) => {
+        const index = paperLayer.getPaperIndex(paperId);
+        if (index >= 0) forcedVisibleMask[index] = 1;
+      });
+      const requestedAtMs = performance.now();
+      const requestedEpoch = agentTheoryGuidanceWorkerEpoch;
+      agentTheoryLodRefreshPending = true;
+      void agentTheoryScreenLodWorker.requestSelection({
+        purpose,
+        projectionSignature,
+        cadence,
+        width,
+        height,
+        quality: agentTheoryQuality,
+        localToClipMatrix: Float32Array.from(
+          agentTheoryScreenLodLocalToClip.elements,
+        ),
+        previousVisibleMask,
+        forcedVisibleMask,
+      }, requestedAtMs).then((response) => {
+        if (requestedEpoch !== agentTheoryGuidanceWorkerEpoch) {
+          agentTheoryDiscardedLodResponseCount += 1;
+          agentTheoryDepthDiagnostics.returnDiscardedLodResponseCount =
+            agentTheoryDiscardedLodResponseCount;
+          const snapshot = agentTheoryScreenLodWorker?.getSnapshot();
+          agentTheoryLodRefreshPending =
+            (snapshot?.pendingRequestCount ?? 0) > 0;
+          return;
+        }
+        if (!response) {
+          const snapshot = agentTheoryScreenLodWorker?.getSnapshot();
+          agentTheoryLodRefreshPending =
+            (snapshot?.pendingRequestCount ?? 0) > 0;
+          return;
+        }
+        applyAgentTheoryScreenLodWorkerResponse(response, requestedAtMs);
+      }).catch(() => {
+        if (disposed) return;
+        agentTheoryScreenLodWorkerFailed = true;
+        agentTheoryScreenLodWorkerReady = false;
+        agentTheoryDepthDiagnostics.screenLodBackend =
+          "main-thread-fallback";
+        agentTheoryLodRefreshPending = false;
+        scheduleAgentTheoryScreenLodRefresh(0);
+      });
+      return true;
+    }
+
+    function cancelAgentTheoryMainThreadLodFallback() {
+      agentTheoryMainThreadLodRevision += 1;
+      agentTheoryMainThreadLodJob = null;
+      if (agentTheoryMainThreadLodFrame) {
+        cancelAnimationFrame(agentTheoryMainThreadLodFrame);
+        agentTheoryMainThreadLodFrame = 0;
+      }
+      if (agentTheoryMainThreadLodCommitIdleId) {
+        const idleWindow = window as IdleCapableWindow;
+        idleWindow.cancelIdleCallback?.(
+          agentTheoryMainThreadLodCommitIdleId,
+        );
+        agentTheoryMainThreadLodCommitIdleId = 0;
+      }
+      if (agentTheoryMainThreadLodCommitTimer) {
+        window.clearTimeout(agentTheoryMainThreadLodCommitTimer);
+        agentTheoryMainThreadLodCommitTimer = 0;
+      }
+    }
+
+    function startAgentTheoryMainThreadLodFallback(
+      now = performance.now(),
+      force = false,
+      projectionCamera: THREE.PerspectiveCamera = camera,
+      purpose: AgentTheoryLodPurpose = (
+        interactionModeRef.current === "explore" ? "explore" : "cruise"
+      ),
+    ) {
+      if (
+        visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || exploration.state !== "overview"
+        || disposed
+        || !runtimeActive
+      ) return false;
+      if (
+        purpose !== "return-anchor"
+        && (
+          agentTheoryCameraMode === "return-preparing"
+          || agentTheoryCameraMode === "returning-anchor"
+          || agentTheoryCameraMode === "return-commit"
+        )
+      ) return false;
+      if (
+        !force
+        && (
+          agentTheoryMainThreadLodJob
+          || agentTheoryMainThreadLodFrame
+          || agentTheoryMainThreadLodCommitIdleId
+          || agentTheoryMainThreadLodCommitTimer
+        )
+      ) return false;
+      if (force) cancelAgentTheoryMainThreadLodFallback();
+
+      root.updateMatrixWorld(true);
+      projectionCamera.updateMatrixWorld(true);
+      projectionCamera.updateProjectionMatrix();
+      const localToClipMatrix = new THREE.Matrix4()
+        .multiplyMatrices(
+          projectionCamera.projectionMatrix,
+          projectionCamera.matrixWorldInverse,
+        )
+        .multiply(root.matrixWorld);
+      const projectionSignature = createAgentTheoryProjectionSignature(
+        localToClipMatrix,
+        purpose,
+      );
+      const currentWeights = paperLayer.getAgentLodTargetWeights();
+      const previousVisibleMask = new Uint8Array(currentWeights.length);
+      for (let index = 0; index < currentWeights.length; index += 1) {
+        previousVisibleMask[index] = currentWeights[index] >= 0.5 ? 1 : 0;
+      }
+      const forcedVisibleMask = new Uint8Array(currentWeights.length);
+      [
+        selectedPaperIdRef.current,
+        paperJourney.getTargetId(),
+      ].filter(Boolean).forEach((paperId) => {
+        const index = paperLayer.getPaperIndex(paperId);
+        if (index >= 0) forcedVisibleMask[index] = 1;
+      });
+      const revision = agentTheoryMainThreadLodRevision + 1;
+      agentTheoryMainThreadLodRevision = revision;
+      agentTheoryMainThreadLodJob = {
+        revision,
+        cursor: 0,
+        candidates: [],
+        localToClipMatrix: Float32Array.from(localToClipMatrix.elements),
+        purpose,
+        projectionSignature,
+        previousVisibleMask,
+        forcedVisibleMask,
+        width,
+        height,
+        quality: agentTheoryQuality,
+      };
+      agentTheoryLodRefreshPending = true;
+      agentTheoryDepthDiagnostics.screenLodBackend =
+        "main-thread-fallback";
+
+      const advanceFallback = () => {
+        agentTheoryMainThreadLodFrame = 0;
+        const job = agentTheoryMainThreadLodJob;
+        if (
+          !job
+          || job.revision !== agentTheoryMainThreadLodRevision
+          || disposed
+          || !runtimeActive
+          || document.visibilityState === "hidden"
+        ) return;
+        const chunkStartedAt = performance.now();
+        const matrix = job.localToClipMatrix;
+        while (job.cursor < sceneData.papers.length) {
+          const index = job.cursor;
+          const paper = sceneData.papers[index];
+          const x = paper.x;
+          const y = paper.y;
+          const z = paper.z;
+          const clipW = matrix[3] * x
+            + matrix[7] * y
+            + matrix[11] * z
+            + matrix[15];
+          let ndcX = Number.NaN;
+          let ndcY = Number.NaN;
+          let ndcZ = Number.NaN;
+          if (Number.isFinite(clipW) && clipW > 1e-7) {
+            const inverseW = 1 / clipW;
+            ndcX = (
+              matrix[0] * x
+              + matrix[4] * y
+              + matrix[8] * z
+              + matrix[12]
+            ) * inverseW;
+            ndcY = (
+              matrix[1] * x
+              + matrix[5] * y
+              + matrix[9] * z
+              + matrix[13]
+            ) * inverseW;
+            ndcZ = (
+              matrix[2] * x
+              + matrix[6] * y
+              + matrix[10] * z
+              + matrix[14]
+            ) * inverseW;
+          }
+          job.candidates.push({
+            index,
+            paperId: paper.paperId,
+            topicKey: paper.topicKey,
+            ndcX,
+            ndcY,
+            ndcZ,
+            size: paper.size,
+            previouslyVisible: job.previousVisibleMask[index] !== 0,
+            forced: job.forcedVisibleMask[index] !== 0,
+          });
+          job.cursor += 1;
+          if (
+            (job.cursor & 63) === 0
+            && performance.now() - chunkStartedAt
+              >= APP17_AGENT_THEORY_MAIN_THREAD_LOD_BUDGET_MS
+          ) break;
+        }
+        if (job.cursor < sceneData.papers.length) {
+          agentTheoryMainThreadLodFrame =
+            requestAnimationFrame(advanceFallback);
+          return;
+        }
+
+        agentTheoryMainThreadLodJob = null;
+        const commitFallback = () => {
+          agentTheoryMainThreadLodCommitIdleId = 0;
+          agentTheoryMainThreadLodCommitTimer = 0;
+          if (
+            disposed
+            || !runtimeActive
+            || job.revision !== agentTheoryMainThreadLodRevision
+          ) return;
+          const nextResult = selectAgentTheoryScreenLod({
+            candidates: job.candidates,
+            width: job.width,
+            height: job.height,
+            quality: job.quality,
+            guardBandNdc: AGENT_THEORY_SCREEN_LOD_GUARD_BAND_NDC,
+          });
+          if (job.purpose === "return-anchor") {
+            const validAnchorResult = (
+              agentTheoryCameraMode === "return-preparing"
+              && job.purpose === agentTheoryExpectedLodPurpose
+              && job.projectionSignature
+                === agentTheoryExpectedProjectionSignature
+            );
+            if (validAnchorResult) {
+              completeAgentTheoryReturnPreparation(
+                nextResult,
+                performance.now(),
+              );
+            } else {
+              agentTheoryDiscardedLodResponseCount += 1;
+              agentTheoryDepthDiagnostics.returnDiscardedLodResponseCount =
+                agentTheoryDiscardedLodResponseCount;
+            }
+          } else if (
+            agentTheoryCameraMode !== "return-preparing"
+            && agentTheoryCameraMode !== "returning-anchor"
+            && agentTheoryCameraMode !== "return-commit"
+          ) {
+            applyAgentTheoryScreenLodResult(
+              nextResult,
+              performance.now(),
+              {
+                incomingDurationMs: 90,
+                retiringDurationMs: 300,
+                retiringDelayMs: 300,
+              },
+            );
+          }
+          agentTheoryLodRefreshPending = false;
+        };
+        const idleWindow = window as IdleCapableWindow;
+        if (idleWindow.requestIdleCallback) {
+          agentTheoryMainThreadLodCommitIdleId =
+            idleWindow.requestIdleCallback(commitFallback, { timeout: 50 });
+        } else {
+          agentTheoryMainThreadLodCommitTimer = window.setTimeout(
+            commitFallback,
+            0,
+          );
+        }
+      };
+      agentTheoryMainThreadLodFrame = requestAnimationFrame(advanceFallback);
+      return true;
+    }
+
+    function agentTheoryScreenLodInteractionActive(
+      now = performance.now(),
+    ) {
+      void now;
+      return exploration.state !== "overview" || orbit.transition !== null;
+    }
+
+    function updateAgentTheoryScreenLod(
+      now = performance.now(),
+      force = false,
+      fromDeferredRefresh = false,
+    ) {
+      if (
+        visualProfile === "agent-theory"
+        && sceneData.kind === "app15"
+        && agentTheoryScreenLodWorkerReady
+        && !agentTheoryScreenLodWorkerFailed
+        && !force
+      ) {
+        requestAgentTheoryScreenLodWorker(now);
+        return false;
+      }
+      if (
+        visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || (
+          !force
+          && agentTheoryScreenLodInteractionActive(now)
+        )
+      ) return false;
+      const forcedSignature = [
+        selectedPaperIdRef.current,
+        paperJourney.getTargetId(),
+      ].filter(Boolean).sort().join("|");
+      const forcedSelectionChanged = (
+        forcedSignature !== lastAgentTheoryScreenLodForcedSignature
+      );
+      const currentDistance = camera.position.distanceTo(
+        agentTheoryCurrentLookTarget,
+      );
+      if (!force && !forcedSelectionChanged && agentTheoryScreenLodResult) {
+        const minimumInterval = agentTheoryCameraMode === "cruise"
+          ? APP17_AGENT_THEORY_CRUISE_LOD_INTERVAL_MS
+          : 250;
+        if (now - lastAgentTheoryScreenLodUpdateAt < minimumInterval) {
+          return false;
+        }
+        const angleDegrees = THREE.MathUtils.radToDeg(
+          camera.quaternion.angleTo(agentTheoryScreenLodCameraQuaternion),
+        );
+        const distanceRatio = Math.abs(
+          currentDistance - agentTheoryScreenLodCameraDistance,
+        ) / Math.max(0.001, agentTheoryScreenLodCameraDistance);
+        if (angleDegrees <= 0.25 && distanceRatio <= 0.015) return false;
+      }
+      if (!force && !fromDeferredRefresh) {
+        startAgentTheoryMainThreadLodFallback(now);
+        return false;
+      }
+
+      root.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const currentWeights = paperLayer.getAgentLodTargetWeights();
+      const forcedPaperIds = new Set(
+        forcedSignature ? forcedSignature.split("|") : [],
+      );
+      const candidates: AgentTheoryScreenLodCandidate[] = [];
+      sceneData.papers.forEach((paper, index) => {
+        agentTheoryScreenLodWorld
+          .set(paper.x, paper.y, paper.z)
+          .applyMatrix4(root.matrixWorld);
+        agentTheoryScreenLodProjection
+          .copy(agentTheoryScreenLodWorld)
+          .project(camera);
+        if (
+          agentTheoryScreenLodProjection.z < -1
+          || agentTheoryScreenLodProjection.z > 1
+        ) return;
+        candidates.push({
+          index,
+          paperId: paper.paperId,
+          topicKey: paper.topicKey,
+          ndcX: agentTheoryScreenLodProjection.x,
+          ndcY: agentTheoryScreenLodProjection.y,
+          ndcZ: agentTheoryScreenLodProjection.z,
+          size: paper.size,
+          previouslyVisible: currentWeights[index] >= 0.5,
+          forced: forcedPaperIds.has(paper.paperId),
+        });
+      });
+      const nextResult = selectAgentTheoryScreenLod({
+        candidates,
+        width,
+        height,
+        quality: agentTheoryQuality,
+        guardBandNdc: AGENT_THEORY_SCREEN_LOD_GUARD_BAND_NDC,
+      });
+      const initial = agentTheoryScreenLodResult === null;
+      let selectionChanged = (
+        initial
+        || nextResult.selectionHash !== agentTheoryScreenLodResult?.selectionHash
+      );
+      if (
+        selectionChanged
+        && !initial
+        && !forcedSelectionChanged
+        && agentTheoryCameraMode === "cruise"
+        && agentTheoryScreenLodResult
+      ) {
+        const previousSelection = new Set(
+          agentTheoryScreenLodResult.selectedIndices,
+        );
+        let changedCount = 0;
+        nextResult.selectedIndices.forEach((index) => {
+          if (!previousSelection.has(index)) changedCount += 1;
+        });
+        const nextSelection = new Set(nextResult.selectedIndices);
+        agentTheoryScreenLodResult.selectedIndices.forEach((index) => {
+          if (!nextSelection.has(index)) changedCount += 1;
+        });
+        const membershipDeltaRatio = changedCount / Math.max(
+          1,
+          Math.max(
+            nextResult.selectedIndices.length,
+            agentTheoryScreenLodResult.selectedIndices.length,
+          ) * 2,
+        );
+        if (membershipDeltaRatio < APP17_AGENT_THEORY_LOD_CHANGE_THRESHOLD) {
+          selectionChanged = false;
+        }
+      }
+      if (selectionChanged) {
+        paperLayer.setAgentLodSelection(
+          nextResult.selectedIndices,
+          now,
+          initial,
+        );
+      }
+      if (selectionChanged || initial) {
+        agentTheoryScreenLodResult = nextResult;
+      }
+      lastAgentTheoryScreenLodForcedSignature = forcedSignature;
+      lastAgentTheoryScreenLodUpdateAt = now;
+      agentTheoryScreenLodCameraPosition.copy(camera.position);
+      agentTheoryScreenLodCameraQuaternion.copy(camera.quaternion);
+      agentTheoryScreenLodCameraDistance = currentDistance;
+      applyAgentTheoryScreenLodDiagnostics(nextResult);
+      return selectionChanged;
+    }
+
+    function cancelAgentTheoryScreenLodRefresh() {
+      if (agentTheoryLodRefreshTimer) {
+        window.clearTimeout(agentTheoryLodRefreshTimer);
+        agentTheoryLodRefreshTimer = 0;
+      }
+      cancelAgentTheoryMainThreadLodFallback();
+    }
+
+    function scheduleAgentTheoryScreenLodRefresh(
+      delayMs = APP17_AGENT_THEORY_LOD_SETTLE_MS,
+    ) {
+      if (
+        visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || disposed
+        || !runtimeActive
+      ) return;
+      cancelAgentTheoryScreenLodRefresh();
+      agentTheoryLodRefreshPending = true;
+      if (
+        agentTheoryScreenLodWorker
+        && agentTheoryScreenLodWorkerReady
+        && !agentTheoryScreenLodWorkerFailed
+      ) {
+        agentTheoryLodRefreshTimer = window.setTimeout(() => {
+          agentTheoryLodRefreshTimer = 0;
+          const requested = requestAgentTheoryScreenLodWorker(
+            performance.now(),
+            true,
+          );
+          if (!requested) agentTheoryLodRefreshPending = false;
+          invalidate(requested);
+        }, Math.max(0, delayMs));
+        return;
+      }
+      agentTheoryLodRefreshTimer = window.setTimeout(() => {
+        agentTheoryLodRefreshTimer = 0;
+        const started = startAgentTheoryMainThreadLodFallback(
+          performance.now(),
+          true,
+        );
+        if (!started) agentTheoryLodRefreshPending = false;
+      }, Math.max(0, delayMs));
+    }
+
+    function initializeAgentTheoryScreenLodWorker() {
+      if (
+        visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || !agentTheoryPerimeterProfile
+        || typeof Worker === "undefined"
+      ) return;
+      try {
+        const client = createAgentTheoryScreenLodWorkerClient();
+        agentTheoryScreenLodWorker = client;
+        const positions = paperLayer.getPositions();
+        const sizes = paperLayer.getSizes();
+        const guidancePaperStride = Math.max(
+          1,
+          Math.ceil(sceneData.papers.length / 2_048),
+        );
+        const guidancePaperPositions = new Float32Array(
+          Math.ceil(sceneData.papers.length / guidancePaperStride) * 3,
+        );
+        let guidancePaperOffset = 0;
+        for (
+          let index = 0;
+          index < sceneData.papers.length;
+          index += guidancePaperStride
+        ) {
+          const paper = sceneData.papers[index];
+          guidancePaperPositions[guidancePaperOffset] = paper.x;
+          guidancePaperPositions[guidancePaperOffset + 1] = paper.y;
+          guidancePaperPositions[guidancePaperOffset + 2] = paper.z;
+          guidancePaperOffset += 3;
+        }
+        const guidanceHotspotPositions = new Float32Array(
+          sceneData.hotspots.length * 3,
+        );
+        sceneData.hotspots.forEach((hotspot, index) => {
+          guidanceHotspotPositions[index * 3] = hotspot.position.x;
+          guidanceHotspotPositions[index * 3 + 1] = hotspot.position.y;
+          guidanceHotspotPositions[index * 3 + 2] = hotspot.position.z;
+        });
+        void client.initialize({
+          catalogRevision: [
+            payload.snapshotId ?? "unknown",
+            sceneData.papers.length,
+            "screen-lod-r5",
+          ].join(":"),
+          paperIds: [...paperLayer.getPaperIds()],
+          topicKeys: [...paperLayer.getTopicKeys()],
+          positions: positions.slice(),
+          sizes: sizes.slice(),
+          guidance: {
+            profile: agentTheoryPerimeterProfile,
+            paperPositions: guidancePaperPositions.subarray(
+              0,
+              guidancePaperOffset,
+            ),
+            totalPaperCount: sceneData.papers.length,
+            hotspotPositions: guidanceHotspotPositions,
+          },
+        }).then(() => {
+          if (disposed || agentTheoryScreenLodWorker !== client) return;
+          cancelAgentTheoryMainThreadLodFallback();
+          agentTheoryScreenLodWorkerReady = true;
+          agentTheoryScreenLodWorkerFailed = false;
+          agentTheoryDepthDiagnostics.screenLodBackend = "worker";
+          requestAgentTheoryScreenLodWorker(performance.now(), true);
+          requestAgentTheoryCruiseGuidance(performance.now());
+          invalidate(true);
+        }).catch(() => {
+          if (disposed) return;
+          agentTheoryScreenLodWorkerFailed = true;
+          agentTheoryScreenLodWorkerReady = false;
+          agentTheoryDepthDiagnostics.screenLodBackend =
+            "main-thread-fallback";
+          client.dispose();
+          if (agentTheoryScreenLodWorker === client) {
+            agentTheoryScreenLodWorker = null;
+          }
+          scheduleAgentTheoryScreenLodRefresh(0);
+        });
+      } catch {
+        agentTheoryScreenLodWorkerFailed = true;
+        agentTheoryScreenLodWorkerReady = false;
+        agentTheoryDepthDiagnostics.screenLodBackend =
+          "main-thread-fallback";
+      }
     }
 
     function updateAgentTheoryDepthStaging(
@@ -2403,7 +5208,7 @@ export function App17GalaxyCanvas({
         || !agentTheoryDepthProfile
         || sceneData.kind !== "app15"
       ) return;
-      if (!force && now - lastAgentTheoryDepthUpdateAt < 1_500) return;
+      if (!force && now - lastAgentTheoryDepthUpdateAt < 250) return;
       lastAgentTheoryDepthUpdateAt = now;
       root.updateMatrixWorld(true);
       camera.updateMatrixWorld(true);
@@ -2417,44 +5222,60 @@ export function App17GalaxyCanvas({
         "near-psf": 0,
         sphere: 0,
       };
-      const depthRows = sceneData.papers.map((paper, index) => {
-        agentTheoryDepthWorld
-          .set(paper.x, paper.y, paper.z)
-          .applyMatrix4(root.matrixWorld);
-        nearestEntityDistance = Math.min(
-          nearestEntityDistance,
-          agentTheoryDepthWorld.distanceTo(camera.position),
+      const workerOwnsCruiseDepth = (
+        agentTheoryCameraMode === "cruise"
+        && agentTheoryScreenLodWorkerReady
+        && !agentTheoryScreenLodWorkerFailed
+      );
+      let depthRows = workerOwnsCruiseDepth
+        ? []
+        : agentTheoryCachedDiagnosticDepthRows;
+      if (!workerOwnsCruiseDepth) {
+        const nextDepthRows: typeof agentTheoryCachedDiagnosticDepthRows = [];
+        const diagnosticPaperStride = Math.max(
+          1,
+          Math.ceil(sceneData.papers.length / 2_048),
         );
-        agentTheoryDepthView
-          .copy(agentTheoryDepthWorld)
-          .applyMatrix4(camera.matrixWorldInverse);
-        agentTheoryCurrentProjection
-          .copy(agentTheoryDepthWorld)
-          .project(camera);
-        if (
-          agentTheoryCurrentProjection.z >= -1
-          && agentTheoryCurrentProjection.z <= 1
-          && Math.abs(agentTheoryCurrentProjection.x) <= 1
-          && Math.abs(agentTheoryCurrentProjection.y) <= 1
+        for (
+          let index = 0;
+          index < sceneData.papers.length;
+          index += diagnosticPaperStride
         ) {
-          visibleEntityCount += 1;
-          visiblePaperCount += 1;
+          const paper = sceneData.papers[index];
+          agentTheoryDepthWorld
+            .set(paper.x, paper.y, paper.z)
+            .applyMatrix4(root.matrixWorld);
+          nearestEntityDistance = Math.min(
+            nearestEntityDistance,
+            agentTheoryDepthWorld.distanceTo(camera.position),
+          );
+          agentTheoryDepthView
+            .copy(agentTheoryDepthWorld)
+            .applyMatrix4(camera.matrixWorldInverse);
+          const cssDiameter = resolveAgentTheoryAngularDiameterCssPx({
+            worldDiameter: Math.max(0.015, paper.size * 0.022),
+            viewDepth: Math.max(0.01, -agentTheoryDepthView.z),
+            viewportHeight: height,
+            fovDegrees: camera.fov,
+          });
+          stellarLodCounts[
+            resolveAgentTheoryStellarLod(cssDiameter, false)
+          ] += 1;
+          nextDepthRows.push({
+            index,
+            depth: Math.max(camera.near, -agentTheoryDepthView.z),
+            size: paper.size,
+          });
         }
-        const cssDiameter = resolveAgentTheoryAngularDiameterCssPx({
-          worldDiameter: Math.max(0.015, paper.size * 0.022),
-          viewDepth: Math.max(0.01, -agentTheoryDepthView.z),
-          viewportHeight: height,
-          fovDegrees: camera.fov,
-        });
-        stellarLodCounts[
-          resolveAgentTheoryStellarLod(cssDiameter, false)
-        ] += 1;
-        return {
-          index,
-          depth: Math.max(camera.near, -agentTheoryDepthView.z),
-          size: paper.size,
-        };
-      });
+        agentTheoryCachedDiagnosticDepthRows = nextDepthRows;
+        depthRows = nextDepthRows;
+      }
+      visiblePaperCount =
+        agentTheoryScreenLodResult?.viewportSelectedCount ?? 0;
+      visibleEntityCount =
+        agentTheoryScreenLodResult?.candidateCount ?? visiblePaperCount;
+      const visibleHotspotCells = new Set<string>();
+      const visibleHotspotCoreSizes: number[] = [];
       sceneData.hotspots.forEach((hotspot) => {
         agentTheoryDepthWorld
           .copy(hotspot.position)
@@ -2466,14 +5287,32 @@ export function App17GalaxyCanvas({
         agentTheoryCurrentProjection
           .copy(agentTheoryDepthWorld)
           .project(camera);
+        const hotspotCoreCssSize =
+          resolveAgentTheoryHotspotCoreCssSize(hotspot.importance);
+        const hotspotCoreOpacity = 0.82;
         if (
           agentTheoryCurrentProjection.z >= -1
           && agentTheoryCurrentProjection.z <= 1
           && Math.abs(agentTheoryCurrentProjection.x) <= 1
           && Math.abs(agentTheoryCurrentProjection.y) <= 1
+          && hotspotCoreCssSize
+            >= APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX
+          && hotspotCoreOpacity >= 0.82
         ) {
           visibleEntityCount += 1;
           visibleHotspotCount += 1;
+          const cellX = THREE.MathUtils.clamp(
+            Math.floor((agentTheoryCurrentProjection.x * 0.5 + 0.5) * 6),
+            0,
+            5,
+          );
+          const cellY = THREE.MathUtils.clamp(
+            Math.floor((-agentTheoryCurrentProjection.y * 0.5 + 0.5) * 4),
+            0,
+            3,
+          );
+          visibleHotspotCells.add(`${cellX}:${cellY}`);
+          visibleHotspotCoreSizes.push(hotspotCoreCssSize);
         }
         const previousLod = agentTheoryHotspotSphereLayer
           ?.getLodById()
@@ -2482,34 +5321,106 @@ export function App17GalaxyCanvas({
           ?.getProjectedDiameterById()
           .get(hotspot.id) ?? 0;
         stellarLodCounts[
-          resolveAgentTheoryStellarLod(diameter, true, previousLod)
+          resolveAgentTheoryStellarLod(diameter, false, previousLod)
         ] += 1;
       });
-      const sortedDepths = depthRows
-        .map((row) => row.depth)
-        .sort((left, right) => left - right);
-      const viewDepthP5 = percentileNumber(sortedDepths, 0.05);
-      const viewDepthP50 = percentileNumber(sortedDepths, 0.50);
-      const viewDepthP95 = Math.max(
-        viewDepthP5 + 0.001,
-        percentileNumber(sortedDepths, 0.95),
+      if (!workerOwnsCruiseDepth) {
+        const sortedDepths = depthRows
+          .map((row) => row.depth)
+          .sort((left, right) => left - right);
+        agentTheoryDepthTargetP5 = percentileNumber(sortedDepths, 0.05);
+        agentTheoryDepthTargetP50 = percentileNumber(sortedDepths, 0.50);
+        agentTheoryDepthTargetP95 = Math.max(
+          agentTheoryDepthTargetP5 + 0.001,
+          percentileNumber(sortedDepths, 0.95),
+        );
+      }
+      if (
+        force
+        || !Number.isFinite(agentTheoryDepthCurrentP5)
+        || agentTheoryDepthCurrentP95 <= agentTheoryDepthCurrentP5
+      ) {
+        agentTheoryDepthCurrentP5 = agentTheoryDepthTargetP5;
+        agentTheoryDepthCurrentP50 = agentTheoryDepthTargetP50;
+        agentTheoryDepthCurrentP95 = agentTheoryDepthTargetP95;
+      }
+      const viewDepthP5 = agentTheoryDepthCurrentP5;
+      const viewDepthP50 = agentTheoryDepthCurrentP50;
+      const viewDepthP95 = agentTheoryDepthCurrentP95;
+      const diagnosticLodWeights = paperLayer.getAgentLodTargetWeights();
+      const diagnosticCoreSizes: number[] = [];
+      const diagnosticCoreAlphas: number[] = [];
+      const diagnosticDepthDenominator = Math.max(
+        0.001,
+        viewDepthP95 - viewDepthP5,
       );
-      paperLayer.setAgentDepthRange(viewDepthP5, viewDepthP95);
-      setAgentDepthRangeOnObject(
-        hotspotLayer.object,
-        viewDepthP5,
-        viewDepthP95,
-      );
+      depthRows.forEach((row) => {
+        if (diagnosticLodWeights[row.index] < 0.5) return;
+        const paper = sceneData.papers[row.index];
+        const normalizedDepth = THREE.MathUtils.clamp(
+          (row.depth - viewDepthP5) / diagnosticDepthDenominator,
+          0,
+          1,
+        );
+        const style = resolveAgentTheoryPaperCoreStyle(normalizedDepth);
+        diagnosticCoreSizes.push(THREE.MathUtils.clamp(
+          Math.max(
+            paper.size
+              * style.sizeMultiplier
+              * THREE.MathUtils.clamp(
+                0.42 / Math.max(0.08, row.depth),
+                0.78,
+                1.8,
+              ),
+            style.minimumCssSize,
+          ),
+          style.minimumCssSize,
+          4.8,
+        ));
+        diagnosticCoreAlphas.push(Math.min(
+          1,
+          Math.max(
+            paper.alpha * style.alphaMultiplier,
+            style.minimumAlpha,
+          ),
+        ));
+      });
+      agentTheoryDepthDiagnostics.actualCoreSizeRange =
+        diagnosticCoreSizes.length > 0
+          ? [Math.min(...diagnosticCoreSizes), Math.max(...diagnosticCoreSizes)]
+          : agentTheoryDepthDiagnostics.actualCoreSizeRange;
+      agentTheoryDepthDiagnostics.actualAlphaRange =
+        diagnosticCoreAlphas.length > 0
+          ? [Math.min(...diagnosticCoreAlphas), Math.max(...diagnosticCoreAlphas)]
+          : agentTheoryDepthDiagnostics.actualAlphaRange;
       const firstCut = THREE.MathUtils.lerp(viewDepthP5, viewDepthP95, 0.38);
       const secondCut = THREE.MathUtils.lerp(viewDepthP5, viewDepthP95, 0.68);
       const ranges = {
-        near: [Number.POSITIVE_INFINITY, 0] as [number, number],
-        middle: [Number.POSITIVE_INFINITY, 0] as [number, number],
-        far: [Number.POSITIVE_INFINITY, 0] as [number, number],
+        near: (
+          depthRows.length > 0
+            ? [Number.POSITIVE_INFINITY, 0]
+            : [...agentTheoryDepthDiagnostics.nearPaperSizeRange]
+        ) as [number, number],
+        middle: (
+          depthRows.length > 0
+            ? [Number.POSITIVE_INFINITY, 0]
+            : [...agentTheoryDepthDiagnostics.middlePaperSizeRange]
+        ) as [number, number],
+        far: (
+          depthRows.length > 0
+            ? [Number.POSITIVE_INFINITY, 0]
+            : [...agentTheoryDepthDiagnostics.farPaperSizeRange]
+        ) as [number, number],
       };
-      let nearPaperCount = 0;
-      let middlePaperCount = 0;
-      let farPaperCount = 0;
+      let nearPaperCount = depthRows.length > 0
+        ? 0
+        : agentTheoryDepthDiagnostics.nearPaperCount;
+      let middlePaperCount = depthRows.length > 0
+        ? 0
+        : agentTheoryDepthDiagnostics.middlePaperCount;
+      let farPaperCount = depthRows.length > 0
+        ? 0
+        : agentTheoryDepthDiagnostics.farPaperCount;
       const depthDenominator = Math.max(0.001, viewDepthP95 - viewDepthP5);
       for (const row of depthRows) {
         const depth = THREE.MathUtils.clamp(
@@ -2570,8 +5481,10 @@ export function App17GalaxyCanvas({
       nearDisplacements.sort((left, right) => left - right);
       farDisplacements.sort((left, right) => left - right);
       const projectedParallaxDeltaPx = Math.abs(
-        percentileNumber(nearDisplacements, 0.5)
-          - percentileNumber(farDisplacements, 0.5),
+        depthRows.length > 0
+          ? percentileNumber(nearDisplacements, 0.5)
+            - percentileNumber(farDisplacements, 0.5)
+          : agentTheoryDepthDiagnostics.projectedParallaxDeltaPx,
       );
       agentTheoryDepthDiagnostics = {
         ...agentTheoryDepthDiagnostics,
@@ -2597,7 +5510,28 @@ export function App17GalaxyCanvas({
         stellarLodCounts,
         activeSphereHotspotCount:
           agentTheoryHotspotSphereLayer?.getActiveSphereCount() ?? 0,
+        currentSphereHotspotCount:
+          agentTheoryHotspotSphereLayer?.getCurrentSphereCount() ?? 0,
+        retiringSphereHotspotCount:
+          agentTheoryHotspotSphereLayer?.getRetiringSphereCount() ?? 0,
         stellarLodTransitionCount: agentTheoryStellarLodTransitionCount,
+        visibleHotspotCount,
+        hotspotOccupiedCellCount: visibleHotspotCells.size,
+        hotspotCoreSizeRange: visibleHotspotCoreSizes.length > 0
+          ? [
+            Math.min(...visibleHotspotCoreSizes),
+            Math.max(...visibleHotspotCoreSizes),
+          ]
+          : [0, 0],
+        hotspotSphereOffscreenSlotCount:
+          agentTheoryHotspotSphereLayer?.getOffscreenSphereSlotCount() ?? 0,
+        visibilityGuard: { ...agentTheoryVisibilityGuard },
+        visibilityLodTargetRejected:
+          agentTheoryVisibilityLodTargetRejected,
+        visibilityCheckpointValid:
+          agentTheoryVisibilityCheckpointValid,
+        returnVisibilityGatePassed:
+          agentTheoryReturnVisibilityGatePassed,
       };
       if (!readyReported) {
         agentTheoryDepthDiagnostics.firstFrameVisiblePaperCount =
@@ -2607,26 +5541,8 @@ export function App17GalaxyCanvas({
         agentTheoryDepthDiagnostics.firstFrameDecorativeVisibleCount =
           agentTheoryDecorativeLayer?.countVisible(camera) ?? 0;
       }
-      if (agentTheoryDepthDiagnostics.visibleGalaxyRatio < 0.05) {
-        agentTheoryLowVisibilityFrames += 1;
-        if (
-          agentTheoryLowVisibilityFrames >= 3
-          && agentTheoryCruiseCheckpoint
-          && agentTheoryCameraMode === "cruise"
-        ) {
-          agentTheoryCruiseCheckpointSaveAllowed = false;
-          selectAgentTheoryCruiseFraming(
-            sampleAgentTheoryCruise(
-              agentTheoryPerimeterProfile!,
-              agentTheoryCruiseCheckpoint,
-            ),
-          );
-          agentTheoryLowVisibilityFrames = 0;
-        }
-      } else {
-        agentTheoryLowVisibilityFrames = 0;
-        agentTheoryCruiseCheckpointSaveAllowed = true;
-      }
+      agentTheoryCruiseCheckpointSaveAllowed =
+        agentTheoryVisibilityCheckpointValid;
       onAgentTheoryDepthDiagnosticsRef.current?.({
         ...agentTheoryDepthDiagnostics,
         rawAxisStd: [...agentTheoryDepthDiagnostics.rawAxisStd],
@@ -2637,10 +5553,98 @@ export function App17GalaxyCanvas({
         stellarLodCounts: {
           ...agentTheoryDepthDiagnostics.stellarLodCounts,
         },
+        actualCoreSizeRange: [
+          ...agentTheoryDepthDiagnostics.actualCoreSizeRange,
+        ],
+        actualAlphaRange: [
+          ...agentTheoryDepthDiagnostics.actualAlphaRange,
+        ],
+        freeLookPosition: [
+          ...agentTheoryDepthDiagnostics.freeLookPosition,
+        ],
+        freeLookDirection: [
+          ...agentTheoryDepthDiagnostics.freeLookDirection,
+        ],
+        hotspotCoreSizeRange: [
+          ...agentTheoryDepthDiagnostics.hotspotCoreSizeRange,
+        ],
+        visibilityGuard: {
+          ...agentTheoryDepthDiagnostics.visibilityGuard,
+        },
+        cruiseLiveness: {
+          ...agentTheoryDepthDiagnostics.cruiseLiveness,
+        },
+        postReturnTrajectory: {
+          ...agentTheoryDepthDiagnostics.postReturnTrajectory,
+        },
         shaderFailureMaterials: [
           ...agentTheoryDepthDiagnostics.shaderFailureMaterials,
         ],
       });
+    }
+
+    function applyAgentTheoryDepthSmoothing(elapsedSeconds: number) {
+      if (
+        visualProfile !== "agent-theory"
+        || !agentTheoryDepthProfile
+      ) return false;
+      if (
+        agentTheoryCameraMode === "return-preparing"
+        || agentTheoryCameraMode === "returning-anchor"
+        || agentTheoryCameraMode === "return-commit"
+      ) return false;
+      const responseSeconds = APP17_AGENT_THEORY_DEPTH_RESPONSE_SECONDS;
+      const response = 1 - Math.exp(
+        -Math.max(0, elapsedSeconds)
+          / responseSeconds,
+      );
+      const previousP5 = agentTheoryDepthCurrentP5;
+      const previousP50 = agentTheoryDepthCurrentP50;
+      const previousP95 = agentTheoryDepthCurrentP95;
+      agentTheoryDepthCurrentP5 = THREE.MathUtils.lerp(
+        agentTheoryDepthCurrentP5,
+        agentTheoryDepthTargetP5,
+        response,
+      );
+      agentTheoryDepthCurrentP50 = THREE.MathUtils.lerp(
+        agentTheoryDepthCurrentP50,
+        agentTheoryDepthTargetP50,
+        response,
+      );
+      agentTheoryDepthCurrentP95 = Math.max(
+        agentTheoryDepthCurrentP5 + 0.001,
+        THREE.MathUtils.lerp(
+          agentTheoryDepthCurrentP95,
+          agentTheoryDepthTargetP95,
+          response,
+        ),
+      );
+      const frameDelta = Math.max(
+        Math.abs(agentTheoryDepthCurrentP5 - previousP5),
+        Math.abs(agentTheoryDepthCurrentP50 - previousP50),
+        Math.abs(agentTheoryDepthCurrentP95 - previousP95),
+      );
+      agentTheoryDepthMaximumFrameDelta = Math.max(
+        agentTheoryDepthMaximumFrameDelta,
+        frameDelta,
+      );
+      paperLayer.setAgentDepthRange(
+        agentTheoryDepthCurrentP5,
+        agentTheoryDepthCurrentP95,
+      );
+      setAgentDepthRangeOnObject(
+        hotspotLayer.object,
+        agentTheoryDepthCurrentP5,
+        agentTheoryDepthCurrentP95,
+      );
+      agentTheoryDepthDiagnostics.viewDepthP5 = agentTheoryDepthCurrentP5;
+      agentTheoryDepthDiagnostics.viewDepthP50 = agentTheoryDepthCurrentP50;
+      agentTheoryDepthDiagnostics.viewDepthP95 = agentTheoryDepthCurrentP95;
+      agentTheoryDepthDiagnostics.depthTargetP5 = agentTheoryDepthTargetP5;
+      agentTheoryDepthDiagnostics.depthTargetP95 = agentTheoryDepthTargetP95;
+      agentTheoryDepthDiagnostics.depthMaximumFrameDelta =
+        agentTheoryDepthMaximumFrameDelta;
+      return frameDelta > 1e-7;
     }
 
     function reportPerformance(now = performance.now()) {
@@ -2691,10 +5695,12 @@ export function App17GalaxyCanvas({
         currentFps: currentFrameMs > 0 ? 1_000 / currentFrameMs : 0,
         averageFps: averageFrameMs > 0 ? 1_000 / averageFrameMs : 0,
         averageFrameMs,
+        p50FrameMs: percentileValue(frameSamples, 0.50),
         p95FrameMs: percentileValue(frameSamples, 0.95),
         maxFrameMs: frameSamples.length > 0 ? Math.max(...frameSamples.map((sample) => sample.value)) : 0,
         averageWebglMs: averageValue(webglSamples),
         averageLabelMs: averageValue(labelSamples),
+        longFrames25: frameSamples.filter((sample) => sample.value > 25).length,
         longFrames50: frameSamples.filter((sample) => sample.value > 50).length,
         longFrames100: frameSamples.filter((sample) => sample.value > 100).length,
         drawCalls: renderer.info.render.calls,
@@ -2781,6 +5787,23 @@ export function App17GalaxyCanvas({
         theoryPerimeterDegradationReason:
           agentTheoryDepthDiagnostics.perimeterDegradationReason,
         theoryReadyGatePassed: agentTheoryDepthDiagnostics.readyGatePassed,
+        theoryResidentPaperCount:
+          agentTheoryDepthDiagnostics.residentPaperCount,
+        theoryPerceptiblePaperCount:
+          agentTheoryDepthDiagnostics.perceptiblePaperCount,
+        theoryForcedVisibleCount:
+          agentTheoryDepthDiagnostics.forcedVisibleCount,
+        theoryOccupiedTileRatio:
+          agentTheoryDepthDiagnostics.occupiedTileRatio,
+        theoryOverlapP95: agentTheoryDepthDiagnostics.overlapP95,
+        theoryScreenLodSelectionHash:
+          agentTheoryDepthDiagnostics.screenLodSelectionHash,
+        theoryActualCoreSizeRange: [
+          ...agentTheoryDepthDiagnostics.actualCoreSizeRange,
+        ],
+        theoryActualAlphaRange: [
+          ...agentTheoryDepthDiagnostics.actualAlphaRange,
+        ],
         ambientMotion: getAmbientMotion(),
         ambientTargetFps: getAmbientTargetFps(),
         ambientCadenceMisses: ambientCadenceSamples.reduce((total, sample) => total + sample.value, 0),
@@ -2876,8 +5899,14 @@ export function App17GalaxyCanvas({
         systemPaperRevealProgress: paperVisualState?.revealProgress ?? 0,
         systemPaperExposure: paperVisualState?.effectiveExposure ?? 1,
         systemPaperTargetExposure: paperVisualState?.targetExposure ?? 1,
+        systemPaperBaseAlpha: paperVisualState?.baseAlpha
+          ?? APP17_SYSTEM_PAPER_BASE_ALPHA,
         systemPaperDepthBrightnessFloor: paperVisualState?.depthBrightnessFloor ?? APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR,
         systemPaperDepthSizeFloor: paperVisualState?.depthSizeFloor ?? APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR,
+        systemPaperStableCoreDiameterPhysicalPixels:
+          paperVisualState?.stableCoreDiameterPhysicalPixels ?? 0,
+        systemPaperStableCoreEnergy:
+          paperVisualState?.stableCoreEnergy ?? 0,
         systemRepresentativeFocusMode: representativeVisualState?.focusMode ?? "none",
         systemRepresentativeFocusRank: representativeVisualState?.focusRank ?? -1,
         systemRepresentativeDimFactor: representativeVisualState?.representativeDimFactor ?? 1,
@@ -2906,8 +5935,18 @@ export function App17GalaxyCanvas({
         systemPaperFocusTransitionMs: lastPaperFocusTransitionMs,
         systemPaperFocusTargetDistance: paperFocusTargetDistance,
         systemPaperFocusTargetScreenSize: paperPresentation.targetScreenSize,
-        systemPaperFocusNeighborBrightness: THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS, paperJourneyFrame.focusBlend),
-        systemPaperFocusContextBrightness: THREE.MathUtils.lerp(1, APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS, paperJourneyFrame.focusBlend),
+        systemPaperFocusNeighborBrightness: THREE.MathUtils.lerp(
+          1,
+          paperVisualState?.focusNeighborBrightness
+            ?? APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS,
+          paperJourneyFrame.focusBlend,
+        ),
+        systemPaperFocusContextBrightness: THREE.MathUtils.lerp(
+          1,
+          paperVisualState?.focusContextBrightness
+            ?? APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS,
+          paperJourneyFrame.focusBlend,
+        ),
         systemPaperFocusCanceled: lastPaperFocusCanceled,
         systemPaperInspectionMode: paperPresentation.mode,
         systemPaperInspectionVisualType: inspectionVisualState.visualType,
@@ -3053,10 +6092,225 @@ export function App17GalaxyCanvas({
         stellarLodCounts: {
           ...agentTheoryDepthDiagnostics.stellarLodCounts,
         },
+        freeLookPosition: [
+          ...agentTheoryDepthDiagnostics.freeLookPosition,
+        ],
+        freeLookDirection: [
+          ...agentTheoryDepthDiagnostics.freeLookDirection,
+        ],
+        hotspotCoreSizeRange: [
+          ...agentTheoryDepthDiagnostics.hotspotCoreSizeRange,
+        ],
+        visibilityGuard: {
+          ...agentTheoryDepthDiagnostics.visibilityGuard,
+        },
+        postReturnTrajectory: {
+          ...agentTheoryDepthDiagnostics.postReturnTrajectory,
+        },
         shaderFailureMaterials: [
           ...agentTheoryDepthDiagnostics.shaderFailureMaterials,
         ],
       });
+    }
+
+    function updateAgentTheoryCruiseMotionProbe(now: number) {
+      if (
+        visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || sceneData.papers.length === 0
+      ) return;
+      const paper = sceneData.papers[0];
+      agentTheoryDepthWorld
+        .set(paper.x, paper.y, paper.z)
+        .applyMatrix4(root.matrixWorld);
+      agentTheoryCurrentProjection
+        .copy(agentTheoryDepthWorld)
+        .project(camera);
+      agentTheoryCruiseProbeProjection.set(
+        agentTheoryCurrentProjection.x * width * 0.5,
+        agentTheoryCurrentProjection.y * height * 0.5,
+      );
+      if (
+        agentTheoryCruiseProbeInitialized
+        && now > agentTheoryCruiseProbeLastAt
+      ) {
+        const elapsedSeconds = Math.max(
+          1 / 240,
+          (now - agentTheoryCruiseProbeLastAt) / 1_000,
+        );
+        const predictedX = (
+          agentTheoryCruiseProbePreviousProjection.x
+          + agentTheoryCruiseProbePreviousVelocity.x * elapsedSeconds
+        );
+        const predictedY = (
+          agentTheoryCruiseProbePreviousProjection.y
+          + agentTheoryCruiseProbePreviousVelocity.y * elapsedSeconds
+        );
+        agentTheoryCruiseProbeResidualPx = Math.hypot(
+          agentTheoryCruiseProbeProjection.x - predictedX,
+          agentTheoryCruiseProbeProjection.y - predictedY,
+        );
+        agentTheoryCruiseProbeVelocity.set(
+          (
+            agentTheoryCruiseProbeProjection.x
+              - agentTheoryCruiseProbePreviousProjection.x
+          ) / elapsedSeconds,
+          (
+            agentTheoryCruiseProbeProjection.y
+              - agentTheoryCruiseProbePreviousProjection.y
+          ) / elapsedSeconds,
+        );
+        agentTheoryCruiseProbeSpeedPxPerSecond =
+          agentTheoryCruiseProbeVelocity.length();
+        agentTheoryCruiseProbeAccelerationPxPerSecond2 = Math.hypot(
+          (
+            agentTheoryCruiseProbeVelocity.x
+              - agentTheoryCruiseProbePreviousVelocity.x
+          ) / elapsedSeconds,
+          (
+            agentTheoryCruiseProbeVelocity.y
+              - agentTheoryCruiseProbePreviousVelocity.y
+          ) / elapsedSeconds,
+        );
+        agentTheoryCruiseProbePreviousVelocity.copy(
+          agentTheoryCruiseProbeVelocity,
+        );
+      } else {
+        agentTheoryCruiseProbePreviousVelocity.set(0, 0);
+        agentTheoryCruiseProbeInitialized = true;
+      }
+      agentTheoryCruiseProbePreviousProjection.copy(
+        agentTheoryCruiseProbeProjection,
+      );
+      agentTheoryCruiseProbeLastAt = now;
+    }
+
+    function updateAgentTheoryCruiseLiveness(
+      now: number,
+      force = false,
+    ) {
+      if (visualProfile !== "agent-theory") return;
+      if (
+        !force
+        && now - agentTheoryCruiseLastLivenessPublishedAt
+          < APP17_AGENT_THEORY_LIVENESS_PUBLISH_MS
+      ) return;
+      agentTheoryCruiseLastLivenessPublishedAt = now;
+      const checkpointStep = agentTheoryCruiseCheckpoint?.stepIndex ?? 0;
+      const elapsedMs = Math.max(
+        1,
+        now - agentTheoryCruiseLivenessBaselineAt,
+      );
+      const stepDelta = Math.max(
+        0,
+        checkpointStep - agentTheoryCruiseLivenessBaselineStep,
+      );
+      const lookDistance = Math.max(
+        camera.near * 4,
+        camera.position.distanceTo(agentTheoryCurrentLookTarget),
+      );
+      const visibleWorldHeight = (
+        2
+        * lookDistance
+        * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
+        / Math.max(0.001, camera.zoom)
+      );
+      const worldPerCssPixel = visibleWorldHeight / Math.max(1, height);
+      const projectedMovementPx = camera.position.distanceTo(
+        agentTheoryCruiseLivenessBaselineCamera,
+      ) / Math.max(1e-9, worldPerCssPixel);
+      const pausedReason = document.visibilityState === "hidden"
+        ? "hidden"
+        : interactionModeRef.current === "explore"
+          ? "explore"
+          : reduceMotion
+            ? "reduced-motion"
+            : undefined;
+      const activeCruise = (
+        !pausedReason
+        && exploration.state === "overview"
+        && agentTheoryCameraMode === "cruise"
+      );
+      if (activeCruise && stepDelta > 0) {
+        agentTheoryCruiseLastProgressAt = now;
+      }
+      const consecutiveStillMs = activeCruise
+        ? Math.max(0, now - agentTheoryCruiseLastProgressAt)
+        : 0;
+      if (
+        activeCruise
+        && now >= agentTheoryGuidanceResumeNotBeforeMs
+        && (
+          consecutiveStillMs >= APP17_AGENT_THEORY_LIVENESS_STILL_MS
+          || (
+            elapsedMs
+              >= APP17_AGENT_THEORY_LIVENESS_MOVEMENT_AUDIT_MS
+            && stepDelta > 0
+            && projectedMovementPx < 0.15
+          )
+        )
+      ) {
+        requestAgentTheoryFallbackGuidance("no-safe-candidate");
+      }
+      const workerSnapshot = agentTheoryScreenLodWorker?.getSnapshot();
+      agentTheoryDepthDiagnostics.cruiseLiveness = {
+        motionVersion: AGENT_THEORY_CRUISE_MOTION_VERSION,
+        cameraMode: agentTheoryCameraMode,
+        guidanceMode: agentTheoryCruiseGuidance.mode,
+        stepIndex: checkpointStep,
+        stepDeltaLastSecond: stepDelta,
+        projectionMovementPxLastSecond: projectedMovementPx,
+        visibilitySafe: agentTheoryVisibilityGuard.safe,
+        predictedPaperCount:
+          agentTheoryVisibilityGuard.predictedMinimumPaperCount,
+        predictedHotspotCount:
+          agentTheoryVisibilityGuard.predictedMinimumHotspotCount,
+        consecutiveStillMs,
+        recoveryCount: agentTheoryCruiseRecoveryCount,
+        randomTargetSecondsRemaining: agentTheoryCruiseCheckpoint
+          ? Math.max(
+            0,
+            (
+              agentTheoryCruiseCheckpoint.nextNoiseStep
+                - agentTheoryCruiseCheckpoint.stepIndex
+            ) * AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS,
+          )
+          : 0,
+        angularVelocity:
+          agentTheoryCruiseCheckpoint?.angularVelocity ?? 0,
+        angularAcceleration:
+          agentTheoryCruiseCheckpoint?.angularAcceleration ?? 0,
+        verticalAcceleration:
+          agentTheoryCruiseCheckpoint?.verticalAcceleration ?? 0,
+        workerGuidanceLatencyMs: agentTheoryGuidanceWorkerLatencyMs,
+        workerGuidancePending:
+          workerSnapshot?.pendingGuidanceCount ?? 0,
+        workerGuidanceDiscarded:
+          workerSnapshot?.discardedGuidanceResponseCount ?? 0,
+        guidanceTargetHoldMs: Math.max(
+          0,
+          now - agentTheoryGuidanceTargetChangedAt,
+        ),
+        guidanceTargetSwitchCount:
+          agentTheoryGuidanceTargetSwitchCount,
+        guidanceEmergencyOverrideCount:
+          agentTheoryGuidanceEmergencyOverrideCount,
+        mainThreadGuidanceFallbackCount:
+          agentTheoryGuidanceFallbackCount,
+        referenceProjectionSpeedPxPerSecond:
+          agentTheoryCruiseProbeSpeedPxPerSecond,
+        referenceProjectionAccelerationPxPerSecond2:
+          agentTheoryCruiseProbeAccelerationPxPerSecond2,
+        referenceTrajectoryResidualPx:
+          agentTheoryCruiseProbeResidualPx,
+        pausedReason,
+      };
+      publishAgentTheoryRuntimeDiagnostics();
+      if (elapsedMs >= 1_000) {
+        agentTheoryCruiseLivenessBaselineAt = now;
+        agentTheoryCruiseLivenessBaselineStep = checkpointStep;
+        agentTheoryCruiseLivenessBaselineCamera.copy(camera.position);
+      }
     }
 
     function drainWebglErrors(gl: WebGLRenderingContext | WebGL2RenderingContext) {
@@ -3106,16 +6360,25 @@ export function App17GalaxyCanvas({
             agentTheoryCruiseCheckpoint,
           );
           selectAgentTheoryCruiseFraming(cruiseSample, true);
+          updateAgentTheoryVisibilityGuard(performance.now(), true);
           applyRuntimeCamera();
         }
+        updateAgentTheoryScreenLod(performance.now(), true);
         updateAgentTheoryDepthStaging(performance.now(), true);
+        const initialVisibilityEnvelope =
+          createAgentTheoryVisibilityEnvelope(width, height);
         if (
-          agentTheoryDepthDiagnostics.firstFrameVisiblePaperCount
-            + agentTheoryDepthDiagnostics.firstFrameVisibleHotspotCount
-          <= 0
+          agentTheoryDepthDiagnostics.perceptiblePaperCount
+            < initialVisibilityEnvelope.paperHardFloor
+          || agentTheoryDepthDiagnostics.visibleHotspotCount
+            < initialVisibilityEnvelope.hotspotHardFloor
+          || agentTheoryDepthDiagnostics.hotspotOccupiedCellCount
+            < initialVisibilityEnvelope.hotspotCellHardFloor
+          || agentTheoryDepthDiagnostics.occupiedTileRatio <= 0
+          || !agentTheoryVisibilityCheckpointValid
         ) {
           reportAgentTheoryRuntimeFailure(
-            "理论背景构图失败：当前真实 Three.js 视锥内没有论文或热点。",
+            "理论背景构图失败：当前外围视野未达到论文与热点可见下限。",
           );
           return false;
         }
@@ -3255,6 +6518,10 @@ export function App17GalaxyCanvas({
         exploration.state === "overview"
         && !orbit.transition
         && paperJourney.getState() === "idle"
+        && !(
+          visualProfile === "agent-theory"
+          && agentTheoryCameraMode !== "cruise"
+        )
       ) {
         let nextDistance = cameraPreset.distance;
         if (orbit.viewMode === "top") {
@@ -3292,11 +6559,13 @@ export function App17GalaxyCanvas({
       height = Math.max(1, Math.floor(rect.height));
       renderer.setPixelRatio(currentPixelRatio);
       renderer.setSize(width, height, false);
+      paperLayer.setViewportHeight(height);
       hotspotLayer.setViewportHeight(height);
       bloomBufferPixelRatio = bloomPipeline?.setSize(width, height, currentPixelRatio) ?? 0;
       camera.aspect = width / height;
       updateTheoryCameraFraming(camera.aspect);
       camera.updateProjectionMatrix();
+      applyViewportComposition(performance.now(), true);
       if (paperJourney.getState() === "reading") {
         paperJourney.reprojectReading({
           fovDegrees: camera.fov,
@@ -3311,6 +6580,9 @@ export function App17GalaxyCanvas({
       labelCanvas.height = Math.max(1, Math.floor(height * idlePixelRatio));
       labelCanvas.style.width = `${width}px`;
       labelCanvas.style.height = `${height}px`;
+      if (agentTheoryInitialGateComplete) {
+        scheduleAgentTheoryScreenLodRefresh(80);
+      }
       invalidate(true);
     };
 
@@ -3396,6 +6668,13 @@ export function App17GalaxyCanvas({
       onPaperPanelStateChangeRef.current?.(state, paperId);
     };
     const paperReadingAnchorNdcX = () => {
+      const explicitSide = agentTheoryFocusVisualRef.current?.productMode
+        === "sidera-explicit"
+        ? agentTheoryFocusVisualRef.current.side
+        : undefined;
+      if (visualProfile === "agent-theory" && explicitSide) {
+        return explicitSide === "left" ? -0.56 : 0.56;
+      }
       if (fullscreenRef.current) return -0.5;
       return window.innerWidth >= 1280 ? -0.46 : 0;
     };
@@ -3446,41 +6725,899 @@ export function App17GalaxyCanvas({
           -1,
           1,
         )),
-        cameraPreset.minElevation,
-        cameraPreset.maxElevation,
+        visualProfile === "agent-theory"
+          ? THREE.MathUtils.degToRad(-85)
+          : cameraPreset.minElevation,
+        visualProfile === "agent-theory"
+          ? THREE.MathUtils.degToRad(85)
+          : cameraPreset.maxElevation,
       );
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryPerimeterProfile
+      ) {
+        cameraPreset.minDistance = Math.max(
+          0.02,
+          agentTheoryPerimeterProfile.medianRadius * 0.38,
+        );
+        cameraPreset.maxDistance = Math.max(
+          orbit.distance * 4,
+          agentTheoryPerimeterProfile.maximumRadius * 4,
+        );
+      }
       orbit.transition = null;
     };
+    const resolveAgentTheoryFreeLookDirection = (
+      target = new THREE.Vector3(),
+    ) => target.set(
+      Math.cos(agentTheoryFreeLookPitch)
+        * Math.cos(agentTheoryFreeLookYaw),
+      Math.cos(agentTheoryFreeLookPitch)
+        * Math.sin(agentTheoryFreeLookYaw),
+      Math.sin(agentTheoryFreeLookPitch),
+    ).normalize();
+    const captureAgentTheoryFreeLookFromCamera = () => {
+      agentTheoryFreeLookPosition.copy(camera.position);
+      camera.getWorldDirection(agentTheoryFreeLookDirection);
+      agentTheoryFreeLookYaw = Math.atan2(
+        agentTheoryFreeLookDirection.y,
+        agentTheoryFreeLookDirection.x,
+      );
+      agentTheoryFreeLookPitch = THREE.MathUtils.clamp(
+        Math.asin(THREE.MathUtils.clamp(
+          agentTheoryFreeLookDirection.z,
+          -1,
+          1,
+        )),
+        THREE.MathUtils.degToRad(-85),
+        THREE.MathUtils.degToRad(85),
+      );
+      agentTheoryFreeLookDollyVelocity = 0;
+    };
+    const constrainAgentTheoryFreeLookPosition = () => {
+      if (!agentTheoryPerimeterProfile) return;
+      const center = new THREE.Vector3().fromArray(
+        agentTheoryPerimeterProfile.center,
+      );
+      const offset = agentTheoryFreeLookPosition.clone().sub(center);
+      const maximumDistance = Math.max(
+        agentTheoryPerimeterProfile.maximumRadius * 1.5,
+        agentTheoryPerimeterProfile.medianRadius * 1.5,
+      );
+      if (offset.length() > maximumDistance) {
+        offset.setLength(maximumDistance);
+        agentTheoryFreeLookPosition.copy(center).add(offset);
+        agentTheoryFreeLookDollyVelocity = 0;
+      }
+    };
+    const cancelAgentTheoryFreeLookAim = () => {
+      if (!agentTheoryFreeLookAim) return;
+      captureAgentTheoryFreeLookFromCamera();
+      agentTheoryFreeLookAim = null;
+    };
+    const beginAgentTheoryFreeLookAim = (
+      target: THREE.Vector3,
+      now: number,
+    ) => {
+      const targetObject = new THREE.Object3D();
+      targetObject.position.copy(agentTheoryFreeLookPosition);
+      targetObject.up.copy(camera.up);
+      targetObject.lookAt(target);
+      agentTheoryFreeLookAim = {
+        startedAtMs: now,
+        durationMs: 500,
+        fromPosition: agentTheoryFreeLookPosition.clone(),
+        toPosition: agentTheoryFreeLookPosition.clone(),
+        fromQuaternion: camera.quaternion.clone(),
+        toQuaternion: targetObject.quaternion.clone(),
+        lookDistance: Math.max(
+          camera.near * 4,
+          agentTheoryFreeLookPosition.distanceTo(target),
+        ),
+      };
+      invalidate(true);
+    };
+    const beginAgentTheoryFreeLookPoseTransition = (
+      targetPosition: THREE.Vector3,
+      targetLookTarget: THREE.Vector3,
+      now: number,
+      durationMs = 650,
+    ) => {
+      cancelAgentTheoryFreeLookAim();
+      const targetObject = new THREE.Object3D();
+      targetObject.position.copy(targetPosition);
+      targetObject.up.copy(camera.up);
+      targetObject.lookAt(targetLookTarget);
+      agentTheoryFreeLookAim = {
+        startedAtMs: now,
+        durationMs,
+        fromPosition: agentTheoryFreeLookPosition.clone(),
+        toPosition: targetPosition.clone(),
+        fromQuaternion: camera.quaternion.clone(),
+        toQuaternion: targetObject.quaternion.clone(),
+        lookDistance: Math.max(
+          camera.near * 4,
+          targetPosition.distanceTo(targetLookTarget),
+        ),
+      };
+      agentTheoryFreeLookDollyVelocity = 0;
+      cancelOrbitMotion(orbit);
+      cancelAgentTheoryScreenLodRefresh();
+      requestAgentTheoryScreenLodWorker(now, true);
+      invalidate(true);
+    };
+    const resolveAgentTheoryExploreEntry = () => {
+      root.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const weightedTarget = new THREE.Vector3();
+      const semanticBounds = new THREE.Box3();
+      const theoryFraming = cameraPreset.theoryFraming;
+      if (theoryFraming) {
+        const { boundsMin, boundsMax } = theoryFraming;
+        for (const x of [boundsMin.x, boundsMax.x]) {
+          for (const y of [boundsMin.y, boundsMax.y]) {
+            for (const z of [boundsMin.z, boundsMax.z]) {
+              semanticBounds.expandByPoint(
+                agentTheoryScreenLodWorld
+                  .set(x, y, z)
+                  .applyMatrix4(root.matrixWorld),
+              );
+            }
+          }
+        }
+      }
+      let totalWeight = 0;
+      let weightedDepth = 0;
+      const currentForward = new THREE.Vector3();
+      camera.getWorldDirection(currentForward);
+      const includeWorldPoint = (worldPoint: THREE.Vector3) => {
+        semanticBounds.expandByPoint(worldPoint);
+        agentTheoryCurrentProjection.copy(worldPoint).project(camera);
+        if (
+          agentTheoryCurrentProjection.z < -1
+          || agentTheoryCurrentProjection.z > 1
+          || Math.abs(agentTheoryCurrentProjection.x) > 1
+          || Math.abs(agentTheoryCurrentProjection.y) > 1
+        ) return;
+        const radial = Math.hypot(
+          agentTheoryCurrentProjection.x,
+          agentTheoryCurrentProjection.y,
+        );
+        const depth = agentTheoryScreenLodView
+          .copy(worldPoint)
+          .sub(camera.position)
+          .dot(currentForward);
+        if (depth <= camera.near) return;
+        const weight = Math.exp(-radial * radial * 7.5);
+        weightedTarget.addScaledVector(worldPoint, weight);
+        weightedDepth += depth * weight;
+        totalWeight += weight;
+      };
+      const selectedIndices = agentTheoryScreenLodResult?.selectedIndices
+        ?? sceneData.papers.map((_, index) => index);
+      selectedIndices.forEach((index) => {
+        const paper = sceneData.papers[index];
+        if (!paper) return;
+        agentTheoryScreenLodWorld
+          .set(paper.x, paper.y, paper.z)
+          .applyMatrix4(root.matrixWorld);
+        includeWorldPoint(agentTheoryScreenLodWorld);
+      });
+      sceneData.hotspots.forEach((hotspot) => {
+        agentTheoryScreenLodWorld
+          .copy(hotspot.position)
+          .applyMatrix4(root.matrixWorld);
+        includeWorldPoint(agentTheoryScreenLodWorld);
+      });
+      if (totalWeight <= 1e-9) {
+        weightedTarget.copy(cameraPreset.center);
+        weightedDepth = camera.position.distanceTo(weightedTarget);
+        totalWeight = 1;
+      }
+      weightedTarget.multiplyScalar(1 / totalWeight);
+      weightedDepth /= totalWeight;
+
+      const targetObject = new THREE.Object3D();
+      targetObject.position.copy(camera.position);
+      targetObject.up.copy(camera.up);
+      targetObject.lookAt(weightedTarget);
+      const desiredQuaternion = targetObject.quaternion.clone();
+      const angularDelta = camera.quaternion.angleTo(desiredQuaternion);
+      const maximumAngularDelta = THREE.MathUtils.degToRad(1.5);
+      if (angularDelta > maximumAngularDelta) {
+        desiredQuaternion.copy(camera.quaternion).slerp(
+          targetObject.quaternion,
+          maximumAngularDelta / angularDelta,
+        );
+      }
+      const finalForward = new THREE.Vector3(0, 0, -1)
+        .applyQuaternion(desiredQuaternion)
+        .normalize();
+      const pivot = camera.position.clone().addScaledVector(
+        finalForward,
+        Math.max(camera.near * 4, weightedDepth),
+      );
+      if (!semanticBounds.containsPoint(pivot)) {
+        const intersection = new THREE.Ray(
+          camera.position,
+          finalForward,
+        ).intersectBox(semanticBounds, new THREE.Vector3());
+        if (intersection) {
+          pivot.copy(intersection).addScaledVector(
+            finalForward,
+            Math.max(
+              0.002,
+              (agentTheoryPerimeterProfile?.medianRadius ?? 0.1) * 0.08,
+            ),
+          );
+        } else {
+          pivot.copy(weightedTarget).clamp(
+            semanticBounds.min,
+            semanticBounds.max,
+          );
+          targetObject.lookAt(pivot);
+          const pivotAngle = camera.quaternion.angleTo(targetObject.quaternion);
+          desiredQuaternion.copy(camera.quaternion).slerp(
+            targetObject.quaternion,
+            pivotAngle > maximumAngularDelta
+              ? maximumAngularDelta / pivotAngle
+              : 1,
+          );
+        }
+      }
+      return {
+        pivot,
+        targetQuaternion: desiredQuaternion,
+        lookDistance: Math.max(
+          camera.near * 4,
+          camera.position.distanceTo(pivot),
+        ),
+      };
+    };
+    const beginAgentTheoryExploreEntry = (now: number) => {
+      if (
+        agentTheoryCruiseCheckpoint
+        && (
+          agentTheoryCameraMode === "cruise"
+          || !agentTheoryExploreEntryAnchor
+        )
+      ) {
+        const guidanceTargetElapsedMs = Math.max(
+          0,
+          now - agentTheoryGuidanceTargetChangedAt,
+        );
+        const guidanceWorkerElapsedMs = Number.isFinite(
+          agentTheoryGuidanceLastRequestedAt,
+        )
+          ? Math.max(0, now - agentTheoryGuidanceLastRequestedAt)
+          : 0;
+        const anchorLodSelection = cloneAgentTheoryScreenLodResult(
+          agentTheoryScreenLodResult,
+        );
+        const anchorVisibility = measureAgentTheoryActualReturnVisibility(
+          anchorLodSelection?.selectedIndices ?? [],
+          camera,
+        );
+        agentTheoryExploreEntryAnchor = {
+          version: "agent-theory-explore-safe-anchor-v2",
+          previousCheckpoint: agentTheoryPreviousCruiseCheckpoint
+            ? cloneAgentTheoryCruiseCheckpoint(
+              agentTheoryPreviousCruiseCheckpoint,
+            )
+            : null,
+          currentCheckpoint: cloneAgentTheoryCruiseCheckpoint(
+            agentTheoryCruiseCheckpoint,
+          ),
+          interpolationAlpha: agentTheoryCruiseInterpolationAlpha,
+          position: camera.position.clone(),
+          quaternion: camera.quaternion.clone(),
+          lookTarget: agentTheoryCurrentLookTarget.clone(),
+          lookDistance: Math.max(
+            camera.near * 4,
+            camera.position.distanceTo(agentTheoryCurrentLookTarget),
+          ),
+          projection: {
+            fov: camera.fov,
+            near: camera.near,
+            far: camera.far,
+            zoom: camera.zoom,
+          },
+          depthCurrent: [
+            agentTheoryDepthCurrentP5,
+            agentTheoryDepthCurrentP50,
+            agentTheoryDepthCurrentP95,
+          ],
+          depthTarget: [
+            agentTheoryDepthTargetP5,
+            agentTheoryDepthTargetP50,
+            agentTheoryDepthTargetP95,
+          ],
+          lodSelection: anchorLodSelection,
+          lodTargetWeights: Float32Array.from(
+            paperLayer.getAgentLodTargetWeights(),
+          ),
+          visibility: {
+            paperCount: anchorVisibility.paperCount,
+            hotspotCount: anchorVisibility.hotspotCount,
+            hotspotCellCount: anchorVisibility.hotspotCellCount,
+          },
+          viewport: [width, height],
+          snapshotId: payload.snapshotId ?? "unknown",
+          tangentWeight: agentTheoryCruiseViewTangentWeight
+            ?? agentTheoryCruiseCheckpoint.tangentWeight,
+          verticalAimRatio: agentTheoryCruiseVerticalAimRatio,
+          fallbackToCenter: agentTheoryCruiseFallbackToCenter,
+          centerBlend: agentTheoryCruiseCenterBlend,
+          guidance: {
+            ...agentTheoryCruiseGuidance,
+          },
+          guidanceLifecycle: {
+            current: {
+              ...agentTheoryCruiseGuidance,
+            },
+            target: {
+              ...agentTheoryCruiseGuidanceTarget,
+            },
+            desiredTangentWeight:
+              agentTheoryCruiseDesiredTangentWeight,
+            desiredVerticalAimRatio:
+              agentTheoryCruiseDesiredVerticalAimRatio,
+            centerBlendTarget: agentTheoryCruiseCenterBlendTarget,
+            safeDurationMs: agentTheoryGuidanceSafeSinceMs > 0
+              ? Math.max(0, now - agentTheoryGuidanceSafeSinceMs)
+              : 0,
+            targetHoldRemainingMs: Math.max(
+              0,
+              APP17_AGENT_THEORY_GUIDANCE_TARGET_HOLD_MS
+                - guidanceTargetElapsedMs,
+            ),
+            nextWorkerEvaluationRemainingMs: Number.isFinite(
+              agentTheoryGuidanceLastRequestedAt,
+            )
+              ? Math.max(
+                0,
+                APP17_AGENT_THEORY_GUIDANCE_WORKER_INTERVAL_MS
+                  - guidanceWorkerElapsedMs,
+              )
+              : APP17_AGENT_THEORY_GUIDANCE_WORKER_INTERVAL_MS,
+            consecutiveUnsafeResults:
+              agentTheoryGuidanceConsecutiveUnsafeResults,
+            workerEpoch: agentTheoryGuidanceWorkerEpoch,
+            acceptedRevision:
+              agentTheoryGuidanceLastAcceptedRevision,
+          },
+          liveness: {
+            accumulatorSeconds: agentTheoryCruiseAccumulatorSeconds,
+            checkpointSaveAllowed:
+              agentTheoryCruiseCheckpointSaveAllowed,
+            checkpointValid: agentTheoryVisibilityCheckpointValid,
+            visibilityGuard: { ...agentTheoryVisibilityGuard },
+            lastSafeCheckpoint: agentTheoryLastSafeCruiseCheckpoint
+              ? cloneAgentTheoryCruiseCheckpoint(
+                agentTheoryLastSafeCruiseCheckpoint,
+              )
+              : null,
+            ambientTimeSeconds,
+          },
+        };
+      }
+      agentTheoryGuidanceWorkerEpoch += 1;
+      agentTheoryGuidanceResumeNotBeforeMs =
+        Number.POSITIVE_INFINITY;
+      agentTheoryGuidanceSource = "none";
+      cancelAgentTheoryGuidanceFallback();
+      cancelAgentTheoryScreenLodRefresh();
+      agentTheoryReturnTransition = null;
+      agentTheoryReturnOrientation = null;
+      agentTheoryReturnPreparedAtMs = 0;
+      agentTheoryReturnAnchorLodResult = null;
+      agentTheoryReturnUnionIndices = [];
+      agentTheoryCruiseHealthAuditActive = false;
+      agentTheoryReturnAwaitingFirstCruiseStep = false;
+      agentTheoryExpectedLodPurpose = null;
+      agentTheoryExpectedProjectionSignature = "";
+      agentTheoryPendingReturnAfterSystemExit = false;
+      captureAgentTheoryFreeLookFromCamera();
+      agentTheoryCameraMode = "explore-free";
+      publishAgentTheoryReturnProgress("idle", 0, true);
+      cancelOrbitMotion(orbit);
+      orbit.pointerPressed = false;
+      orbit.dragging = false;
+      pendingWheelDelta = 0;
+      agentTheoryFreeLookDollyVelocity = 0;
+      agentTheoryCurrentLookTarget
+        .copy(agentTheoryFreeLookPosition)
+        .addScaledVector(
+          resolveAgentTheoryFreeLookDirection(),
+          Math.max(
+            camera.near * 4,
+            agentTheoryPerimeterProfile?.medianRadius ?? 1,
+          ),
+        );
+      paperLayer.setAgentLodTransitionPaused(false, now);
+      if (!requestAgentTheoryScreenLodWorker(now, true)) {
+        scheduleAgentTheoryScreenLodRefresh(0);
+      }
+      labelDirty = true;
+      invalidate(true);
+    };
+    const captureAgentTheoryReturnProjection = () => {
+      root.updateMatrixWorld(true);
+      agentTheoryReturnProjectionWorld.copy(
+        sceneData.hotspots[0]?.position ?? cameraPreset.center,
+      ).applyMatrix4(root.matrixWorld);
+      agentTheoryReturnProjectionBefore
+        .copy(agentTheoryReturnProjectionWorld)
+        .project(camera);
+    };
+    const finishAgentTheoryReturnProjection = () => {
+      agentTheoryReturnProjectionAfter
+        .copy(agentTheoryReturnProjectionWorld)
+        .project(camera);
+      agentTheoryDepthDiagnostics.returnProjectionErrorPx = Math.hypot(
+        (agentTheoryReturnProjectionAfter.x
+          - agentTheoryReturnProjectionBefore.x) * width * 0.5,
+        (agentTheoryReturnProjectionAfter.y
+          - agentTheoryReturnProjectionBefore.y) * height * 0.5,
+      );
+    };
+    function restoreAgentTheoryExploreAnchorState(
+      entryAnchor: NonNullable<typeof agentTheoryExploreEntryAnchor>,
+      now: number,
+    ) {
+      agentTheoryPreviousCruiseCheckpoint =
+        entryAnchor.previousCheckpoint
+          ? cloneAgentTheoryCruiseCheckpoint(
+            entryAnchor.previousCheckpoint,
+          )
+          : cloneAgentTheoryCruiseCheckpoint(
+            entryAnchor.currentCheckpoint,
+          );
+      agentTheoryCruiseCheckpoint = cloneAgentTheoryCruiseCheckpoint(
+        entryAnchor.currentCheckpoint,
+      );
+      agentTheoryCruiseInterpolationAlpha =
+        entryAnchor.interpolationAlpha;
+      agentTheoryCruiseViewTangentWeight = entryAnchor.tangentWeight;
+      agentTheoryCruiseDesiredTangentWeight = entryAnchor.tangentWeight;
+      agentTheoryCruiseVerticalAimRatio = entryAnchor.verticalAimRatio;
+      agentTheoryCruiseDesiredVerticalAimRatio =
+        entryAnchor.verticalAimRatio;
+      agentTheoryCruiseFallbackToCenter = entryAnchor.fallbackToCenter;
+      agentTheoryCruiseCenterBlend = entryAnchor.centerBlend;
+      agentTheoryCruiseCenterBlendTarget = entryAnchor.centerBlend;
+      agentTheoryCruiseGuidance = {
+        ...entryAnchor.guidanceLifecycle.current,
+      };
+      agentTheoryCruiseGuidanceTarget = {
+        ...entryAnchor.guidanceLifecycle.target,
+      };
+      agentTheoryCruiseDesiredTangentWeight =
+        entryAnchor.guidanceLifecycle.desiredTangentWeight;
+      agentTheoryCruiseDesiredVerticalAimRatio =
+        entryAnchor.guidanceLifecycle.desiredVerticalAimRatio;
+      agentTheoryCruiseCenterBlendTarget =
+        entryAnchor.guidanceLifecycle.centerBlendTarget;
+      const guidanceClockResumeAt =
+        now + APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS;
+      agentTheoryGuidanceTargetChangedAt = (
+        guidanceClockResumeAt
+        - (
+          APP17_AGENT_THEORY_GUIDANCE_TARGET_HOLD_MS
+          - entryAnchor.guidanceLifecycle.targetHoldRemainingMs
+        )
+      );
+      agentTheoryGuidanceSafeSinceMs =
+        entryAnchor.guidanceLifecycle.safeDurationMs > 0
+          ? guidanceClockResumeAt
+            - entryAnchor.guidanceLifecycle.safeDurationMs
+          : 0;
+      agentTheoryGuidanceConsecutiveUnsafeResults =
+        entryAnchor.guidanceLifecycle.consecutiveUnsafeResults;
+      agentTheoryGuidanceLastAcceptedRevision = Math.max(
+        agentTheoryGuidanceLastAcceptedRevision,
+        entryAnchor.guidanceLifecycle.acceptedRevision,
+      );
+      agentTheoryGuidanceWorkerEpoch += 1;
+      agentTheoryGuidanceResumeNotBeforeMs = (
+        guidanceClockResumeAt
+        + entryAnchor.guidanceLifecycle
+          .nextWorkerEvaluationRemainingMs
+      );
+      agentTheoryGuidanceLastRequestedAt = (
+        agentTheoryGuidanceResumeNotBeforeMs
+        - APP17_AGENT_THEORY_GUIDANCE_WORKER_INTERVAL_MS
+      );
+      agentTheoryGuidanceSource = "frozen";
+      agentTheoryDepthCurrentP5 = entryAnchor.depthCurrent[0];
+      agentTheoryDepthCurrentP50 = entryAnchor.depthCurrent[1];
+      agentTheoryDepthCurrentP95 = entryAnchor.depthCurrent[2];
+      agentTheoryDepthTargetP5 = entryAnchor.depthTarget[0];
+      agentTheoryDepthTargetP50 = entryAnchor.depthTarget[1];
+      agentTheoryDepthTargetP95 = entryAnchor.depthTarget[2];
+      agentTheoryCruiseAccumulatorSeconds =
+        entryAnchor.liveness.accumulatorSeconds;
+      agentTheoryCruiseCheckpointSaveAllowed =
+        entryAnchor.liveness.checkpointSaveAllowed;
+      agentTheoryVisibilityCheckpointValid =
+        entryAnchor.liveness.checkpointValid;
+      agentTheoryVisibilityGuard = {
+        ...entryAnchor.liveness.visibilityGuard,
+      };
+      agentTheoryLastSafeCruiseCheckpoint =
+        entryAnchor.liveness.lastSafeCheckpoint
+          ? cloneAgentTheoryCruiseCheckpoint(
+            entryAnchor.liveness.lastSafeCheckpoint,
+          )
+          : cloneAgentTheoryCruiseCheckpoint(
+            entryAnchor.currentCheckpoint,
+          );
+      ambientTimeSeconds = entryAnchor.liveness.ambientTimeSeconds;
+    }
+
+    function restoreAgentTheoryExploreAnchorProjection(
+      entryAnchor: NonNullable<typeof agentTheoryExploreEntryAnchor>,
+      projectionCamera: THREE.PerspectiveCamera = camera,
+    ) {
+      projectionCamera.fov = entryAnchor.projection.fov;
+      projectionCamera.near = entryAnchor.projection.near;
+      projectionCamera.far = entryAnchor.projection.far;
+      projectionCamera.zoom = entryAnchor.projection.zoom;
+      projectionCamera.aspect = Math.max(1, width) / Math.max(1, height);
+      projectionCamera.updateProjectionMatrix();
+    }
+
+    function beginAgentTheoryCruiseHealthAudit(now: number) {
+      const entryAnchor = agentTheoryExploreEntryAnchor;
+      if (!entryAnchor) return;
+      const anchorLodResult = agentTheoryReturnAnchorLodResult;
+      restoreAgentTheoryExploreAnchorState(entryAnchor, now);
+      restoreAgentTheoryExploreAnchorProjection(entryAnchor);
+      camera.position.copy(entryAnchor.position);
+      camera.quaternion.copy(entryAnchor.quaternion);
+      camera.updateMatrixWorld(true);
+      agentTheoryCurrentLookTarget.copy(entryAnchor.lookTarget);
+      agentTheoryLookTarget.copy(entryAnchor.lookTarget);
+      agentTheoryCameraMode = "cruise";
+      agentTheoryReturnTransition = null;
+      agentTheoryReturnOrientation = null;
+      agentTheoryPendingReturnAfterSystemExit = false;
+      cancelOrbitMotion(orbit);
+      pendingWheelDelta = 0;
+      agentTheoryFreeLookDollyVelocity = 0;
+      agentTheoryCruiseHealthAuditActive = !reduceMotion;
+      agentTheoryReturnAwaitingFirstCruiseStep = !reduceMotion;
+      agentTheoryCruiseResumeStartedAtMs = now;
+      agentTheoryCruiseResumeStartStep =
+        agentTheoryCruiseCheckpoint?.stepIndex ?? 0;
+      agentTheoryCruiseResumeSuccessfulSteps = 0;
+      agentTheoryCruiseResumeRejectedSteps = 0;
+      agentTheoryCruiseResumeFirstSuccessfulStep = -1;
+      agentTheoryCruiseResumeAmbientStart = ambientTimeSeconds;
+      agentTheoryCruiseResumeStillFrames = 0;
+      agentTheoryCruiseResumeGuardEvaluationCount = 0;
+      agentTheoryCruiseResumeGuardSafeCount = 0;
+      agentTheoryPostReturnDiagnosticStartedAtMs = now;
+      agentTheoryPostReturnExtraFramingCount = 0;
+      agentTheoryPostReturnAcceptedWorkerRevision = 0;
+      agentTheoryPostReturnDiscardedWorkerResponses = 0;
+      agentTheoryPostReturnFallbackTriggerCount = 0;
+      agentTheoryPostReturnMaximumTrajectoryResidualPx = 0;
+      agentTheoryGuidanceSource = "frozen";
+      const entryVisibilitySafe = isAgentTheoryVisibilitySafe(
+        entryAnchor.visibility,
+        createAgentTheoryVisibilityEnvelope(width, height),
+      );
+      if (entryVisibilitySafe) {
+        agentTheoryVisibilityCheckpointValid = true;
+      }
+      agentTheoryCruiseCheckpointSaveAllowed =
+        entryAnchor.liveness.checkpointSaveAllowed;
+      if (anchorLodResult) {
+        paperLayer.setAgentLodSelection(
+          anchorLodResult.selectedIndices,
+          now,
+          false,
+          {
+            incomingDurationMs: 90,
+            retiringDurationMs: 300,
+            retiringDelayMs: 0,
+          },
+        );
+        agentTheoryScreenLodResult =
+          cloneAgentTheoryScreenLodResult(anchorLodResult);
+        applyAgentTheoryScreenLodDiagnostics(anchorLodResult);
+      }
+      const actualVisibility = measureAgentTheoryActualReturnVisibility(
+        agentTheoryReturnUnionIndices,
+        camera,
+      );
+      agentTheoryDepthDiagnostics.returnActualVisiblePaperCount =
+        actualVisibility.paperCount;
+      agentTheoryDepthDiagnostics.returnActualVisibleHotspotCount =
+        actualVisibility.hotspotCount;
+      agentTheoryDepthDiagnostics.returnActualVisibleHotspotCellCount =
+        actualVisibility.hotspotCellCount;
+      agentTheoryReturnVisibilityGatePassed = isAgentTheoryVisibilitySafe(
+        actualVisibility,
+        createAgentTheoryVisibilityEnvelope(width, height),
+      );
+      agentTheoryDepthDiagnostics.returnVisibilityGatePassed =
+        agentTheoryReturnVisibilityGatePassed;
+      root.updateMatrixWorld(true);
+      agentTheoryReturnProjectionWorld.copy(
+        sceneData.hotspots[0]?.position ?? cameraPreset.center,
+      ).applyMatrix4(root.matrixWorld);
+      agentTheoryCruiseResumeProjectionStart
+        .copy(agentTheoryReturnProjectionWorld)
+        .project(camera);
+      agentTheoryDepthDiagnostics.returnCruiseRestoreDurationMs = 0;
+      agentTheoryDepthDiagnostics.returnCruiseAdvanceRejectedCount = 0;
+      agentTheoryDepthDiagnostics.returnCruiseFirstSuccessfulStep = -1;
+      agentTheoryDepthDiagnostics.returnCruiseCheckpointDelta = 0;
+      agentTheoryDepthDiagnostics.returnAmbientTimeDelta = 0;
+      agentTheoryDepthDiagnostics.returnConsecutiveStillFrames = 0;
+      agentTheoryDepthDiagnostics.returnCruiseGuardEvaluationCount = 0;
+      agentTheoryDepthDiagnostics.returnCruiseGuardSafeCount = 0;
+      agentTheoryCruiseLivenessBaselineAt = now;
+      agentTheoryCruiseLivenessBaselineStep =
+        agentTheoryCruiseCheckpoint?.stepIndex ?? 0;
+      agentTheoryCruiseLivenessBaselineCamera.copy(camera.position);
+      agentTheoryCruiseLastProgressAt = now;
+      updateAgentTheoryPostReturnTrajectoryDiagnostics(
+        now,
+        "agent-theory-cruise",
+      );
+      if (reduceMotion) {
+        completeAgentTheoryReturnAfterCruiseStep(now);
+        return;
+      }
+      publishAgentTheoryReturnProgress("return-commit", 1, true);
+      invalidate(true);
+    }
+
+    function completeAgentTheoryReturnAfterCruiseStep(now: number) {
+      const entryAnchor = agentTheoryExploreEntryAnchor;
+      if (!entryAnchor) return;
+      agentTheoryReturnAwaitingFirstCruiseStep = false;
+      agentTheoryReturnPreparedAtMs = 0;
+      agentTheoryReturnVisibilityGatePassed = true;
+      agentTheoryDepthDiagnostics.returnVisibilityGatePassed = true;
+      agentTheoryCruiseCheckpointSaveAllowed =
+        agentTheoryVisibilityCheckpointValid
+        && (
+          entryAnchor.liveness.checkpointSaveAllowed
+          || agentTheoryCruiseResumeSuccessfulSteps >= 1
+        );
+      agentTheoryExpectedLodPurpose = null;
+      agentTheoryExpectedProjectionSignature = "";
+      agentTheoryReturnAnchorLodResult = null;
+      agentTheoryReturnUnionIndices = [];
+      agentTheoryExploreEntryAnchor = null;
+      agentTheoryDepthDiagnostics.returnCruiseRestoreDurationMs =
+        Math.max(0, now - agentTheoryCruiseResumeStartedAtMs);
+      publishAgentTheoryReturnProgress("idle", 0, true);
+      invalidate(true);
+    }
+
+    function completeAgentTheoryCruiseHealthAudit(
+      now: number,
+      _projectionDeltaPx: number,
+    ) {
+      if (!agentTheoryCruiseHealthAuditActive) return;
+      agentTheoryCruiseHealthAuditActive = false;
+      agentTheoryDepthDiagnostics.returnCruiseRestoreDurationMs =
+        Math.max(0, now - agentTheoryCruiseResumeStartedAtMs);
+      updateAgentTheoryPostReturnTrajectoryDiagnostics(
+        now,
+        "agent-theory-cruise",
+      );
+      updateAgentTheoryCruiseLiveness(now, true);
+    }
+
+    function completeAgentTheoryReturnPreparation(
+      anchorResult: AgentTheoryScreenLodResult,
+      now: number,
+    ) {
+      const entryAnchor = agentTheoryExploreEntryAnchor;
+      if (
+        !entryAnchor
+        || agentTheoryCameraMode !== "return-preparing"
+      ) return;
+      const currentWeights = paperLayer.getAgentLodWeights();
+      const currentTargetWeights = paperLayer.getAgentLodTargetWeights();
+      const union = new Set<number>(anchorResult.selectedIndices);
+      let currentSelectionCount = 0;
+      for (let index = 0; index < currentWeights.length; index += 1) {
+        if (
+          currentWeights[index] >= 0.01
+          || currentTargetWeights[index] >= 0.01
+        ) {
+          union.add(index);
+          currentSelectionCount += 1;
+        }
+      }
+      agentTheoryReturnAnchorLodResult =
+        cloneAgentTheoryScreenLodResult(anchorResult);
+      agentTheoryReturnUnionIndices = [...union];
+      paperLayer.setAgentLodSelection(
+        agentTheoryReturnUnionIndices,
+        now,
+        false,
+        {
+          incomingDurationMs: 90,
+          retiringDurationMs: 300,
+          retiringDelayMs: 300,
+        },
+      );
+      agentTheoryReturnPreparedAtMs = now;
+      agentTheoryReturnVisibilityGatePassed = false;
+      agentTheoryDepthDiagnostics.returnVisibilityGatePassed = false;
+      agentTheoryDepthDiagnostics.returnCurrentSelectionCount =
+        currentSelectionCount;
+      agentTheoryDepthDiagnostics.returnAnchorSelectionCount =
+        anchorResult.selectedIndices.length;
+      agentTheoryDepthDiagnostics.returnUnionSelectionCount =
+        agentTheoryReturnUnionIndices.length;
+      agentTheoryDepthDiagnostics.returnProjectionSignature =
+        agentTheoryReturnProjectionSignature;
+      agentTheoryDepthDiagnostics.returnMinimumVisiblePaperCount =
+        Number.POSITIVE_INFINITY;
+      agentTheoryDepthDiagnostics.returnBlackFrameCount = 0;
+      agentTheoryDepthDiagnostics.returnMaximumSegmentDeviation = 0;
+      publishAgentTheoryReturnProgress("return-preparing", 0, true);
+      invalidate(true);
+    }
+
+    function startAgentTheoryPreparedReturn(now: number) {
+      const entryAnchor = agentTheoryExploreEntryAnchor;
+      if (
+        !entryAnchor
+        || !agentTheoryReturnAnchorLodResult
+        || agentTheoryCameraMode !== "return-preparing"
+      ) return;
+      const returnDistance = camera.position.distanceTo(
+        entryAnchor.position,
+      );
+      const returnAngle = camera.quaternion.angleTo(
+          entryAnchor.quaternion,
+      );
+      agentTheoryReturnTransition =
+        createAgentTheoryAnchorReturnTransition({
+          nowMs: now,
+          fromPosition: camera.position.toArray() as [
+            number,
+            number,
+            number,
+          ],
+          toPosition: entryAnchor.position.toArray() as [
+            number,
+            number,
+            number,
+          ],
+          angleRadians: returnAngle,
+          medianRadius: agentTheoryPerimeterProfile?.medianRadius ?? 1,
+        });
+      agentTheoryReturnOrientation = {
+        fromQuaternion: camera.quaternion.clone(),
+        toQuaternion: entryAnchor.quaternion.clone(),
+        fromLookDistance: Math.max(
+          camera.near * 4,
+          camera.position.distanceTo(agentTheoryCurrentLookTarget),
+        ),
+        toLookDistance: entryAnchor.lookDistance,
+        fromDepth: [
+          agentTheoryDepthCurrentP5,
+          agentTheoryDepthCurrentP50,
+          agentTheoryDepthCurrentP95,
+        ],
+        toDepth: [...entryAnchor.depthCurrent],
+      };
+      agentTheoryDepthDiagnostics.returnDistance = returnDistance;
+      agentTheoryDepthDiagnostics.returnAngleDegrees =
+        THREE.MathUtils.radToDeg(returnAngle);
+      agentTheoryDepthDiagnostics.returnStartPosition =
+        camera.position.toArray() as [number, number, number];
+      agentTheoryDepthDiagnostics.returnAnchorPosition =
+        entryAnchor.position.toArray() as [number, number, number];
+      agentTheoryCameraMode = "returning-anchor";
+      publishAgentTheoryReturnProgress("returning-anchor", 0, true);
+      invalidate(true);
+    }
+
+    function requestAgentTheoryAnchorLod(
+      entryAnchor: NonNullable<typeof agentTheoryExploreEntryAnchor>,
+      now: number,
+    ) {
+      const anchorCamera = camera.clone();
+      restoreAgentTheoryExploreAnchorProjection(
+        entryAnchor,
+        anchorCamera,
+      );
+      anchorCamera.position.copy(entryAnchor.position);
+      anchorCamera.quaternion.copy(entryAnchor.quaternion);
+      anchorCamera.updateMatrixWorld(true);
+      root.updateMatrixWorld(true);
+      const anchorMatrix = new THREE.Matrix4()
+        .multiplyMatrices(
+          anchorCamera.projectionMatrix,
+          anchorCamera.matrixWorldInverse,
+        )
+        .multiply(root.matrixWorld);
+      agentTheoryReturnProjectionSignature =
+        createAgentTheoryProjectionSignature(
+          anchorMatrix,
+          "return-anchor",
+        );
+      agentTheoryExpectedLodPurpose = "return-anchor";
+      agentTheoryExpectedProjectionSignature =
+        agentTheoryReturnProjectionSignature;
+      agentTheoryDepthDiagnostics.returnProjectionSignature =
+        agentTheoryReturnProjectionSignature;
+      const requested = requestAgentTheoryScreenLodWorker(
+        now,
+        true,
+        anchorCamera,
+        "return-anchor",
+      );
+      if (!requested) {
+        startAgentTheoryMainThreadLodFallback(
+          now,
+          true,
+          anchorCamera,
+          "return-anchor",
+        );
+      }
+    }
+
     const beginAgentTheoryReturnToPerimeter = (now: number) => {
       if (
         !agentTheoryPerimeterProfile
         || !agentTheoryCruiseCheckpoint
         || interactionModeRef.current !== "ambient"
       ) return;
-      applyCameraOrbit(camera, orbit);
-      agentTheoryCurrentLookTarget.copy(orbit.center);
-      agentTheoryReturnTransition = createAgentTheoryReturnTransition({
-        profile: agentTheoryPerimeterProfile,
-        checkpoint: agentTheoryCruiseCheckpoint,
-        nowMs: now,
-        fromPosition: camera.position.toArray() as [number, number, number],
-        fromLookTarget: orbit.center.toArray() as [number, number, number],
-      });
-      agentTheoryCameraMode = "returning";
-      agentTheoryCruiseHandoffSeconds = 0;
+      if (agentTheoryCameraMode === "explore-free") {
+        captureAgentTheoryFreeLookFromCamera();
+      }
+      agentTheoryFreeLookAim = null;
+      agentTheoryFreeLookDollyVelocity = 0;
+      pendingWheelDelta = 0;
+      orbit.pointerPressed = false;
+      orbit.dragging = false;
+      cancelAgentTheoryScreenLodRefresh();
+      const entryAnchor = agentTheoryExploreEntryAnchor;
+      if (!entryAnchor) return;
+      agentTheoryCameraMode = "return-preparing";
+      publishAgentTheoryReturnProgress("return-preparing", 0, true);
       agentTheoryPendingReturnAfterSystemExit = false;
       cancelOrbitMotion(orbit);
-      invalidate(true);
+      const canReuseAnchorSelection = Boolean(
+        entryAnchor.lodSelection
+        && entryAnchor.viewport[0] === width
+        && entryAnchor.viewport[1] === height
+        && entryAnchor.snapshotId === (payload.snapshotId ?? "unknown")
+      );
+      if (canReuseAnchorSelection && entryAnchor.lodSelection) {
+        agentTheoryReturnProjectionSignature = [
+          "return-anchor",
+          width,
+          height,
+          entryAnchor.lodSelection.selectionHash,
+        ].join(":");
+        completeAgentTheoryReturnPreparation(
+          entryAnchor.lodSelection,
+          now,
+        );
+      } else {
+        requestAgentTheoryAnchorLod(entryAnchor, now);
+      }
     };
     const synchronizeAgentTheoryInteractionMode = () => {
       if (visualProfile !== "agent-theory") return;
       const nextMode = interactionModeRef.current;
       if (nextMode !== previousAgentTheoryInteractionMode) {
         if (nextMode === "explore") {
-          agentTheoryReturnTransition = null;
-          agentTheoryPendingReturnAfterSystemExit = false;
-          absorbAgentTheoryCameraIntoOrbit();
-          agentTheoryCameraMode = "explore";
+          beginAgentTheoryExploreEntry(performance.now());
         } else if (exploration.state !== "overview") {
           agentTheoryPendingReturnAfterSystemExit = true;
           beginExitSystem(performance.now());
@@ -3534,36 +7671,281 @@ export function App17GalaxyCanvas({
       }
       if (
         visualProfile === "agent-theory"
+        && interactionModeRef.current === "explore"
+        && exploration.state === "overview"
+        && agentTheoryCameraMode === "explore-free"
+      ) {
+        const freeLookNow = performance.now();
+        const elapsedSeconds = THREE.MathUtils.clamp(
+          (freeLookNow - agentTheoryFreeLookLastUpdateAt) / 1_000,
+          0,
+          0.05,
+        );
+        agentTheoryFreeLookLastUpdateAt = freeLookNow;
+        if (agentTheoryFreeLookAim) {
+          const aimProgress = THREE.MathUtils.clamp(
+            (freeLookNow - agentTheoryFreeLookAim.startedAtMs)
+              / Math.max(1, agentTheoryFreeLookAim.durationMs),
+            0,
+            1,
+          );
+          const aimEased = smootherStep(aimProgress);
+          agentTheoryFreeLookPosition
+            .copy(agentTheoryFreeLookAim.fromPosition)
+            .lerp(agentTheoryFreeLookAim.toPosition, aimEased);
+          camera.quaternion
+            .copy(agentTheoryFreeLookAim.fromQuaternion)
+            .slerp(
+              agentTheoryFreeLookAim.toQuaternion,
+              aimEased,
+            );
+          camera.getWorldDirection(agentTheoryFreeLookDirection);
+          agentTheoryFreeLookYaw = Math.atan2(
+            agentTheoryFreeLookDirection.y,
+            agentTheoryFreeLookDirection.x,
+          );
+          agentTheoryFreeLookPitch = Math.asin(THREE.MathUtils.clamp(
+            agentTheoryFreeLookDirection.z,
+            -1,
+            1,
+          ));
+          if (aimProgress >= 1) {
+            agentTheoryFreeLookAim = null;
+            scheduleAgentTheoryScreenLodRefresh(
+              APP17_AGENT_THEORY_LOD_SETTLE_MS,
+            );
+          }
+        } else {
+          resolveAgentTheoryFreeLookDirection(agentTheoryFreeLookDirection);
+        }
+        if (Math.abs(agentTheoryFreeLookDollyVelocity) > 1e-5) {
+          agentTheoryFreeLookPosition.addScaledVector(
+            agentTheoryFreeLookDirection,
+            agentTheoryFreeLookDollyVelocity * elapsedSeconds,
+          );
+          agentTheoryFreeLookDollyVelocity *= Math.exp(
+            -elapsedSeconds
+              / APP17_AGENT_THEORY_FREE_LOOK_DOLLY_DAMPING_SECONDS,
+          );
+          constrainAgentTheoryFreeLookPosition();
+          invalidate(true);
+        }
+        camera.position.copy(agentTheoryFreeLookPosition);
+        if (!agentTheoryFreeLookAim) {
+          camera.lookAt(
+            agentTheoryFreeLookPosition.clone().add(
+              agentTheoryFreeLookDirection,
+            ),
+          );
+        }
+        camera.updateMatrixWorld(true);
+        const lookDistance = agentTheoryFreeLookAim?.lookDistance
+          ?? Math.max(
+            camera.near * 4,
+            agentTheoryPerimeterProfile?.medianRadius ?? 1,
+          );
+        const focusHoldDrift = new THREE.Vector3();
+        const explicitFocusBlend = (
+          agentTheoryFocusVisualRef.current?.productMode === "sidera-explicit"
+            ? agentTheoryFocusVisualRef.current.blend
+            : 0
+        );
+        if (
+          explicitFocusBlend > 0.001
+          && !agentTheoryFreeLookAim
+          && !reduceMotion
+        ) {
+          const right = new THREE.Vector3().crossVectors(
+            agentTheoryFreeLookDirection,
+            camera.up,
+          ).normalize();
+          const localUp = new THREE.Vector3().crossVectors(
+            right,
+            agentTheoryFreeLookDirection,
+          ).normalize();
+          focusHoldDrift
+            .addScaledVector(
+              right,
+              Math.sin(freeLookNow / 41_000 * Math.PI * 2)
+                * 0.035
+                * explicitFocusBlend,
+            )
+            .addScaledVector(
+              localUp,
+              Math.cos(freeLookNow / 53_000 * Math.PI * 2)
+                * 0.024
+                * explicitFocusBlend,
+            );
+          camera.position.add(focusHoldDrift);
+          camera.lookAt(
+            agentTheoryFreeLookPosition
+              .clone()
+              .addScaledVector(agentTheoryFreeLookDirection, lookDistance)
+              .add(focusHoldDrift),
+          );
+          camera.updateMatrixWorld(true);
+        }
+        agentTheoryCurrentLookTarget
+          .copy(agentTheoryFreeLookPosition)
+          .addScaledVector(agentTheoryFreeLookDirection, lookDistance)
+          .add(focusHoldDrift);
+        agentTheoryDepthDiagnostics.freeLookPosition =
+          agentTheoryFreeLookPosition.toArray() as [number, number, number];
+        agentTheoryDepthDiagnostics.freeLookDirection =
+          agentTheoryFreeLookDirection.toArray() as [number, number, number];
+        agentTheoryDepthDiagnostics.cameraMode = agentTheoryCameraMode;
+      } else if (
+        visualProfile === "agent-theory"
         && interactionModeRef.current === "ambient"
         && exploration.state === "overview"
         && agentTheoryPerimeterProfile
         && agentTheoryCruiseCheckpoint
-        && agentTheoryCameraMode === "returning"
-        && agentTheoryReturnTransition
+        && agentTheoryCameraMode === "return-preparing"
       ) {
-        const returnSample = sampleAgentTheoryReturnTransition(
+        agentTheoryDepthDiagnostics.cameraMode = agentTheoryCameraMode;
+        publishAgentTheoryReturnProgress("return-preparing", 0);
+        const anchorSelectionReady = (
+          agentTheoryReturnAnchorLodResult !== null
+          && (
+            !paperLayer.isAgentLodTransitioning()
+            || (
+              agentTheoryReturnPreparedAtMs > 0
+              && performance.now() - agentTheoryReturnPreparedAtMs >= 120
+            )
+          )
+        );
+        if (anchorSelectionReady) {
+          startAgentTheoryPreparedReturn(performance.now());
+        }
+      } else if (
+        visualProfile === "agent-theory"
+        && interactionModeRef.current === "ambient"
+        && exploration.state === "overview"
+        && agentTheoryPerimeterProfile
+        && agentTheoryCruiseCheckpoint
+        && agentTheoryCameraMode === "returning-anchor"
+        && agentTheoryReturnTransition
+        && agentTheoryReturnOrientation
+        && agentTheoryExploreEntryAnchor
+      ) {
+        captureAgentTheoryReturnProjection();
+        const returnSample = sampleAgentTheoryAnchorReturnTransition(
           agentTheoryReturnTransition,
           performance.now(),
         );
         camera.position.fromArray(returnSample.position);
-        agentTheoryLookTarget.fromArray(returnSample.lookTarget);
+        const segmentStart = agentTheoryReturnTransition.fromPosition;
+        const segmentEnd = agentTheoryReturnTransition.toPosition;
+        const segmentX = segmentEnd[0] - segmentStart[0];
+        const segmentY = segmentEnd[1] - segmentStart[1];
+        const segmentZ = segmentEnd[2] - segmentStart[2];
+        const segmentLengthSq = (
+          segmentX * segmentX
+          + segmentY * segmentY
+          + segmentZ * segmentZ
+        );
+        const segmentParameter = segmentLengthSq > 1e-18
+          ? THREE.MathUtils.clamp(
+            (
+              (camera.position.x - segmentStart[0]) * segmentX
+              + (camera.position.y - segmentStart[1]) * segmentY
+              + (camera.position.z - segmentStart[2]) * segmentZ
+            ) / segmentLengthSq,
+            0,
+            1,
+          )
+          : 0;
+        const closestSegmentX =
+          segmentStart[0] + segmentX * segmentParameter;
+        const closestSegmentY =
+          segmentStart[1] + segmentY * segmentParameter;
+        const closestSegmentZ =
+          segmentStart[2] + segmentZ * segmentParameter;
+        agentTheoryDepthDiagnostics.returnMaximumSegmentDeviation = Math.max(
+          agentTheoryDepthDiagnostics.returnMaximumSegmentDeviation,
+          Math.hypot(
+            camera.position.x - closestSegmentX,
+            camera.position.y - closestSegmentY,
+            camera.position.z - closestSegmentZ,
+          ),
+        );
+        const previousQuaternion = camera.quaternion.clone();
+        camera.quaternion
+          .copy(agentTheoryReturnOrientation.fromQuaternion)
+          .slerp(
+            agentTheoryReturnOrientation.toQuaternion,
+            returnSample.progress,
+          );
+        camera.getWorldDirection(agentTheoryFreeLookDirection);
+        const lookDistance = THREE.MathUtils.lerp(
+          agentTheoryReturnOrientation.fromLookDistance,
+          agentTheoryReturnOrientation.toLookDistance,
+          returnSample.progress,
+        );
+        agentTheoryLookTarget
+          .copy(camera.position)
+          .addScaledVector(agentTheoryFreeLookDirection, lookDistance);
         agentTheoryCurrentLookTarget.copy(agentTheoryLookTarget);
-        camera.lookAt(applyAgentTheoryPointerParallax(
-          camera.position,
-          agentTheoryLookTarget,
-        ));
+        agentTheoryDepthCurrentP5 = THREE.MathUtils.lerp(
+          agentTheoryReturnOrientation.fromDepth[0],
+          agentTheoryReturnOrientation.toDepth[0],
+          returnSample.progress,
+        );
+        agentTheoryDepthCurrentP50 = THREE.MathUtils.lerp(
+          agentTheoryReturnOrientation.fromDepth[1],
+          agentTheoryReturnOrientation.toDepth[1],
+          returnSample.progress,
+        );
+        agentTheoryDepthCurrentP95 = THREE.MathUtils.lerp(
+          agentTheoryReturnOrientation.fromDepth[2],
+          agentTheoryReturnOrientation.toDepth[2],
+          returnSample.progress,
+        );
         camera.updateMatrixWorld(true);
+        agentTheoryDepthDiagnostics.returnDirectionStepDegrees =
+          THREE.MathUtils.radToDeg(
+            previousQuaternion.angleTo(camera.quaternion),
+          );
+        finishAgentTheoryReturnProjection();
+        const actualVisibility =
+          measureAgentTheoryActualReturnVisibility(
+            agentTheoryReturnUnionIndices,
+            camera,
+          );
+        agentTheoryDepthDiagnostics.returnActualVisiblePaperCount =
+          actualVisibility.paperCount;
+        agentTheoryDepthDiagnostics.returnActualVisibleHotspotCount =
+          actualVisibility.hotspotCount;
+        agentTheoryDepthDiagnostics.returnActualVisibleHotspotCellCount =
+          actualVisibility.hotspotCellCount;
+        agentTheoryDepthDiagnostics.returnMinimumVisiblePaperCount =
+          Math.min(
+            agentTheoryDepthDiagnostics.returnMinimumVisiblePaperCount,
+            actualVisibility.paperCount,
+          );
+        if (actualVisibility.paperCount <= 0) {
+          agentTheoryDepthDiagnostics.returnBlackFrameCount += 1;
+        }
+        agentTheoryDepthDiagnostics.cameraMode = agentTheoryCameraMode;
+        publishAgentTheoryReturnProgress(
+          "returning-anchor",
+          returnSample.progress,
+        );
         if (returnSample.complete) {
-          agentTheoryCruiseHandoffPosition.fromArray(returnSample.position);
-          agentTheoryCruiseHandoffLookTarget.fromArray(returnSample.lookTarget);
-          agentTheoryCruiseCheckpoint = cloneAgentTheoryCruiseCheckpoint(
-            agentTheoryReturnTransition.targetCheckpoint,
+          restoreAgentTheoryExploreAnchorProjection(
+            agentTheoryExploreEntryAnchor,
+          );
+          camera.position.copy(agentTheoryExploreEntryAnchor.position);
+          camera.quaternion.copy(agentTheoryExploreEntryAnchor.quaternion);
+          camera.updateMatrixWorld(true);
+          agentTheoryCurrentLookTarget.copy(
+            agentTheoryExploreEntryAnchor.lookTarget,
+          );
+          agentTheoryLookTarget.copy(
+            agentTheoryExploreEntryAnchor.lookTarget,
           );
           agentTheoryReturnTransition = null;
-          agentTheoryCameraMode = "cruise";
-          agentTheoryCruiseHandoffSeconds = 0;
-          lastAgentTheoryCruisePublishedStep =
-            agentTheoryCruiseCheckpoint.stepIndex;
+          beginAgentTheoryCruiseHealthAudit(performance.now());
         }
       } else if (
         visualProfile === "agent-theory"
@@ -3573,50 +7955,93 @@ export function App17GalaxyCanvas({
         && agentTheoryCruiseCheckpoint
         && agentTheoryCameraMode === "cruise"
       ) {
-        const cruiseSample = sampleAgentTheoryCruise(
+        const cruiseSample = agentTheoryPreviousCruiseCheckpoint
+          ? sampleInterpolatedAgentTheoryCruise(
+            agentTheoryPerimeterProfile,
+            agentTheoryPreviousCruiseCheckpoint,
+            agentTheoryCruiseCheckpoint,
+            agentTheoryCruiseInterpolationAlpha,
+          )
+          : sampleAgentTheoryCruise(
           agentTheoryPerimeterProfile,
           agentTheoryCruiseCheckpoint,
-        );
-        const framedLookTarget = createAgentTheoryCruiseLookTarget(
-          cruiseSample,
-          agentTheoryCruiseViewTangentWeight ?? cruiseSample.tangentWeight,
-          agentTheoryCruiseVerticalAimRatio,
-          agentTheoryCruiseFallbackToCenter,
-        );
-        const reframeProgress = Number.isFinite(agentTheoryReframeStartedAt)
-          ? smootherStep(THREE.MathUtils.clamp(
-            (performance.now() - agentTheoryReframeStartedAt) / 650,
-            0,
-            1,
-          ))
-          : 1;
-        const resolvedLookTarget = reframeProgress < 1
-          ? agentTheoryReframeFromLookTarget.clone().lerp(
-            framedLookTarget,
-            reframeProgress,
-          )
-          : framedLookTarget;
-        const handoffBlend = smootherStep(
-          THREE.MathUtils.clamp(agentTheoryCruiseHandoffSeconds / 0.6, 0, 1),
-        );
-        camera.position.copy(agentTheoryCruiseHandoffPosition).lerp(
-          new THREE.Vector3().fromArray(cruiseSample.position),
-          handoffBlend,
-        );
-        agentTheoryLookTarget.copy(agentTheoryCruiseHandoffLookTarget).lerp(
-          resolvedLookTarget,
-          handoffBlend,
-        );
+          );
+        camera.position.fromArray(cruiseSample.position);
+        if (agentTheoryPreviousCruiseCheckpoint) {
+          const previousSample = sampleAgentTheoryCruise(
+            agentTheoryPerimeterProfile,
+            agentTheoryPreviousCruiseCheckpoint,
+          );
+          const currentSample = sampleAgentTheoryCruise(
+            agentTheoryPerimeterProfile,
+            agentTheoryCruiseCheckpoint,
+          );
+          const previousPosition = new THREE.Vector3().fromArray(
+            previousSample.position,
+          );
+          const currentPosition = new THREE.Vector3().fromArray(
+            currentSample.position,
+          );
+          const previousTarget = createAgentTheoryCruiseLookTarget(
+            previousSample,
+            agentTheoryCruiseViewTangentWeight
+              ?? previousSample.tangentWeight,
+            agentTheoryCruiseVerticalAimRatio,
+            agentTheoryCruiseCenterBlend,
+          );
+          const currentTarget = createAgentTheoryCruiseLookTarget(
+            currentSample,
+            agentTheoryCruiseViewTangentWeight
+              ?? currentSample.tangentWeight,
+            agentTheoryCruiseVerticalAimRatio,
+            agentTheoryCruiseCenterBlend,
+          );
+          agentTheoryCruiseOrientationProbe.up.copy(camera.up);
+          agentTheoryCruiseOrientationProbe.position.copy(previousPosition);
+          agentTheoryCruiseOrientationProbe.lookAt(previousTarget);
+          agentTheoryCruisePreviousQuaternion.copy(
+            agentTheoryCruiseOrientationProbe.quaternion,
+          );
+          agentTheoryCruiseOrientationProbe.position.copy(currentPosition);
+          agentTheoryCruiseOrientationProbe.lookAt(currentTarget);
+          agentTheoryCruiseCurrentQuaternion.copy(
+            agentTheoryCruiseOrientationProbe.quaternion,
+          );
+          camera.quaternion
+            .copy(agentTheoryCruisePreviousQuaternion)
+            .slerp(
+              agentTheoryCruiseCurrentQuaternion,
+              agentTheoryCruiseInterpolationAlpha,
+            );
+          const lookDistance = THREE.MathUtils.lerp(
+            previousPosition.distanceTo(previousTarget),
+            currentPosition.distanceTo(currentTarget),
+            agentTheoryCruiseInterpolationAlpha,
+          );
+          camera.updateMatrixWorld(true);
+          camera.getWorldDirection(agentTheoryCruiseRenderDirection);
+          agentTheoryLookTarget
+            .copy(camera.position)
+            .addScaledVector(
+              agentTheoryCruiseRenderDirection,
+              lookDistance,
+            );
+        } else {
+          agentTheoryLookTarget.copy(createAgentTheoryCruiseLookTarget(
+            cruiseSample,
+            agentTheoryCruiseViewTangentWeight
+              ?? cruiseSample.tangentWeight,
+            agentTheoryCruiseVerticalAimRatio,
+            agentTheoryCruiseCenterBlend,
+          ));
+          camera.lookAt(agentTheoryLookTarget);
+          camera.updateMatrixWorld(true);
+        }
         agentTheoryCurrentLookTarget.copy(agentTheoryLookTarget);
-        camera.lookAt(applyAgentTheoryPointerParallax(
-          camera.position,
-          agentTheoryLookTarget,
-        ));
-        camera.updateMatrixWorld(true);
         agentTheoryDepthDiagnostics.ambientCamera = {
           active: !reduceMotion,
-          azimuthOffsetDegrees: agentTheoryPointerOffsetCurrent.x * 0.25,
-          elevationOffsetDegrees: agentTheoryPointerOffsetCurrent.y * 0.15,
+          azimuthOffsetDegrees: 0,
+          elevationOffsetDegrees: 0,
           distanceOffsetRatio: 0,
           pausedReason: reduceMotion ? "reduced-motion" : undefined,
         };
@@ -3630,6 +8055,14 @@ export function App17GalaxyCanvas({
           new THREE.Vector3().fromArray(cruiseSample.velocity).length();
         agentTheoryDepthDiagnostics.cruiseAcceleration =
           new THREE.Vector3().fromArray(cruiseSample.acceleration).length();
+        agentTheoryDepthDiagnostics.cruiseInterpolationAlpha =
+          agentTheoryCruiseInterpolationAlpha;
+        agentTheoryDepthDiagnostics.cruiseBacklogTruncationCount =
+          agentTheoryCruiseBacklogTruncationCount;
+        updateAgentTheoryPostReturnTrajectoryDiagnostics(
+          performance.now(),
+          "agent-theory-cruise",
+        );
       } else {
         applyCameraOrbit(camera, orbit);
         agentTheoryCurrentLookTarget.copy(orbit.center);
@@ -3900,6 +8333,7 @@ export function App17GalaxyCanvas({
           currentPixelRatio,
           systemVisualMode,
           farBackgroundRenderHotspots,
+          visualProfile,
         );
         const renderHotspot = hotspotById.get(hotspotId);
         if (renderHotspot) {
@@ -4107,6 +8541,7 @@ export function App17GalaxyCanvas({
     function overviewTheoryFarBlend() {
       if (
         sceneData.kind !== "app15"
+        || visualProfile === "agent-theory"
         || exploration.state !== "overview"
         || cameraPreset.maxDistance <= cameraPreset.distance
       ) return 0;
@@ -4302,11 +8737,26 @@ export function App17GalaxyCanvas({
         }
         systemResources.cloudLayer.setRevealProgress(systemRevealProgress);
         setGalaxySystemOpacity(systemResources, systemFade);
+        if (theoryMode) {
+          // The overview remains a compact stellar PSF. A true photosphere is
+          // introduced only during the final 400ms of the two-second system
+          // entry (and removed along the same interval on exit).
+          systemResources.star.setOpacity(
+            smoothStepRange(0.80, 1.0, exploration.blend),
+          );
+        }
         if (systemResources.farBackgroundLayer?.hasVisibleProxy()) {
           systemResources.root.visible = true;
         }
       }
-      focusSprite.visible = exploration.blend < 0.02 && Boolean(selectedIdRef.current);
+      focusSprite.visible = (
+        exploration.blend < 0.02
+        && Boolean(selectedIdRef.current)
+        && !(
+          visualProfile === "agent-theory"
+          && (agentTheoryFocusVisualRef.current?.blend ?? 0) > 0.001
+        )
+      );
     };
 
     const beginEnterSystem = (now: number) => {
@@ -4314,6 +8764,27 @@ export function App17GalaxyCanvas({
       if (exploration.state === "entering" || exploration.state === "exiting") {
         queuedEnterHotspotId = selectedHotspotId;
         return;
+      }
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode === "explore-free"
+        && exploration.state === "overview"
+      ) {
+        captureAgentTheoryFreeLookFromCamera();
+        agentTheorySavedFreeLookPose = {
+          position: agentTheoryFreeLookPosition.clone(),
+          direction: agentTheoryFreeLookDirection.clone(),
+        };
+        agentTheoryCurrentLookTarget
+          .copy(agentTheoryFreeLookPosition)
+          .addScaledVector(
+            agentTheoryFreeLookDirection,
+            Math.max(
+              camera.near * 4,
+              agentTheoryPerimeterProfile?.medianRadius ?? 1,
+            ),
+          );
+        absorbAgentTheoryCameraIntoOrbit(agentTheoryCurrentLookTarget);
       }
       const cached = systemCache.get(systemCacheKey(selectedHotspotId));
       if (cached && activateSystemResources(cached)) {
@@ -4440,7 +8911,11 @@ export function App17GalaxyCanvas({
     const configurePaperInspectionVisual = (paperId = paperJourney.getTargetId()) => {
       const visual = resolveSystemPaperVisual(paperId);
       if (!visual) return;
-      paperPresentation.visualType = visual.representative ? "energy-core" : "data-sphere";
+      paperPresentation.visualType = visualProfile === "agent-theory"
+        ? "photosphere"
+        : visual.representative
+          ? "energy-core"
+          : "data-sphere";
       paperInspectionVisual.configure({
         paperId,
         bodyColor: visual.color,
@@ -4928,7 +9403,11 @@ export function App17GalaxyCanvas({
         * ownerCalibrationDepth
         * Math.tan(effectiveFov * 0.5);
       const ownerCarrierDiameter = compactOpticalDiameter
-        * (representativeInspection ? APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE : 1);
+        * (
+          representativeInspection && visualProfile !== "agent-theory"
+            ? APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE
+            : 1
+        );
       const ownerWorldDiameter = Math.max(
         0.0001,
         ownerCarrierDiameter
@@ -4938,6 +9417,7 @@ export function App17GalaxyCanvas({
       const opticalProfile = resolvePaperReadingOpticalProfile(
         representativeInspection,
         height,
+        visualProfile,
       );
       const targetAnchorNdcX = paperReadingAnchorNdcX();
       const targetDistance = paperInspectionTargetDistance(
@@ -5244,6 +9724,55 @@ export function App17GalaxyCanvas({
       return bestId;
     };
 
+    const pickOverviewPaper = () => {
+      if (
+        visualProfile !== "agent-theory"
+        || sceneData.kind !== "app15"
+        || exploration.state !== "overview"
+      ) return "";
+      const candidateIndices = agentTheoryScreenLodResult?.selectedIndices;
+      if (!candidateIndices?.length) return "";
+      root.updateMatrixWorld(true);
+      const pointerX = (pointer.x * 0.5 + 0.5) * width;
+      const pointerY = (-pointer.y * 0.5 + 0.5) * height;
+      let bestId = "";
+      let bestDistanceSquared = 10 * 10;
+      let bestDepth = Number.POSITIVE_INFINITY;
+      candidateIndices.forEach((index) => {
+        const paper = sceneData.papers[index];
+        if (!paper) return;
+        agentTheoryScreenLodWorld
+          .set(paper.x, paper.y, paper.z)
+          .applyMatrix4(root.matrixWorld);
+        agentTheoryScreenLodProjection
+          .copy(agentTheoryScreenLodWorld)
+          .project(camera);
+        if (
+          agentTheoryScreenLodProjection.z < -1
+          || agentTheoryScreenLodProjection.z > 1
+          || Math.abs(agentTheoryScreenLodProjection.x) > 1
+          || Math.abs(agentTheoryScreenLodProjection.y) > 1
+        ) return;
+        const x = (agentTheoryScreenLodProjection.x * 0.5 + 0.5) * width;
+        const y = (-agentTheoryScreenLodProjection.y * 0.5 + 0.5) * height;
+        const distanceSquared =
+          (x - pointerX) * (x - pointerX)
+          + (y - pointerY) * (y - pointerY);
+        if (
+          distanceSquared < bestDistanceSquared
+          || (
+            Math.abs(distanceSquared - bestDistanceSquared) <= 0.01
+            && agentTheoryScreenLodProjection.z < bestDepth
+          )
+        ) {
+          bestId = paper.paperId;
+          bestDistanceSquared = distanceSquared;
+          bestDepth = agentTheoryScreenLodProjection.z;
+        }
+      });
+      return bestId;
+    };
+
     const pickSystemPaper = (force = false) => {
       if (!systemResources) return "";
       const pickStartedAt = performance.now();
@@ -5409,9 +9938,34 @@ export function App17GalaxyCanvas({
 
     const handlePointerDown = (event: PointerEvent) => {
       if (interactionModeRef.current !== "explore") return;
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
       if (paperJourney.isMoving()) return;
-      if (event.button !== 0 || orbit.pointerPressed) return;
+      const agentTheoryFreeOverview = (
+        visualProfile === "agent-theory"
+        && exploration.state === "overview"
+      );
+      if (agentTheoryFreeOverview && agentTheoryHotspotClickTimer) {
+        window.clearTimeout(agentTheoryHotspotClickTimer);
+        agentTheoryHotspotClickTimer = 0;
+      }
+      if (
+        orbit.pointerPressed
+        || (
+          agentTheoryFreeOverview
+            ? event.button !== 0 && event.button !== 1
+            : event.button !== 0
+        )
+      ) return;
+      if (agentTheoryFreeOverview) {
+        event.preventDefault();
+        cancelAgentTheoryFreeLookAim();
+        agentTheoryFreeLookPointerMode =
+          event.button === 1 || event.shiftKey ? "pan" : "look";
+      }
       if (systemHoverPickTimer) {
         window.clearTimeout(systemHoverPickTimer);
         systemHoverPickTimer = 0;
@@ -5425,9 +9979,14 @@ export function App17GalaxyCanvas({
       orbit.lastY = event.clientY;
       const inspectionHit = exploration.state === "system" && pickPaperInspectionVisual();
       pressedTargetKind = inspectionHit ? "inspection" : exploration.state === "system" ? "paper" : "hotspot";
-      pressedTargetId = inspectionHit
-        ? paperJourney.getTargetId()
-        : pressedTargetKind === "paper" ? pickSystemPaper(true) : pickHotspot();
+      pressedTargetId = agentTheoryFreeOverview
+        && agentTheoryFreeLookPointerMode === "pan"
+        ? ""
+        : inspectionHit
+          ? paperJourney.getTargetId()
+          : pressedTargetKind === "paper"
+            ? pickSystemPaper(true)
+            : pickHotspot();
       renderer.domElement.setPointerCapture(event.pointerId);
       renderer.domElement.style.cursor = pressedTargetId ? "pointer" : "grab";
     };
@@ -5436,24 +9995,12 @@ export function App17GalaxyCanvas({
       if (
         visualProfile === "agent-theory"
         && interactionModeRef.current === "ambient"
-      ) {
-        const rect = renderer.domElement.getBoundingClientRect();
-        agentTheoryPointerOffsetTarget.set(
-          THREE.MathUtils.clamp(
-            ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-            -1,
-            1,
-          ),
-          THREE.MathUtils.clamp(
-            -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
-            -1,
-            1,
-          ),
-        );
-        invalidate(true);
-        return;
-      }
+      ) return;
       if (interactionModeRef.current !== "explore") return;
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
       if (paperJourney.isMoving()) return;
       updatePointer(event);
@@ -5462,6 +10009,10 @@ export function App17GalaxyCanvas({
           const travel = Math.hypot(event.clientX - orbit.startX, event.clientY - orbit.startY);
           if (travel <= APP17_DRAG_THRESHOLD) return;
           orbit.dragging = true;
+          if (visualProfile === "agent-theory") {
+            cancelAgentTheoryScreenLodRefresh();
+            requestAgentTheoryScreenLodWorker(performance.now(), true);
+          }
           pressedTargetId = "";
           clearAutoResumeTimer();
           pendingWheelDelta = 0;
@@ -5478,6 +10029,47 @@ export function App17GalaxyCanvas({
         const dy = event.clientY - orbit.lastY;
         orbit.lastX = event.clientX;
         orbit.lastY = event.clientY;
+        if (
+          visualProfile === "agent-theory"
+          && exploration.state === "overview"
+        ) {
+          if (agentTheoryFreeLookPointerMode === "pan") {
+            const forward = resolveAgentTheoryFreeLookDirection();
+            const right = new THREE.Vector3()
+              .crossVectors(forward, camera.up)
+              .normalize();
+            const localUp = new THREE.Vector3()
+              .crossVectors(right, forward)
+              .normalize();
+            const lookDistance = Math.max(
+              camera.near * 4,
+              agentTheoryPerimeterProfile?.medianRadius ?? 1,
+            );
+            const worldUnitsPerPixel = (
+              2
+              * lookDistance
+              * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
+            ) / Math.max(1, height);
+            agentTheoryFreeLookPosition
+              .addScaledVector(right, -dx * worldUnitsPerPixel)
+              .addScaledVector(localUp, dy * worldUnitsPerPixel);
+            constrainAgentTheoryFreeLookPosition();
+          } else {
+            agentTheoryFreeLookYaw -=
+              dx * APP17_AGENT_THEORY_FREE_LOOK_RADIANS_PER_PIXEL;
+            agentTheoryFreeLookPitch = THREE.MathUtils.clamp(
+              agentTheoryFreeLookPitch
+                - dy * APP17_AGENT_THEORY_FREE_LOOK_RADIANS_PER_PIXEL,
+              THREE.MathUtils.degToRad(-85),
+              THREE.MathUtils.degToRad(85),
+            );
+            resolveAgentTheoryFreeLookDirection(
+              agentTheoryFreeLookDirection,
+            );
+          }
+          invalidate(true);
+          return;
+        }
         const readingOrbit = paperJourney.getReadingOrbit();
         if (paperJourney.getState() === "reading" && readingOrbit) {
           const azimuth = readingOrbit.azimuth - dx * 0.0045;
@@ -5519,6 +10111,10 @@ export function App17GalaxyCanvas({
 
     const handlePointerUp = (event: PointerEvent) => {
       if (interactionModeRef.current !== "explore") return;
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
       updatePointer(event);
       if (!orbit.pointerPressed) return;
       const wasDragging = orbit.dragging;
@@ -5537,6 +10133,9 @@ export function App17GalaxyCanvas({
         const now = performance.now();
         lastPointerDragEndedAt = now;
         lastInteractionTime = now;
+        if (!requestAgentTheoryScreenLodWorker(now, true)) {
+          scheduleAgentTheoryScreenLodRefresh(0);
+        }
         scheduleAutoRotateResume(now);
         invalidate(true);
         return;
@@ -5554,12 +10153,34 @@ export function App17GalaxyCanvas({
         onSelectPaperRef.current?.(targetId);
         return;
       }
+      if (
+        targetId
+        && visualProfile === "agent-theory"
+        && exploration.state === "overview"
+      ) {
+        const deferredHotspotId = targetId;
+        agentTheoryHotspotClickTimer = window.setTimeout(() => {
+          agentTheoryHotspotClickTimer = 0;
+          if (
+            disposed
+            || interactionModeRef.current !== "explore"
+            || exploration.state !== "overview"
+            || agentTheoryCameraMode !== "explore-free"
+          ) return;
+          onSelectRef.current(deferredHotspotId);
+        }, APP17_AGENT_THEORY_HOTSPOT_SINGLE_CLICK_DELAY_MS);
+        return;
+      }
       if (targetId) onSelectRef.current(targetId);
       else onClearSelectionRef.current();
     };
 
     const handlePointerCancel = (event: PointerEvent) => {
       if (interactionModeRef.current !== "explore") return;
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
       if (!orbit.pointerPressed) return;
       const wasDragging = orbit.dragging;
       orbit.pointerPressed = false;
@@ -5571,6 +10192,9 @@ export function App17GalaxyCanvas({
         const now = performance.now();
         lastPointerDragEndedAt = now;
         lastInteractionTime = now;
+        if (!requestAgentTheoryScreenLodWorker(now, true)) {
+          scheduleAgentTheoryScreenLodRefresh(0);
+        }
         scheduleAutoRotateResume(now);
       }
       invalidate(true);
@@ -5579,13 +10203,47 @@ export function App17GalaxyCanvas({
     const handleDoubleClick = (event: MouseEvent) => {
       if (interactionModeRef.current !== "explore") return;
       if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
+      if (orbit.pointerPressed || orbit.dragging) return;
+      updatePointer(event);
+      if (
+        visualProfile === "agent-theory"
+        && exploration.state === "overview"
+      ) {
+        if (agentTheoryHotspotClickTimer) {
+          window.clearTimeout(agentTheoryHotspotClickTimer);
+          agentTheoryHotspotClickTimer = 0;
+        }
+        const hotspotId = pickHotspot();
+        const paperId = hotspotId ? "" : pickOverviewPaper();
+        const worldTarget = new THREE.Vector3();
+        if (hotspotId) {
+          const hotspot = hotspotById.get(hotspotId);
+          if (!hotspot) return;
+          worldTarget.copy(hotspot.position).applyMatrix4(root.matrixWorld);
+        } else if (paperId) {
+          const paper = sceneData.papers.find(
+            (candidate) => candidate.paperId === paperId,
+          );
+          if (!paper) return;
+          worldTarget
+            .set(paper.x, paper.y, paper.z)
+            .applyMatrix4(root.matrixWorld);
+          onSelectPaperRef.current?.(paperId);
+        } else {
+          return;
+        }
+        event.preventDefault();
+        beginAgentTheoryFreeLookAim(worldTarget, performance.now());
+        return;
+      }
+      if (
         exploration.state !== "system"
         || (paperJourney.isMoving() && paperJourney.getState() !== "flying-in")
-        || orbit.pointerPressed
-        || orbit.dragging
         || performance.now() - lastPointerDragEndedAt < 350
       ) return;
-      updatePointer(event);
       if (pickPaperInspectionVisual()) {
         event.preventDefault();
         return;
@@ -5610,6 +10268,10 @@ export function App17GalaxyCanvas({
         return;
       }
       if (interactionModeRef.current !== "explore") return;
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
       if (systemHoverPickTimer) {
         window.clearTimeout(systemHoverPickTimer);
         systemHoverPickTimer = 0;
@@ -5685,11 +10347,53 @@ export function App17GalaxyCanvas({
 
     const handleWheel = (event: WheelEvent) => {
       if (interactionModeRef.current !== "explore") return;
+      if (
+        visualProfile === "agent-theory"
+        && agentTheoryCameraMode !== "explore-free"
+      ) return;
       event.preventDefault();
       if (exploration.state === "preparing" || exploration.state === "entering" || exploration.state === "exiting") return;
       if (paperJourney.isMoving()) return;
       const now = performance.now();
       lastInteractionTime = now;
+      if (
+        visualProfile === "agent-theory"
+        && exploration.state === "overview"
+      ) {
+        cancelAgentTheoryFreeLookAim();
+        const normalizedDelta = normalizeWheelDelta(event);
+        const medianRadius =
+          agentTheoryPerimeterProfile?.medianRadius ?? 1;
+        const velocityScale = Math.max(
+          APP17_AGENT_THEORY_FREE_LOOK_WHEEL_MIN_IMPULSE,
+          medianRadius
+            * APP17_AGENT_THEORY_FREE_LOOK_WHEEL_IMPULSE_PER_RADIUS,
+        );
+        const maximumDollySpeed = Math.max(
+          APP17_AGENT_THEORY_FREE_LOOK_WHEEL_MIN_MAX_SPEED,
+          (agentTheoryPerimeterProfile?.maximumRadius ?? 1)
+            * APP17_AGENT_THEORY_FREE_LOOK_WHEEL_MAX_SPEED_PER_RADIUS,
+        );
+        const previousDollyVelocity =
+          agentTheoryFreeLookDollyVelocity;
+        agentTheoryFreeLookDollyVelocity = THREE.MathUtils.clamp(
+          agentTheoryFreeLookDollyVelocity
+            - normalizedDelta * velocityScale,
+          -maximumDollySpeed,
+          maximumDollySpeed,
+        );
+        lastNormalizedWheelDelta = normalizedDelta;
+        lastWheelDistanceRatio = medianRadius > 1e-9
+          ? (
+            agentTheoryFreeLookDollyVelocity
+            - previousDollyVelocity
+          ) * APP17_AGENT_THEORY_FREE_LOOK_DOLLY_DAMPING_SECONDS
+            / medianRadius
+          : 0;
+        requestAgentTheoryScreenLodWorker(now, true);
+        invalidate(true);
+        return;
+      }
       scheduleAutoRotateResume(now);
       cancelOrbitTransition(orbit);
       pendingWheelDelta = THREE.MathUtils.clamp(
@@ -5697,6 +10401,9 @@ export function App17GalaxyCanvas({
         -APP17_WHEEL_MAX_PIXEL_DELTA,
         APP17_WHEEL_MAX_PIXEL_DELTA,
       );
+      if (visualProfile === "agent-theory") {
+        requestAgentTheoryScreenLodWorker(now, true);
+      }
       invalidate(true);
     };
 
@@ -5719,6 +10426,10 @@ export function App17GalaxyCanvas({
     renderer.domElement.addEventListener("pointermove", handlePointerMove);
     renderer.domElement.addEventListener("pointerup", handlePointerUp);
     renderer.domElement.addEventListener("pointercancel", handlePointerCancel);
+    renderer.domElement.addEventListener(
+      "lostpointercapture",
+      handlePointerCancel,
+    );
     renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
     renderer.domElement.addEventListener("dblclick", handleDoubleClick);
     renderer.domElement.addEventListener("wheel", handleWheel, { passive: false });
@@ -5743,10 +10454,143 @@ export function App17GalaxyCanvas({
           returnToSystemCenter(now);
         } else if (commandRef.current.kind === "toggle-paper-inspection") {
           togglePaperInspection(now);
+        } else if (commandRef.current.kind === "agent-focus-overview") {
+          root.updateMatrixWorld(true);
+          const target = new THREE.Vector3();
+          let resolved = false;
+          const requestedPaperId = selectedPaperIdRef.current;
+          if (requestedPaperId) {
+            const paper = sceneData.papers.find(
+              (candidate) => candidate.paperId === requestedPaperId,
+            );
+            if (paper) {
+              target.set(paper.x, paper.y, paper.z).applyMatrix4(root.matrixWorld);
+              resolved = true;
+            }
+          }
+          if (!resolved && selectedIdRef.current) {
+            const hotspot = hotspotById.get(selectedIdRef.current);
+            if (hotspot) {
+              target.copy(hotspot.position).applyMatrix4(root.matrixWorld);
+              resolved = true;
+            }
+          }
+          if (!resolved && requestedPaperId && agentTheoryDynamicFocusLayer) {
+            const dynamicPosition = agentTheoryDynamicFocusLayer.getPosition(
+              requestedPaperId,
+            );
+            if (dynamicPosition) {
+              target.copy(dynamicPosition).applyMatrix4(root.matrixWorld);
+              resolved = true;
+            }
+          }
+          if (resolved) {
+            captureAgentTheoryFreeLookFromCamera();
+            const currentForward = camera.getWorldDirection(new THREE.Vector3());
+            const currentRight = new THREE.Vector3()
+              .crossVectors(currentForward, camera.up)
+              .normalize();
+            const targetDistance = Math.max(
+              camera.near * 4,
+              camera.position.distanceTo(target),
+            );
+            const targetNdcX = commandRef.current.focusSide === "left"
+              ? -0.56
+              : commandRef.current.focusSide === "right"
+                ? 0.56
+                : 0;
+            const halfVisibleWidth = targetDistance
+              * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
+              * camera.aspect;
+            const composedLookTarget = target.clone().addScaledVector(
+              currentRight,
+              -targetNdcX * halfVisibleWidth,
+            );
+            if (
+              commandRef.current.focusMode === "soft-focus"
+              || commandRef.current.focusMode === "full-focus"
+            ) {
+              const assistedPosition = camera.position.clone().lerp(
+                target,
+                commandRef.current.focusMode === "full-focus" ? 0.15 : 0.08,
+              );
+              beginAgentTheoryFreeLookPoseTransition(
+                assistedPosition,
+                composedLookTarget,
+                now,
+                850,
+              );
+            } else {
+              beginAgentTheoryFreeLookAim(composedLookTarget, now);
+            }
+          }
+        } else if (
+          commandRef.current.kind === "agent-restore-pose"
+          && commandRef.current.cameraPose
+        ) {
+          const pose = commandRef.current.cameraPose;
+          const center = new THREE.Vector3().fromArray(pose.center);
+          const targetPosition = orbitPoseCameraPosition({
+            center,
+            distance: pose.distance,
+            azimuth: pose.azimuth,
+            elevation: pose.elevation,
+          });
+          captureAgentTheoryFreeLookFromCamera();
+          beginAgentTheoryFreeLookPoseTransition(
+            targetPosition,
+            center,
+            now,
+            750,
+          );
         } else if (commandRef.current.kind === "reset-system") {
           resetSystemView(now);
         } else if (exploration.state !== "overview") {
           beginExitSystem(now);
+        } else if (
+          visualProfile === "agent-theory"
+          && interactionModeRef.current === "explore"
+          && agentTheoryCameraMode === "explore-free"
+          && (
+            commandRef.current.kind === "reset"
+            || commandRef.current.kind === "fit"
+            || commandRef.current.kind === "top"
+          )
+        ) {
+          const presetKind = commandRef.current.kind;
+          const targetDistance = presetKind === "top"
+            ? cameraPreset.topDistance
+            : presetKind === "fit"
+              ? cameraPreset.fitDistance
+              : cameraPreset.distance;
+          const targetAzimuth = presetKind === "top"
+            ? cameraPreset.topAzimuth
+            : presetKind === "fit"
+              ? cameraPreset.fitAzimuth
+              : cameraPreset.azimuth;
+          const targetElevation = presetKind === "top"
+            ? cameraPreset.topElevation
+            : presetKind === "fit"
+              ? cameraPreset.fitElevation
+              : cameraPreset.elevation;
+          orbit.viewMode = presetKind === "top" ? "top" : "overview";
+          overviewFramingMode = presetKind === "fit" ? "fit" : "initial";
+          orbit.pauseUntil = 0;
+          orbit.center.copy(cameraPreset.center);
+          orbit.distance = targetDistance;
+          orbit.targetDistance = targetDistance;
+          orbit.azimuth = targetAzimuth;
+          orbit.elevation = targetElevation;
+          beginAgentTheoryFreeLookPoseTransition(
+            orbitPoseCameraPosition({
+              center: cameraPreset.center,
+              distance: targetDistance,
+              azimuth: targetAzimuth,
+              elevation: targetElevation,
+            }),
+            cameraPreset.center,
+            now,
+          );
         } else if (commandRef.current.kind === "top") {
           orbit.viewMode = "top";
           startOrbitTransition(
@@ -5791,7 +10635,21 @@ export function App17GalaxyCanvas({
 
       applyPendingWheelZoom();
 
-      const transitioningBefore = orbit.transition !== null || paperJourney.isMoving();
+      const agentTheoryCameraTransitioningBefore = (
+        visualProfile === "agent-theory"
+        && (
+          agentTheoryCameraMode === "return-preparing"
+          || agentTheoryCameraMode === "returning-anchor"
+          || agentTheoryCameraMode === "return-commit"
+          || agentTheoryFreeLookAim !== null
+          || Math.abs(agentTheoryFreeLookDollyVelocity) > 1e-5
+        )
+      );
+      const transitioningBefore = (
+        orbit.transition !== null
+        || paperJourney.isMoving()
+        || agentTheoryCameraTransitioningBefore
+      );
       const zoomingBefore = orbitZoomActive(orbit);
       const fullscreenTransitioningBefore = fullscreenTransition !== null;
       const inspectionTransitioningBefore = paperJourney.isMoving();
@@ -5813,9 +10671,9 @@ export function App17GalaxyCanvas({
         : autoRotateActive
           ? APP17_OVERVIEW_FRAME_INTERVAL
           : ambientSteadyActiveBefore
-            ? sceneData.kind === "app14" ? APP17_APP14_AMBIENT_FRAME_INTERVAL : APP17_APP15_AMBIENT_FRAME_INTERVAL
+            ? getSystemAmbientFrameInterval()
             : overviewAmbientActiveBefore
-              ? APP17_OVERVIEW_AMBIENT_FRAME_INTERVAL
+              ? getOverviewAmbientFrameInterval()
               : environmentAnimationActiveBefore
                 ? sceneData.kind === "app14" ? APP17_ENVIRONMENT_APP14_FRAME_INTERVAL : APP17_ENVIRONMENT_APP15_FRAME_INTERVAL
                 : 0;
@@ -5881,24 +10739,27 @@ export function App17GalaxyCanvas({
           && interactionModeRef.current === "ambient"
           && exploration.state === "overview"
         ) {
-          const pointerDamping = 1 - Math.exp(
-            -(ambientElapsedMs / 1_000) / 0.65,
-          );
-          agentTheoryPointerOffsetCurrent.lerp(
-            agentTheoryPointerOffsetTarget,
-            pointerDamping,
-          );
-          agentTheoryCruiseHandoffSeconds = Math.min(
-            0.6,
-            agentTheoryCruiseHandoffSeconds + ambientElapsedMs / 1_000,
-          );
+          agentTheoryPointerOffsetTarget.set(0, 0);
+          agentTheoryPointerOffsetCurrent.set(0, 0);
+          if (agentTheoryCameraMode === "cruise") {
+            advanceAgentTheoryVisibilitySteering(
+              ambientElapsedMs / 1_000,
+            );
+            requestAgentTheoryCruiseGuidance(now);
+          }
           if (
             !reduceMotion
             && agentTheoryCameraMode === "cruise"
             && agentTheoryPerimeterProfile
             && agentTheoryCruiseCheckpoint
           ) {
-            agentTheoryCruiseAccumulatorSeconds += ambientElapsedMs / 1_000;
+            const cruiseElapsedSeconds = ambientElapsedMs / 1_000;
+            if (cruiseElapsedSeconds > 0.1) {
+              agentTheoryCruiseBacklogTruncationCount += 1;
+              agentTheoryCruiseAccumulatorSeconds = 0;
+            } else {
+              agentTheoryCruiseAccumulatorSeconds += cruiseElapsedSeconds;
+            }
             const stepCount = Math.min(
               3,
               Math.floor(
@@ -5907,28 +10768,144 @@ export function App17GalaxyCanvas({
               ),
             );
             if (stepCount > 0) {
-              agentTheoryCruiseCheckpoint = advanceAgentTheoryCruise(
-                agentTheoryPerimeterProfile,
-                agentTheoryCruiseCheckpoint,
-                stepCount,
+              for (let stepIndex = 0; stepIndex < stepCount; stepIndex += 1) {
+                agentTheoryPreviousCruiseCheckpoint =
+                  cloneAgentTheoryCruiseCheckpoint(
+                    agentTheoryCruiseCheckpoint,
+                  );
+                const advanceControl: AgentTheoryCruiseAdvanceControl = {
+                  directionSign:
+                    agentTheoryCruiseGuidanceTarget.directionSign,
+                  speedScale: agentTheoryCruiseGuidance.speedScale,
+                };
+                agentTheoryCruiseCheckpoint = advanceAgentTheoryCruise(
+                  agentTheoryPerimeterProfile,
+                  agentTheoryCruiseCheckpoint,
+                  1,
+                  advanceControl,
+                );
+                agentTheoryCruiseLastProgressAt = now;
+                if (agentTheoryCruiseHealthAuditActive) {
+                  agentTheoryCruiseResumeSuccessfulSteps += 1;
+                  if (agentTheoryCruiseResumeFirstSuccessfulStep < 0) {
+                    agentTheoryCruiseResumeFirstSuccessfulStep =
+                      agentTheoryCruiseCheckpoint.stepIndex;
+                  }
+                }
+                agentTheoryCruiseAccumulatorSeconds -=
+                  AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS;
+              }
+            }
+            agentTheoryCruiseAccumulatorSeconds = Math.min(
+              agentTheoryCruiseAccumulatorSeconds,
+              AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS,
+            );
+            agentTheoryCruiseInterpolationAlpha = THREE.MathUtils.clamp(
+              agentTheoryCruiseAccumulatorSeconds
+                / AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS,
+              0,
+              1,
+            );
+            if (
+              agentTheoryReturnAwaitingFirstCruiseStep
+              && agentTheoryCruiseResumeSuccessfulSteps >= 1
+            ) {
+              completeAgentTheoryReturnAfterCruiseStep(now);
+            }
+            if (agentTheoryCruiseHealthAuditActive) {
+              agentTheoryCruiseResumeProjectionCurrent
+                .copy(agentTheoryReturnProjectionWorld)
+                .project(camera);
+              const resumeProjectionDeltaPx = Math.hypot(
+                (
+                  agentTheoryCruiseResumeProjectionCurrent.x
+                  - agentTheoryCruiseResumeProjectionStart.x
+                ) * width * 0.5,
+                (
+                  agentTheoryCruiseResumeProjectionCurrent.y
+                  - agentTheoryCruiseResumeProjectionStart.y
+                ) * height * 0.5,
               );
-              agentTheoryCruiseAccumulatorSeconds -= (
-                stepCount * AGENT_THEORY_CRUISE_FIXED_STEP_SECONDS
+              if (resumeProjectionDeltaPx < 0.15) {
+                agentTheoryCruiseResumeStillFrames += 1;
+              } else {
+                agentTheoryCruiseResumeStillFrames = 0;
+              }
+              agentTheoryDepthDiagnostics.returnCruiseRestoreDurationMs =
+                Math.max(0, now - agentTheoryCruiseResumeStartedAtMs);
+              agentTheoryDepthDiagnostics
+                .returnCruiseAdvanceRejectedCount =
+                agentTheoryCruiseResumeRejectedSteps;
+              agentTheoryDepthDiagnostics.returnCruiseFirstSuccessfulStep =
+                agentTheoryCruiseResumeFirstSuccessfulStep;
+              agentTheoryDepthDiagnostics.returnCruiseCheckpointDelta =
+                Math.max(
+                  0,
+                  agentTheoryCruiseCheckpoint.stepIndex
+                    - agentTheoryCruiseResumeStartStep,
+                );
+              agentTheoryDepthDiagnostics.returnAmbientTimeDelta =
+                Math.max(
+                  0,
+                  ambientTimeSeconds
+                    - agentTheoryCruiseResumeAmbientStart,
+                );
+              agentTheoryDepthDiagnostics.returnConsecutiveStillFrames =
+                agentTheoryCruiseResumeStillFrames;
+              agentTheoryDepthDiagnostics.returnCruiseGuardEvaluationCount =
+                agentTheoryCruiseResumeGuardEvaluationCount;
+              agentTheoryDepthDiagnostics.returnCruiseGuardSafeCount =
+                agentTheoryCruiseResumeGuardSafeCount;
+              const resumeProofDurationMs = Math.max(
+                0,
+                now - agentTheoryCruiseResumeStartedAtMs,
               );
+              if (
+                resumeProofDurationMs
+                  >= APP17_AGENT_THEORY_POST_RETURN_DIAGNOSTIC_MS
+              ) {
+                completeAgentTheoryCruiseHealthAudit(
+                  now,
+                  resumeProjectionDeltaPx,
+                );
+              }
             }
             if (
               agentTheoryCruiseCheckpointSaveAllowed
               &&
               agentTheoryCruiseCheckpoint.stepIndex
                 - lastAgentTheoryCruisePublishedStep >= 45
+              && !agentTheoryCruiseCheckpointSaveTimer
+              && !agentTheoryCruiseCheckpointSaveIdleId
             ) {
-              lastAgentTheoryCruisePublishedStep =
-                agentTheoryCruiseCheckpoint.stepIndex;
-              onAgentTheoryCruiseCheckpointChangeRef.current?.(
-                cloneAgentTheoryCruiseCheckpoint(
-                  agentTheoryCruiseCheckpoint,
-                ),
-              );
+              agentTheoryCruiseCheckpointSaveTimer = window.setTimeout(() => {
+                agentTheoryCruiseCheckpointSaveTimer = 0;
+                const persistCheckpoint = () => {
+                  agentTheoryCruiseCheckpointSaveIdleId = 0;
+                  if (
+                    disposed
+                    || !agentTheoryCruiseCheckpoint
+                    || !agentTheoryCruiseCheckpointSaveAllowed
+                  ) return;
+                  lastAgentTheoryCruisePublishedStep =
+                    agentTheoryCruiseCheckpoint.stepIndex;
+                  onAgentTheoryCruiseCheckpointChangeRef.current?.(
+                    cloneAgentTheoryCruiseCheckpoint(
+                      agentTheoryCruiseCheckpoint,
+                    ),
+                  );
+                };
+                const idleWindow = window as IdleCapableWindow;
+                if (idleWindow.requestIdleCallback) {
+                  agentTheoryCruiseCheckpointSaveIdleId =
+                    idleWindow.requestIdleCallback(
+                      persistCheckpoint,
+                      { timeout: 500 },
+                    );
+                } else {
+                  persistCheckpoint();
+                }
+              }, 1_000);
             }
           }
         }
@@ -6048,6 +11025,25 @@ export function App17GalaxyCanvas({
           applyExplorationBlend(0);
           orbit.viewMode = exploration.savedOverviewViewMode;
           orbit.pauseUntil = exploration.savedOverviewPauseUntil;
+          if (
+            visualProfile === "agent-theory"
+            && interactionModeRef.current === "explore"
+            && agentTheoryCameraMode === "explore-free"
+          ) {
+            if (agentTheorySavedFreeLookPose) {
+              camera.position.copy(agentTheorySavedFreeLookPose.position);
+              camera.lookAt(
+                agentTheorySavedFreeLookPose.position.clone().add(
+                  agentTheorySavedFreeLookPose.direction,
+                ),
+              );
+              camera.updateMatrixWorld(true);
+            } else {
+              applyCameraOrbit(camera, orbit);
+            }
+            captureAgentTheoryFreeLookFromCamera();
+            agentTheorySavedFreeLookPose = null;
+          }
           if (orbit.viewMode === "overview" && cameraPreset.autoRotate && orbit.pauseUntil > now) {
             clearAutoResumeTimer();
             autoResumeTimer = window.setTimeout(() => {
@@ -6081,17 +11077,44 @@ export function App17GalaxyCanvas({
         orbitChanged = true;
       }
       const projectionChanged = applyFullscreenVisuals(now);
-      if (projectionChanged) labelDirty = true;
+      const viewportCompositionChanged = applyViewportComposition(now);
+      if (projectionChanged || viewportCompositionChanged) labelDirty = true;
+      const agentTheoryLodInteractionBusy = (
+        visualProfile === "agent-theory"
+        && agentTheoryScreenLodInteractionActive(now)
+      );
+      paperLayer.setAgentLodTransitionPaused(
+        agentTheoryLodInteractionBusy,
+        now,
+      );
+      if (
+        !agentTheoryLodInteractionBusy
+        && paperLayer.advanceAgentLodTransition(now)
+      ) {
+        ambientChanged = true;
+      }
+      if (applyAgentTheoryDepthSmoothing(elapsedMs / 1_000)) {
+        ambientChanged = true;
+      }
       const webglRenderNeeded = renderRequested
         || orbitChanged
         || ambientChanged
+        || agentTheoryCameraTransitioningBefore
         || projectionChanged
         || orbit.dragging
         || selectionPendingFrameRef.current;
 
       if (webglRenderNeeded) {
         applyRuntimeCamera();
-        if (agentTheoryHotspotSphereLayer) {
+        updateAgentTheoryCruiseMotionProbe(now);
+        updateAgentTheoryCruiseLiveness(now);
+        if (updateAgentTheoryScreenLod(now)) {
+          ambientChanged = true;
+        }
+        if (
+          agentTheoryHotspotSphereLayer
+          && agentTheoryOverviewSphereEnabled
+        ) {
           const sphereState = agentTheoryHotspotSphereLayer.update({
             camera,
             root,
@@ -6110,7 +11133,15 @@ export function App17GalaxyCanvas({
             sphereState.activeSphereCount;
           agentTheoryDepthDiagnostics.stellarLodTransitionCount =
             sphereState.transitionCount;
+          agentTheoryDepthDiagnostics.hotspotSphereOffscreenSlotCount =
+            sphereState.offscreenSphereSlotCount;
           agentTheoryStellarLodTransitionCount = sphereState.transitionCount;
+        } else if (visualProfile === "agent-theory") {
+          hotspotLayer.setResolvedSphereBlends(new Map());
+          agentTheoryDepthDiagnostics.activeSphereHotspotCount = 0;
+          agentTheoryDepthDiagnostics.currentSphereHotspotCount = 0;
+          agentTheoryDepthDiagnostics.retiringSphereHotspotCount = 0;
+          agentTheoryDepthDiagnostics.hotspotSphereOffscreenSlotCount = 0;
         }
         updateAgentTheoryDepthStaging(now);
         applyOverviewDistanceLod();
@@ -6415,11 +11446,23 @@ export function App17GalaxyCanvas({
             agentTheoryInitialGateComplete
             && agentTheoryDepthDiagnostics.shaderStatus === "ready"
             && agentTheoryDepthDiagnostics.webglErrorCount === 0
-            && (
-              agentTheoryDepthDiagnostics.firstFrameVisiblePaperCount
-                + agentTheoryDepthDiagnostics.firstFrameVisibleHotspotCount
-              > 0
-            )
+            && agentTheoryDepthDiagnostics.perceptiblePaperCount
+              >= createAgentTheoryVisibilityEnvelope(
+                width,
+                height,
+              ).paperHardFloor
+            && agentTheoryDepthDiagnostics.visibleHotspotCount
+              >= createAgentTheoryVisibilityEnvelope(
+                width,
+                height,
+              ).hotspotHardFloor
+            && agentTheoryDepthDiagnostics.hotspotOccupiedCellCount
+              >= createAgentTheoryVisibilityEnvelope(
+                width,
+                height,
+              ).hotspotCellHardFloor
+            && agentTheoryVisibilityCheckpointValid
+            && agentTheoryDepthDiagnostics.occupiedTileRatio > 0
           ) {
             readyReported = true;
             agentTheoryDepthDiagnostics.readyGatePassed = true;
@@ -6429,6 +11472,15 @@ export function App17GalaxyCanvas({
         }
         if (
           onCameraPoseChangeRef.current
+          && (
+            visualProfile !== "agent-theory"
+            || (
+              agentTheoryCameraMode === "explore-free"
+              && !orbit.dragging
+              && !orbit.transition
+              && !orbitZoomActive(orbit)
+            )
+          )
           && (
             lastPosePublishedAt === Number.NEGATIVE_INFINITY
             || now - lastPosePublishedAt >= 120
@@ -6491,9 +11543,7 @@ export function App17GalaxyCanvas({
           && !orbitZoomActive(orbit)
           && fullscreenTransition === null;
         if (systemAmbientSteadyActive || environmentSteadyActive) {
-          const ambientInterval = sceneData.kind === "app14"
-            ? APP17_APP14_AMBIENT_FRAME_INTERVAL
-            : APP17_APP15_AMBIENT_FRAME_INTERVAL;
+          const ambientInterval = getSystemAmbientFrameInterval();
           if (lastAmbientRenderTime > 0) {
             ambientCadenceSamples.push({
               timestamp: now,
@@ -6524,13 +11574,22 @@ export function App17GalaxyCanvas({
         if (autoRotateActive || orbit.dragging || orbitChanged) labelDirty = true;
       }
 
+      const agentTheoryLabelsReady = (
+        visualProfile !== "agent-theory"
+        || agentTheoryCameraMode === "explore-free"
+      );
+      const labelFrameInterval = visualProfile === "agent-theory"
+        ? APP17_AGENT_THEORY_LABEL_FRAME_INTERVAL
+        : APP17_LABEL_FRAME_INTERVAL;
       if (
         labelsVisibleRef.current
+        && agentTheoryLabelsReady
         && labelDirty
-        && now - lastLabelRenderTime >= APP17_LABEL_FRAME_INTERVAL
+        && now - lastLabelRenderTime >= labelFrameInterval
       ) {
         const measurePerformance = ensureDiagnosticsActive(now);
         const labelStartedAt = measurePerformance ? performance.now() : 0;
+        let labelTransitionActive = false;
         if (exploration.blend >= 0.7 && systemResources) {
           drawSystemLabels(
             labelCanvas!,
@@ -6544,7 +11603,7 @@ export function App17GalaxyCanvas({
             height,
           );
         } else {
-          drawLabels(
+          labelTransitionActive = drawLabels(
             labelCanvas!,
             camera,
             root,
@@ -6559,14 +11618,20 @@ export function App17GalaxyCanvas({
             width,
             height,
             visualProfile,
+            agentTheoryLabelRuntimeStates,
+            now,
           );
         }
         if (measurePerformance) labelSamples.push({ timestamp: now, value: performance.now() - labelStartedAt });
-        labelDirty = false;
+        labelDirty = labelTransitionActive;
         lastLabelRenderTime = now;
-      } else if (!labelsVisibleRef.current && labelDirty) {
+      } else if (
+        !labelsVisibleRef.current
+        && labelDirty
+      ) {
         const context = labelCanvas!.getContext("2d");
         context?.clearRect(0, 0, labelCanvas!.width, labelCanvas!.height);
+        agentTheoryLabelRuntimeStates.clear();
         labelDirty = false;
       }
 
@@ -6583,6 +11648,12 @@ export function App17GalaxyCanvas({
         || paperJourney.isMoving()
         || orbitZoomActive(orbit)
         || fullscreenTransition
+        || paperLayer.isAgentLodTransitioning()
+        || agentTheoryCameraMode === "return-preparing"
+        || agentTheoryCameraMode === "returning-anchor"
+        || agentTheoryCameraMode === "return-commit"
+        || agentTheoryFreeLookAim !== null
+        || Math.abs(agentTheoryFreeLookDollyVelocity) > 1e-5
         || labelDirty
       ) scheduleFrame();
     }
@@ -6592,6 +11663,14 @@ export function App17GalaxyCanvas({
         if (frameId) cancelAnimationFrame(frameId);
         frameId = 0;
         lastAmbientRenderTime = 0;
+        cancelAgentTheoryScreenLodRefresh();
+        cancelAgentTheoryGuidanceFallback();
+        if (visualProfile === "agent-theory") {
+          orbit.pointerPressed = false;
+          orbit.dragging = false;
+          agentTheoryLodRefreshPending = true;
+          paperLayer.setAgentLodTransitionPaused(true, performance.now());
+        }
         pauseTimeline();
         return;
       }
@@ -6599,19 +11678,44 @@ export function App17GalaxyCanvas({
       resumeTimeline();
       lastRenderTime = 0;
       lastAmbientRenderTime = 0;
+      if (agentTheoryLodRefreshPending) {
+        scheduleAgentTheoryScreenLodRefresh(0);
+      }
+      requestAgentTheoryCruiseGuidance(performance.now());
       invalidate(true);
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     scheduleSystemPreparation(selectedIdRef.current, false);
-    if (runAgentTheoryInitialRuntimeGate()) invalidate(true);
+    if (runAgentTheoryInitialRuntimeGate()) {
+      initializeAgentTheoryScreenLodWorker();
+      invalidate(true);
+    }
 
     return () => {
       disposed = true;
       publishCameraPose();
       if (frameId) cancelAnimationFrame(frameId);
       clearAutoResumeTimer();
+      cancelAgentTheoryScreenLodRefresh();
+      cancelAgentTheoryGuidanceFallback();
+      agentTheoryScreenLodWorker?.dispose();
+      agentTheoryScreenLodWorker = null;
+      agentTheoryScreenLodWorkerReady = false;
+      if (agentTheoryCruiseCheckpointSaveTimer) {
+        window.clearTimeout(agentTheoryCruiseCheckpointSaveTimer);
+        agentTheoryCruiseCheckpointSaveTimer = 0;
+      }
+      if (agentTheoryCruiseCheckpointSaveIdleId) {
+        const idleWindow = window as IdleCapableWindow;
+        idleWindow.cancelIdleCallback?.(agentTheoryCruiseCheckpointSaveIdleId);
+        agentTheoryCruiseCheckpointSaveIdleId = 0;
+      }
       if (systemHoverPickTimer) window.clearTimeout(systemHoverPickTimer);
+      if (agentTheoryHotspotClickTimer) {
+        window.clearTimeout(agentTheoryHotspotClickTimer);
+        agentTheoryHotspotClickTimer = 0;
+      }
       if (diagnosticsTimer) window.clearInterval(diagnosticsTimer);
       invalidateRef.current = null;
       refreshSystemRef.current = null;
@@ -6620,6 +11724,7 @@ export function App17GalaxyCanvas({
       activeControllerRef.current = null;
       fullscreenControllerRef.current = null;
       inspectionMetadataControllerRef.current = null;
+      viewportOffsetControllerRef.current = null;
       cancelScheduledPreparation(false);
       cancelRepresentativeUpdate();
       resizeObserver.disconnect();
@@ -6629,16 +11734,24 @@ export function App17GalaxyCanvas({
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("pointercancel", handlePointerCancel);
+      renderer.domElement.removeEventListener(
+        "lostpointercapture",
+        handlePointerCancel,
+      );
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       renderer.domElement.removeEventListener("dblclick", handleDoubleClick);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       window.removeEventListener("keydown", handleKeyDown);
-      hostElement.removeChild(renderer.domElement);
       paperLayer.dispose();
       hotspotLayer.dispose();
+      agentTheoryFocusVisualControllerRef.current = null;
       if (agentTheoryHotspotSphereLayer) {
         scene.remove(agentTheoryHotspotSphereLayer.object);
         agentTheoryHotspotSphereLayer.dispose();
+      }
+      if (agentTheoryDynamicFocusLayer) {
+        root.remove(agentTheoryDynamicFocusLayer.object);
+        agentTheoryDynamicFocusLayer.dispose();
       }
       orbitLayer?.dispose();
       scene.remove(environmentStarLayer.object);
@@ -6668,7 +11781,7 @@ export function App17GalaxyCanvas({
       });
       systemCache.clear();
       bloomPipeline?.dispose();
-      renderer.dispose();
+      scene.clear();
     };
   }, [
     agentTheoryDepthProfile,
@@ -6681,6 +11794,16 @@ export function App17GalaxyCanvas({
     sceneData,
     visualProfile,
   ]);
+
+  useEffect(() => () => {
+    const core = persistentRenderCoreRef.current;
+    if (!core) return;
+    const canvas = core.renderer.domElement;
+    if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+    core.scene.clear();
+    core.renderer.dispose();
+    persistentRenderCoreRef.current = null;
+  }, []);
 
   return (
     <>
@@ -6921,7 +12044,20 @@ function projectedWorldDiameterPixels(
 function resolvePaperReadingOpticalProfile(
   representative: boolean,
   viewportHeight: number,
+  visualProfile: GalaxyVisualProfile = "analysis",
 ): PaperReadingOpticalProfile {
+  if (visualProfile === "agent-theory") {
+    const targetBodyDiameterPx = THREE.MathUtils.clamp(
+      viewportHeight * APP17_AGENT_PAPER_PHOTOSPHERE_VIEWPORT_RATIO,
+      APP17_AGENT_PAPER_PHOTOSPHERE_MIN_DIAMETER_PX,
+      APP17_AGENT_PAPER_PHOTOSPHERE_MAX_DIAMETER_PX,
+    );
+    return {
+      targetBodyDiameterPx,
+      targetProjectedDiameterPx: targetBodyDiameterPx,
+      representativeCarrierRatio: 0,
+    };
+  }
   const targetBodyDiameterPx = THREE.MathUtils.clamp(
     viewportHeight * APP17_PAPER_READING_BODY_VIEWPORT_RATIO,
     APP17_REPRESENTATIVE_BODY_CORE_MIN_DIAMETER_PX,
@@ -7442,6 +12578,7 @@ function buildGalaxySystemResources(
   pixelRatio: number,
   visualMode: GalaxySystemVisualMode,
   renderHotspots: App17RenderPoint[],
+  visualProfile: GalaxyVisualProfile = "analysis",
 ) {
   const topicPaperByCanonicalId = new Map<string, (typeof payload.papers)[number]>();
   let duplicatePaperCount = 0;
@@ -7502,6 +12639,16 @@ function buildGalaxySystemResources(
     .filter((year): year is number => Number.isFinite(year));
   const minimumTopicYear = knownTopicYears.length > 0 ? Math.min(...knownTopicYears) : 0;
   const maximumTopicYear = knownTopicYears.length > 0 ? Math.max(...knownTopicYears) : 0;
+  const agentTheorySystem = visualProfile === "agent-theory";
+  const systemPaperMinimumSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FAR_MINIMUM_SIZE
+    : APP17_SYSTEM_PAPER_MINIMUM_SIZE;
+  const systemPaperMaximumSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_MAXIMUM_SIZE
+    : APP17_SYSTEM_PAPER_MAXIMUM_SIZE;
+  const systemPaperBaseAlpha = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_BASE_ALPHA
+    : APP17_SYSTEM_PAPER_BASE_ALPHA;
   const cloudPoints: App17ParticlePoint[] = relativePoints
     .map((item) => {
       const paperId = item.paper.scopedPaperId || item.paper.rawPaperId;
@@ -7523,11 +12670,11 @@ function buildGalaxySystemResources(
         color: representativeYearColor(item.paper.year, minimumTopicYear, maximumTopicYear),
         haloColor: app17HotspotFamilyColor(hotspot),
         size: THREE.MathUtils.clamp(
-          item.paper.size || APP17_SYSTEM_PAPER_MINIMUM_SIZE,
-          APP17_SYSTEM_PAPER_MINIMUM_SIZE,
-          APP17_SYSTEM_PAPER_MAXIMUM_SIZE,
+          item.paper.size || systemPaperMinimumSize,
+          systemPaperMinimumSize,
+          systemPaperMaximumSize,
         ),
-        alpha: APP17_SYSTEM_PAPER_BASE_ALPHA,
+        alpha: systemPaperBaseAlpha,
         year: item.paper.year,
         ...paperVisualVariation(paperId),
       };
@@ -7548,7 +12695,12 @@ function buildGalaxySystemResources(
       )
     : undefined;
   if (farBackgroundLayer) root.add(farBackgroundLayer.object);
-  const cloudLayer = createSystemPaperLayer(cloudPoints, pixelRatio, false);
+  const cloudLayer = createSystemPaperLayer(
+    cloudPoints,
+    pixelRatio,
+    false,
+    visualProfile,
+  );
   root.add(cloudLayer.object);
   const star = createSystemStar(hotspot);
   root.add(star.object);
@@ -7557,6 +12709,7 @@ function buildGalaxySystemResources(
     hotspotId: hotspot.id,
     hotspot,
     visualMode,
+    visualProfile,
     root,
     cloudLayer,
     farBackgroundLayer,
@@ -7902,8 +13055,14 @@ function buildSystemRepresentativeBundle(
       year: paper.year,
       rank,
       displaySize,
-      ordinaryDisplaySize: cloudPaper?.displaySize ?? APP17_SYSTEM_PAPER_MINIMUM_SIZE,
-      ordinaryAlpha: APP17_SYSTEM_PAPER_BASE_ALPHA,
+      ordinaryDisplaySize: cloudPaper?.displaySize ?? (
+        resources.visualProfile === "agent-theory"
+          ? APP17_AGENT_THEORY_SYSTEM_PAPER_FAR_MINIMUM_SIZE
+          : APP17_SYSTEM_PAPER_MINIMUM_SIZE
+      ),
+      ordinaryAlpha: resources.visualProfile === "agent-theory"
+        ? APP17_AGENT_THEORY_SYSTEM_PAPER_BASE_ALPHA
+        : APP17_SYSTEM_PAPER_BASE_ALPHA,
       color: representativeYearColor(paper.year, minimumYear, maximumYear),
       orbit,
       semanticPosition,
@@ -7918,13 +13077,19 @@ function buildSystemRepresentativeBundle(
       orbitMotionBlend: resources.visualMode === "theory" ? 0 : 1,
       requiresSafeOrbitCapture,
       lastCombinedLuminance: resources.visualMode === "theory"
-        ? APP17_SYSTEM_PAPER_BASE_ALPHA
+        ? resources.visualProfile === "agent-theory"
+          ? APP17_AGENT_THEORY_SYSTEM_PAPER_BASE_ALPHA
+          : APP17_SYSTEM_PAPER_BASE_ALPHA
         : 0.98,
     });
   });
 
   const representativeLayer = representativePoints.length > 0
-    ? createSystemRepresentativeLayer(representativePoints, pixelRatio)
+    ? createSystemRepresentativeLayer(
+        representativePoints,
+        pixelRatio,
+        resources.visualProfile,
+      )
     : undefined;
   const representativeBloomLayer = representativePoints.length > 0
     ? createSystemRepresentativeBloomLayer(representativePoints, pixelRatio)
@@ -8031,7 +13196,33 @@ function createSystemPaperLayer(
   papers: App17ParticlePoint[],
   pixelRatio: number,
   dynamicPositions: boolean,
+  visualProfile: GalaxyVisualProfile = "analysis",
 ) {
+  const agentTheorySystem = visualProfile === "agent-theory";
+  const farMinimumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FAR_MINIMUM_SIZE
+    : 2.5;
+  const mediumMinimumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_MEDIUM_MINIMUM_SIZE
+    : 2.6;
+  const nearMinimumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_NEAR_MINIMUM_SIZE
+    : 2.8;
+  const maximumPointSizeLimit = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_MAXIMUM_SIZE
+    : 4.6;
+  const depthBrightnessFloor = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR
+    : APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR;
+  const depthSizeFloor = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_DEPTH_SIZE_FLOOR
+    : APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR;
+  const focusContextBrightness = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS
+    : APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS;
+  const focusNeighborBrightness = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS
+    : APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS;
   const count = papers.length;
   const positions = new Float32Array(count * 3);
   const coreColors = new Float32Array(count * 3);
@@ -8066,8 +13257,8 @@ function createSystemPaperLayer(
   let lodBlend = 0.5;
   let farBlend = 0;
   let nearBlend = 0;
-  let minimumPointSize = APP17_SYSTEM_PAPER_MINIMUM_SIZE;
-  let maximumPointSize = APP17_SYSTEM_PAPER_MAXIMUM_SIZE;
+  let minimumPointSize = mediumMinimumPointSize;
+  let maximumPointSize = maximumPointSizeLimit;
   let revealProgress = 0;
   let targetExposure = APP17_SYSTEM_PAPER_MEDIUM_EXPOSURE;
   let focusMode: GalaxySystemPaperFocusMode = "none";
@@ -8125,10 +13316,10 @@ function createSystemPaperLayer(
   });
   const ordinaryBaseMinimum = ordinaryBaseSizes.length > 0
     ? Math.min(...ordinaryBaseSizes)
-    : APP17_SYSTEM_PAPER_MINIMUM_SIZE;
+    : farMinimumPointSize;
   const ordinaryBaseMaximum = ordinaryBaseSizes.length > 0
     ? Math.max(...ordinaryBaseSizes)
-    : APP17_SYSTEM_PAPER_MAXIMUM_SIZE;
+    : maximumPointSizeLimit;
 
   const geometry = new THREE.BufferGeometry();
   const positionAttribute = new THREE.BufferAttribute(positions, 3);
@@ -8155,7 +13346,11 @@ function createSystemPaperLayer(
   const paperFocusMaskAttribute = new THREE.BufferAttribute(paperFocusMasks, 1).setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute("paperFocusMask", paperFocusMaskAttribute);
 
-  const material = createSystemPaperMaterial(pixelRatio, dynamicPositions);
+  const material = createSystemPaperMaterial(
+    pixelRatio,
+    dynamicPositions,
+    visualProfile,
+  );
   const object = new THREE.Points(geometry, material);
   object.frustumCulled = false;
   object.renderOrder = dynamicPositions ? 4 : 2;
@@ -8209,16 +13404,24 @@ function createSystemPaperLayer(
       currentLod = nextFarBlend >= 0.5 ? "far" : nextNearBlend >= 0.5 ? "near" : "medium";
       const sizeScale = THREE.MathUtils.lerp(1, 0.88, nextFarBlend) * THREE.MathUtils.lerp(1, 1.05, nextNearBlend);
       const shaderMinimum = THREE.MathUtils.lerp(
-        THREE.MathUtils.lerp(2.6, 2.5, nextFarBlend),
-        2.8,
+        THREE.MathUtils.lerp(
+          mediumMinimumPointSize,
+          farMinimumPointSize,
+          nextFarBlend,
+        ),
+        nearMinimumPointSize,
         nextNearBlend,
       );
       minimumPointSize = THREE.MathUtils.clamp(
         Math.max(shaderMinimum, ordinaryBaseMinimum * sizeScale * 0.96),
-        2.5,
-        4.6,
+        farMinimumPointSize,
+        maximumPointSizeLimit,
       );
-      maximumPointSize = THREE.MathUtils.clamp(ordinaryBaseMaximum * sizeScale * 1.12, minimumPointSize, 4.6);
+      maximumPointSize = THREE.MathUtils.clamp(
+        ordinaryBaseMaximum * sizeScale * 1.12,
+        minimumPointSize,
+        maximumPointSizeLimit,
+      );
     },
     setEnergyTime: (timeSeconds: number, motionStrength: number) => {
       material.uniforms.uEnergyTime.value = timeSeconds;
@@ -8286,11 +13489,15 @@ function createSystemPaperLayer(
       material.uniforms.uPaperFocusFlightStrength.value = THREE.MathUtils.clamp(flightStrength, 0, 1);
       material.uniforms.uPaperFocusTargetCssSize.value = paperFocusTargetScreenSize;
       material.uniforms.uPaperFocusContextBrightness.value = dynamicPositions
-        ? APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_BRIGHTNESS
-        : APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS;
+        ? agentTheorySystem
+          ? focusContextBrightness
+          : APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_BRIGHTNESS
+        : focusContextBrightness;
       material.uniforms.uPaperFocusNeighborBrightness.value = dynamicPositions
-        ? APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_BRIGHTNESS
-        : APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS;
+        ? agentTheorySystem
+          ? focusNeighborBrightness
+          : APP17_SYSTEM_PAPER_FOCUS_REPRESENTATIVE_BRIGHTNESS
+        : focusNeighborBrightness;
     },
     advanceFocus: (elapsedSeconds: number, immediate = false) => {
       const blend = immediate
@@ -8315,8 +13522,15 @@ function createSystemPaperLayer(
       revealProgress,
       targetExposure,
       effectiveExposure: THREE.MathUtils.lerp(1, targetExposure, revealProgress),
-      depthBrightnessFloor: APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR,
-      depthSizeFloor: APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR,
+      baseAlpha: agentTheorySystem
+        ? APP17_AGENT_THEORY_SYSTEM_PAPER_BASE_ALPHA
+        : APP17_SYSTEM_PAPER_BASE_ALPHA,
+      depthBrightnessFloor,
+      depthSizeFloor,
+      focusContextBrightness,
+      focusNeighborBrightness,
+      stableCoreDiameterPhysicalPixels: agentTheorySystem ? 1.2 : 0.8,
+      stableCoreEnergy: agentTheorySystem ? 0.74 : 0.58,
       focusMode,
       focusRank,
       representativeDimFactor,
@@ -8386,8 +13600,17 @@ function createSystemPaperLayer(
   };
 }
 
-function createSystemRepresentativeLayer(papers: App17ParticlePoint[], pixelRatio: number) {
-  return createSystemPaperLayer(papers, pixelRatio, true);
+function createSystemRepresentativeLayer(
+  papers: App17ParticlePoint[],
+  pixelRatio: number,
+  visualProfile: GalaxyVisualProfile = "analysis",
+) {
+  return createSystemPaperLayer(
+    papers,
+    pixelRatio,
+    true,
+    visualProfile,
+  );
 }
 
 function createSystemRepresentativeBloomLayer(papers: App17ParticlePoint[], pixelRatio: number) {
@@ -8987,24 +14210,36 @@ type PaperInspectionVisualFrame = {
   motionStrength: number;
 };
 
-function createPaperInspectionVisual() {
+function createPaperInspectionVisual(visualProfile: GalaxyVisualProfile) {
   const object = new THREE.Group();
   object.visible = false;
   const dataSphere = createPaperInspectionDataSphere();
   const energyCore = createPaperInspectionEnergyCore();
-  object.add(dataSphere.object, energyCore.object);
+  const photosphere = createPaperInspectionPhotosphere();
+  object.add(dataSphere.object, energyCore.object, photosphere.object);
   let visualType: GalaxyPaperInspectionVisualType = "none";
 
   return {
     object,
     get hitObject() {
-      return visualType === "energy-core" ? energyCore.hitObject : dataSphere.hitObject;
+      return visualType === "photosphere"
+        ? photosphere.hitObject
+        : visualType === "energy-core"
+          ? energyCore.hitObject
+          : dataSphere.hitObject;
     },
     configure: (configuration: PaperInspectionVisualConfiguration) => {
-      visualType = configuration.representative ? "energy-core" : "data-sphere";
+      visualType = visualProfile === "agent-theory"
+        ? "photosphere"
+        : configuration.representative
+          ? "energy-core"
+          : "data-sphere";
       dataSphere.object.visible = false;
       energyCore.object.visible = false;
-      if (visualType === "energy-core") {
+      photosphere.object.visible = false;
+      if (visualType === "photosphere") {
+        photosphere.configure(configuration);
+      } else if (visualType === "energy-core") {
         energyCore.configure(configuration);
       } else {
         dataSphere.configure(configuration.paperId, configuration.bodyColor, configuration.source);
@@ -9015,18 +14250,27 @@ function createPaperInspectionVisual() {
       if (!object.visible) {
         dataSphere.object.visible = false;
         energyCore.object.visible = false;
+        photosphere.object.visible = false;
         return;
       }
-      if (visualType === "energy-core") {
+      if (visualType === "photosphere") {
         dataSphere.object.visible = false;
+        energyCore.object.visible = false;
+        photosphere.setVisual(frame);
+      } else if (visualType === "energy-core") {
+        dataSphere.object.visible = false;
+        photosphere.object.visible = false;
         energyCore.setVisual(frame);
       } else {
         energyCore.object.visible = false;
+        photosphere.object.visible = false;
         dataSphere.setVisual(frame);
       }
     },
     getVisualState: () => {
-      const state = visualType === "energy-core"
+      const state = visualType === "photosphere"
+        ? photosphere.getVisualState()
+        : visualType === "energy-core"
         ? energyCore.getVisualState()
         : visualType === "data-sphere"
           ? dataSphere.getVisualState()
@@ -9060,6 +14304,853 @@ function createPaperInspectionVisual() {
     dispose: () => {
       dataSphere.dispose();
       energyCore.dispose();
+      photosphere.dispose();
+    },
+  };
+}
+
+function createPaperInspectionPhotosphere() {
+  const object = new THREE.Group();
+  object.visible = false;
+  let projectedDiameter = 0;
+  let viewportRatio = 0;
+  let currentPaperId = "";
+  let rotationAngle = 0;
+  let rotationSpeed = 0.04;
+  let lastVisualTimeSeconds = Number.NaN;
+  let surfaceBlend = 0;
+  let coronaBlend = 0;
+  let handoffDiameterRatio = 1;
+  let photosphereLodActive = false;
+  let surfaceProfile = createPaperSurfaceProfile("agent-paper-default");
+
+  const geometry = new THREE.SphereGeometry(0.5, 72, 48);
+  const bodyMaterial = new THREE.ShaderMaterial({
+    name: "agent-theory-paper-photosphere-body",
+    uniforms: {
+      uBodyColor: { value: new THREE.Color("#9fb9db") },
+      uRotationAxis: { value: surfaceProfile.rotationAxis.clone() },
+      uRotationAngle: { value: 0 },
+      uPhase: { value: surfaceProfile.phases.clone() },
+      uOpacity: { value: 0 },
+      uSurfaceBlend: { value: 0 },
+      uRepresentativeStrength: { value: 0 },
+    },
+    transparent: true,
+    depthWrite: true,
+    depthTest: true,
+    toneMapped: false,
+    vertexShader: `
+      varying vec3 vLocalPosition;
+      varying vec3 vNormalView;
+      varying vec3 vViewDirection;
+      void main() {
+        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+        vLocalPosition = position * 2.0;
+        vNormalView = normalize(normalMatrix * normal);
+        vViewDirection = normalize(-viewPosition.xyz);
+        gl_Position = projectionMatrix * viewPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uBodyColor;
+      uniform vec3 uRotationAxis;
+      uniform float uRotationAngle;
+      uniform vec3 uPhase;
+      uniform float uOpacity;
+      uniform float uSurfaceBlend;
+      uniform float uRepresentativeStrength;
+      varying vec3 vLocalPosition;
+      varying vec3 vNormalView;
+      varying vec3 vViewDirection;
+
+      vec3 rotateAroundAxis(vec3 value, vec3 axis, float angle) {
+        float cosine = cos(angle);
+        float sine = sin(angle);
+        return value * cosine
+          + cross(axis, value) * sine
+          + axis * dot(axis, value) * (1.0 - cosine);
+      }
+
+      float hash31(vec3 point) {
+        return fract(sin(dot(point, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+      }
+
+      float noise3(vec3 point) {
+        vec3 cell = floor(point);
+        vec3 local = fract(point);
+        local = local * local * (3.0 - 2.0 * local);
+        float n000 = hash31(cell + vec3(0.0, 0.0, 0.0));
+        float n100 = hash31(cell + vec3(1.0, 0.0, 0.0));
+        float n010 = hash31(cell + vec3(0.0, 1.0, 0.0));
+        float n110 = hash31(cell + vec3(1.0, 1.0, 0.0));
+        float n001 = hash31(cell + vec3(0.0, 0.0, 1.0));
+        float n101 = hash31(cell + vec3(1.0, 0.0, 1.0));
+        float n011 = hash31(cell + vec3(0.0, 1.0, 1.0));
+        float n111 = hash31(cell + vec3(1.0, 1.0, 1.0));
+        float nx00 = mix(n000, n100, local.x);
+        float nx10 = mix(n010, n110, local.x);
+        float nx01 = mix(n001, n101, local.x);
+        float nx11 = mix(n011, n111, local.x);
+        return mix(
+          mix(nx00, nx10, local.y),
+          mix(nx01, nx11, local.y),
+          local.z
+        );
+      }
+
+      float stellarFbm(vec3 point) {
+        float value = 0.0;
+        float amplitude = 0.56;
+        for (int octave = 0; octave < 4; octave += 1) {
+          value += noise3(point) * amplitude;
+          point = point * 2.03 + vec3(7.1, 3.7, 5.3);
+          amplitude *= 0.48;
+        }
+        return value;
+      }
+
+      float stellarRidgedFbm(vec3 point) {
+        float value = 0.0;
+        float amplitude = 0.58;
+        for (int octave = 0; octave < 4; octave += 1) {
+          float ridge = 1.0 - abs(noise3(point) * 2.0 - 1.0);
+          value += ridge * ridge * amplitude;
+          point = point * 2.11 + vec3(5.7, 9.2, 3.4);
+          amplitude *= 0.47;
+        }
+        return value;
+      }
+
+      void main() {
+        vec3 direction = rotateAroundAxis(
+          normalize(vLocalPosition),
+          normalize(uRotationAxis),
+          uRotationAngle
+        );
+        float macroPlasma = stellarFbm(direction * 3.4 + uPhase * 0.38);
+        vec3 domainWarp = vec3(
+          stellarFbm(direction * 6.8 + uPhase),
+          stellarFbm(direction * 6.8 + uPhase.yzx + 11.3),
+          stellarFbm(direction * 6.8 + uPhase.zxy + 23.7)
+        ) - 0.5;
+        vec3 plasmaDirection = normalize(direction + domainWarp * 0.18);
+        float broadCurrent = stellarFbm(
+          plasmaDirection * 4.6 + uPhase.zxy * 0.72
+        );
+        float middleCurrent = stellarFbm(
+          plasmaDirection * 8.2 - uPhase.yzx * 1.22
+        );
+        float fineCurrent = stellarFbm(
+          plasmaDirection * 17.5 + uPhase.xyz * 1.84
+        );
+        float middleContourTarget = 0.51 + (broadCurrent - 0.5) * 0.08;
+        float middleAa = clamp(fwidth(middleCurrent), 0.003, 0.016);
+        float middleFilament = 1.0 - smoothstep(
+          middleAa * 0.58,
+          middleAa * 1.48,
+          abs(middleCurrent - middleContourTarget)
+        );
+        float currentGate = smoothstep(
+          0.36,
+          0.70,
+          broadCurrent * 0.64 + macroPlasma * 0.36
+        );
+        middleFilament *= mix(0.18, 1.0, currentGate);
+        float fineContourTarget = 0.51 + (middleCurrent - 0.5) * 0.06;
+        float fineAa = clamp(fwidth(fineCurrent), 0.0025, 0.013);
+        float fineFilament = 1.0 - smoothstep(
+          fineAa * 0.44,
+          fineAa * 1.12,
+          abs(fineCurrent - fineContourTarget)
+        );
+        fineFilament *= smoothstep(0.40, 0.72, middleCurrent);
+        float microRidge = stellarRidgedFbm(
+          plasmaDirection * 34.0 - uPhase.yzx * 1.9
+        );
+        float microFilament = smoothstep(0.93, 1.06, microRidge);
+        float filamentNetwork = clamp(
+          middleFilament * 0.64
+            + fineFilament * 0.34
+            + microFilament * 0.12,
+          0.0,
+          1.0
+        );
+        float granules = stellarFbm(
+          plasmaDirection * 38.0 + uPhase.yzx * 2.3
+        );
+        float granuleDelta = clamp((granules - 0.52) * 0.72, -0.19, 0.20);
+        float mu = clamp(dot(normalize(vNormalView), normalize(vViewDirection)), 0.0, 1.0);
+        float limbEmission = pow(1.0 - mu, 2.1);
+        float coreEnvelope = pow(mu, 1.38);
+        float hotPocket = smoothstep(
+          0.54,
+          0.86,
+          broadCurrent * 0.72 + middleFilament * 0.24 + fineFilament * 0.12
+        );
+        float irregularCore = coreEnvelope
+          * (0.20 + hotPocket * 0.58 + filamentNetwork * 0.28);
+        float thermal = clamp(
+          0.28
+            + granuleDelta
+            + filamentNetwork * 0.34
+            + (macroPlasma - 0.5) * 0.20
+            + (broadCurrent - 0.5) * 0.14,
+          0.0,
+          1.0
+        );
+        vec3 coolSurface = mix(uBodyColor, vec3(0.18, 0.24, 0.54), 0.52);
+        vec3 midSurface = mix(uBodyColor, vec3(0.54, 0.66, 0.96), 0.72);
+        vec3 hotSurface = vec3(1.0, 0.998, 0.985);
+        vec3 radiance = coolSurface
+          * (0.56 + macroPlasma * 0.15 + granuleDelta * 0.18);
+        radiance += midSurface
+          * (0.10 + thermal * 0.46 + broadCurrent * 0.08);
+        radiance += hotSurface
+          * filamentNetwork
+          * (0.48 + thermal * 0.38);
+        radiance += mix(uBodyColor, vec3(0.74, 0.84, 1.0), 0.82)
+          * limbEmission
+          * (0.32 + filamentNetwork * 0.36);
+        float whiteHotCore = irregularCore
+          * (0.66 + thermal * 0.30 + filamentNetwork * 0.18);
+        radiance += hotSurface
+          * whiteHotCore
+          * (1.06 + uRepresentativeStrength * 0.04);
+        vec3 compactPoint = mix(uBodyColor, vec3(1.0), 0.88)
+          * (0.92 + mu * 0.30);
+        vec3 color = mix(compactPoint, radiance, uSurfaceBlend);
+        color = vec3(1.0) - exp(-max(color, vec3(0.0)) * 1.30);
+        gl_FragColor = vec4(color, uOpacity);
+      }
+    `,
+  });
+  const body = new THREE.Mesh(geometry, bodyMaterial);
+  body.renderOrder = 10;
+  body.frustumCulled = false;
+  object.add(body);
+
+  const energyVeilMaterial = new THREE.ShaderMaterial({
+    name: "agent-theory-paper-photosphere-energy-veil",
+    uniforms: {
+      uVeilColor: { value: new THREE.Color("#dce7ff") },
+      uRotationAxis: { value: surfaceProfile.rotationAxis.clone() },
+      uRotationAngle: { value: 0 },
+      uPhase: { value: surfaceProfile.phases.clone() },
+      uOpacity: { value: 0 },
+      uSurfaceBlend: { value: 0 },
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    side: THREE.FrontSide,
+    vertexShader: `
+      varying vec3 vLocalPosition;
+      varying vec3 vNormalView;
+      varying vec3 vViewDirection;
+
+      void main() {
+        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+        vLocalPosition = position * 2.0;
+        vNormalView = normalize(normalMatrix * normal);
+        vViewDirection = normalize(-viewPosition.xyz);
+        gl_Position = projectionMatrix * viewPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uVeilColor;
+      uniform vec3 uRotationAxis;
+      uniform float uRotationAngle;
+      uniform vec3 uPhase;
+      uniform float uOpacity;
+      uniform float uSurfaceBlend;
+      varying vec3 vLocalPosition;
+      varying vec3 vNormalView;
+      varying vec3 vViewDirection;
+
+      vec3 rotateAroundAxis(vec3 value, vec3 axis, float angle) {
+        float cosine = cos(angle);
+        float sine = sin(angle);
+        return value * cosine
+          + cross(axis, value) * sine
+          + axis * dot(axis, value) * (1.0 - cosine);
+      }
+
+      void main() {
+        float mu = clamp(
+          dot(normalize(vNormalView), normalize(vViewDirection)),
+          0.0,
+          1.0
+        );
+        vec3 direction = rotateAroundAxis(
+          normalize(vLocalPosition),
+          normalize(uRotationAxis),
+          uRotationAngle
+        );
+        float fineEnergy = 0.5 + 0.5 * sin(
+          dot(direction, vec3(31.7, 47.3, 23.9))
+            + sin(dot(direction, vec3(17.1, 29.4, 41.2)) + uPhase.x)
+        );
+        float coherentEnergy = 0.5 + 0.5 * sin(
+          dot(direction, vec3(7.9, 13.7, 19.3))
+            + sin(dot(direction, vec3(11.1, 5.4, 17.2)) + uPhase.y) * 1.35
+            + uPhase.z * 0.31
+        );
+        float hotPocket = smoothstep(
+          0.42,
+          0.82,
+          fineEnergy * 0.42 + coherentEnergy * 0.58
+        );
+        float innerHeat = pow(mu, 1.72) * (0.54 + hotPocket * 0.46);
+        float whiteCore = pow(mu, 4.8) * (0.42 + hotPocket * 0.58);
+        float alpha = uOpacity
+          * uSurfaceBlend
+          * (innerHeat * 0.082 + whiteCore * 0.16)
+          * (0.82 + fineEnergy * 0.16 + coherentEnergy * 0.14);
+        if (alpha < 0.001) discard;
+        vec3 veilRadiance = mix(
+          uVeilColor,
+          vec3(1.0, 0.998, 0.985),
+          clamp(whiteCore + hotPocket * 0.22, 0.0, 1.0)
+        );
+        gl_FragColor = vec4(
+          veilRadiance * (1.08 + whiteCore * 0.66 + hotPocket * 0.16),
+          alpha
+        );
+      }
+    `,
+  });
+  const energyVeil = new THREE.Mesh(geometry, energyVeilMaterial);
+  energyVeil.renderOrder = 11;
+  energyVeil.frustumCulled = false;
+  energyVeil.scale.setScalar(1.003);
+  object.add(energyVeil);
+
+  const silhouetteRingGeometry = new THREE.PlaneGeometry(1, 1, 1, 1);
+  const silhouetteRingMaterial = new THREE.ShaderMaterial({
+    name: "agent-theory-paper-photosphere-silhouette-ring",
+    uniforms: {
+      uRingColor: { value: new THREE.Color("#d7e4ff") },
+      uPhase: { value: surfaceProfile.phases.clone() },
+      uSphereCenterView: { value: new THREE.Vector3(0, 0, -1) },
+      uSphereRadius: { value: 0.5 },
+      uTanHalfFov: { value: Math.tan(THREE.MathUtils.degToRad(30)) },
+      uAspect: { value: 1 },
+      uProjectedCenterNdc: { value: new THREE.Vector2() },
+      uOpacity: { value: 0 },
+      uSurfaceBlend: { value: 0 },
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    side: THREE.FrontSide,
+    vertexShader: `
+      varying vec2 vNdc;
+      void main() {
+        vec4 clipPosition = projectionMatrix
+          * modelViewMatrix
+          * vec4(position, 1.0);
+        vNdc = clipPosition.xy / clipPosition.w;
+        gl_Position = clipPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uRingColor;
+      uniform vec3 uPhase;
+      uniform vec3 uSphereCenterView;
+      uniform float uSphereRadius;
+      uniform float uTanHalfFov;
+      uniform float uAspect;
+      uniform vec2 uProjectedCenterNdc;
+      uniform float uOpacity;
+      uniform float uSurfaceBlend;
+      varying vec2 vNdc;
+
+      void main() {
+        vec3 viewRay = normalize(vec3(
+          vNdc.x * uAspect * uTanHalfFov,
+          vNdc.y * uTanHalfFov,
+          -1.0
+        ));
+        float closestApproach = dot(viewRay, uSphereCenterView);
+        float tangentField = closestApproach * closestApproach
+          - (
+            dot(uSphereCenterView, uSphereCenterView)
+            - uSphereRadius * uSphereRadius
+          );
+        float fieldPixel = max(fwidth(tangentField), 0.0000001);
+        float fieldDistance = abs(tangentField);
+        float core = 1.0 - smoothstep(
+          fieldPixel * 0.30,
+          fieldPixel * 1.08,
+          fieldDistance
+        );
+        float shoulder = 1.0 - smoothstep(
+          fieldPixel * 0.68,
+          fieldPixel * 3.20,
+          fieldDistance
+        );
+        vec2 projectedDelta = vec2(
+          (vNdc.x - uProjectedCenterNdc.x) * uAspect,
+          vNdc.y - uProjectedCenterNdc.y
+        );
+        float angle = atan(projectedDelta.y, projectedDelta.x);
+        float stableVariation = 0.5 + 0.5 * sin(
+          angle * 3.0
+            + uPhase.x
+            + sin(angle * 5.0 + uPhase.y) * 0.32
+        );
+        float continuity = 0.94 + stableVariation * 0.06;
+        float alpha = uOpacity
+          * uSurfaceBlend
+          * (core * (0.62 + continuity * 0.08) + shoulder * 0.085);
+        if (alpha < 0.001) discard;
+        vec3 ringRadiance = mix(
+          uRingColor,
+          vec3(1.0, 0.995, 0.985),
+          0.72
+        );
+        gl_FragColor = vec4(
+          ringRadiance * (1.38 + core * 0.76 + stableVariation * 0.12),
+          alpha
+        );
+      }
+    `,
+  });
+  const silhouetteRing = new THREE.Mesh(
+    silhouetteRingGeometry,
+    silhouetteRingMaterial,
+  );
+  silhouetteRing.renderOrder = 12;
+  silhouetteRing.frustumCulled = false;
+  silhouetteRing.scale.set(1.2, 1.2, 1);
+  object.add(silhouetteRing);
+
+  const coronaGeometry = new THREE.SphereGeometry(0.5, 96, 64);
+  const coronaMaterial = new THREE.ShaderMaterial({
+    name: "agent-theory-paper-photosphere-corona",
+    uniforms: {
+      uCoronaColor: { value: new THREE.Color("#9ab7df") },
+      uRotationAxis: { value: surfaceProfile.rotationAxis.clone() },
+      uRotationAngle: { value: 0 },
+      uPhase: { value: surfaceProfile.phases.clone() },
+      uOpacity: { value: 0 },
+      uCoronaBlend: { value: 0 },
+      uCoronaStrength: { value: 0.105 },
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    side: THREE.FrontSide,
+    vertexShader: `
+      uniform vec3 uRotationAxis;
+      uniform float uRotationAngle;
+      uniform vec3 uPhase;
+      varying vec3 vLocalPosition;
+      varying vec3 vNormalView;
+      varying vec3 vViewDirection;
+      varying float vPlume;
+
+      vec3 rotateAroundAxis(vec3 value, vec3 axis, float angle) {
+        float cosine = cos(angle);
+        float sine = sin(angle);
+        return value * cosine
+          + cross(axis, value) * sine
+          + axis * dot(axis, value) * (1.0 - cosine);
+      }
+
+      float vertexHash(vec3 point) {
+        return fract(sin(dot(point, vec3(37.1, 91.7, 53.3))) * 43758.5453);
+      }
+
+      float vertexNoise(vec3 point) {
+        vec3 cell = floor(point);
+        vec3 local = fract(point);
+        local = local * local * (3.0 - 2.0 * local);
+        float n000 = vertexHash(cell);
+        float n100 = vertexHash(cell + vec3(1.0, 0.0, 0.0));
+        float n010 = vertexHash(cell + vec3(0.0, 1.0, 0.0));
+        float n110 = vertexHash(cell + vec3(1.0, 1.0, 0.0));
+        float n001 = vertexHash(cell + vec3(0.0, 0.0, 1.0));
+        float n101 = vertexHash(cell + vec3(1.0, 0.0, 1.0));
+        float n011 = vertexHash(cell + vec3(0.0, 1.0, 1.0));
+        float n111 = vertexHash(cell + vec3(1.0, 1.0, 1.0));
+        return mix(
+          mix(mix(n000, n100, local.x), mix(n010, n110, local.x), local.y),
+          mix(mix(n001, n101, local.x), mix(n011, n111, local.x), local.y),
+          local.z
+        );
+      }
+
+      float vertexFbm(vec3 point) {
+        float value = 0.0;
+        float amplitude = 0.58;
+        for (int octave = 0; octave < 3; octave += 1) {
+          value += vertexNoise(point) * amplitude;
+          point = point * 2.03 + vec3(5.4, 2.7, 8.1);
+          amplitude *= 0.46;
+        }
+        return value;
+      }
+
+      void main() {
+        vec3 direction = rotateAroundAxis(
+          normalize(position),
+          normalize(uRotationAxis),
+          uRotationAngle * 0.72
+        );
+        float flow = vertexFbm(direction * 4.8 + uPhase * 0.34);
+        vPlume = smoothstep(0.64, 0.91, flow);
+        float displacement = (flow - 0.5) * 0.012 + vPlume * vPlume * 0.082;
+        vec3 displacedPosition = position * (1.0 + displacement);
+        vec4 viewPosition = modelViewMatrix * vec4(displacedPosition, 1.0);
+        vLocalPosition = displacedPosition * 2.0;
+        vNormalView = normalize(normalMatrix * normal);
+        vViewDirection = normalize(-viewPosition.xyz);
+        gl_Position = projectionMatrix * viewPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uCoronaColor;
+      uniform vec3 uRotationAxis;
+      uniform float uRotationAngle;
+      uniform vec3 uPhase;
+      uniform float uOpacity;
+      uniform float uCoronaBlend;
+      uniform float uCoronaStrength;
+      varying vec3 vLocalPosition;
+      varying vec3 vNormalView;
+      varying vec3 vViewDirection;
+      varying float vPlume;
+
+      vec3 rotateAroundAxis(vec3 value, vec3 axis, float angle) {
+        float cosine = cos(angle);
+        float sine = sin(angle);
+        return value * cosine
+          + cross(axis, value) * sine
+          + axis * dot(axis, value) * (1.0 - cosine);
+      }
+
+      float coronaHash(vec3 point) {
+        return fract(sin(dot(point, vec3(41.7, 289.1, 113.5))) * 43758.5453);
+      }
+
+      float coronaNoise(vec3 point) {
+        vec3 cell = floor(point);
+        vec3 local = fract(point);
+        local = local * local * (3.0 - 2.0 * local);
+        float n000 = coronaHash(cell);
+        float n100 = coronaHash(cell + vec3(1.0, 0.0, 0.0));
+        float n010 = coronaHash(cell + vec3(0.0, 1.0, 0.0));
+        float n110 = coronaHash(cell + vec3(1.0, 1.0, 0.0));
+        float n001 = coronaHash(cell + vec3(0.0, 0.0, 1.0));
+        float n101 = coronaHash(cell + vec3(1.0, 0.0, 1.0));
+        float n011 = coronaHash(cell + vec3(0.0, 1.0, 1.0));
+        float n111 = coronaHash(cell + vec3(1.0, 1.0, 1.0));
+        return mix(
+          mix(mix(n000, n100, local.x), mix(n010, n110, local.x), local.y),
+          mix(mix(n001, n101, local.x), mix(n011, n111, local.x), local.y),
+          local.z
+        );
+      }
+
+      float coronaFbm(vec3 point) {
+        float value = 0.0;
+        float amplitude = 0.58;
+        for (int octave = 0; octave < 4; octave += 1) {
+          value += coronaNoise(point) * amplitude;
+          point = point * 2.07 + vec3(3.1, 7.7, 5.4);
+          amplitude *= 0.46;
+        }
+        return value;
+      }
+
+      void main() {
+        float mu = clamp(dot(normalize(vNormalView), normalize(vViewDirection)), 0.0, 1.0);
+        vec3 direction = rotateAroundAxis(
+          normalize(vLocalPosition),
+          normalize(uRotationAxis),
+          uRotationAngle * 0.72
+        );
+        float rim = pow(1.0 - mu, 1.82);
+        float broadFlow = coronaFbm(direction * 5.4 + uPhase * 0.42);
+        float fineFlow = coronaFbm(direction * 13.0 - uPhase.yzx * 0.68);
+        float filament = smoothstep(0.56, 0.88, broadFlow + fineFlow * 0.16);
+        float plume = max(
+          vPlume,
+          smoothstep(0.62, 0.90, broadFlow)
+            * smoothstep(0.34, 0.84, fineFlow)
+        );
+        float alpha = uOpacity
+          * uCoronaBlend
+          * uCoronaStrength
+          * rim
+          * (0.08 + filament * 0.70 + plume * 1.62);
+        if (alpha < 0.001) discard;
+        vec3 coronaRadiance = mix(
+          uCoronaColor,
+          vec3(0.78, 0.84, 1.0),
+          0.56 + plume * 0.24
+        );
+        gl_FragColor = vec4(
+          coronaRadiance * (1.18 + rim * 0.66 + plume * 0.72),
+          alpha
+        );
+      }
+    `,
+  });
+  const corona = new THREE.Mesh(coronaGeometry, coronaMaterial);
+  corona.renderOrder = 13;
+  corona.frustumCulled = false;
+  corona.scale.setScalar(1.038);
+  object.add(corona);
+
+  const viewPosition = new THREE.Vector3();
+  const cameraWorldQuaternion = new THREE.Quaternion();
+  const objectWorldQuaternion = new THREE.Quaternion();
+  const sphereWorldPosition = new THREE.Vector3();
+  const sphereWorldScale = new THREE.Vector3();
+  const sphereCenterView = new THREE.Vector3();
+  const projectedSphereCenterNdc = new THREE.Vector3();
+  return {
+    object,
+    hitObject: body,
+    configure: (configuration: PaperInspectionVisualConfiguration) => {
+      if (configuration.paperId !== currentPaperId) {
+        currentPaperId = configuration.paperId;
+        surfaceProfile = createPaperSurfaceProfile(configuration.paperId);
+        bodyMaterial.uniforms.uRotationAxis.value.copy(surfaceProfile.rotationAxis);
+        bodyMaterial.uniforms.uPhase.value.copy(surfaceProfile.phases);
+        energyVeilMaterial.uniforms.uRotationAxis.value.copy(surfaceProfile.rotationAxis);
+        energyVeilMaterial.uniforms.uPhase.value.copy(surfaceProfile.phases);
+        silhouetteRingMaterial.uniforms.uPhase.value.copy(surfaceProfile.phases);
+        coronaMaterial.uniforms.uRotationAxis.value.copy(surfaceProfile.rotationAxis);
+        coronaMaterial.uniforms.uPhase.value.copy(surfaceProfile.phases);
+        rotationAngle = (
+          stableHash(`${configuration.paperId}:agent-photosphere-phase`) / 4294967295
+        ) * Math.PI * 2;
+        rotationSpeed = THREE.MathUtils.lerp(
+          0.032,
+          0.048,
+          stableHash(`${configuration.paperId}:agent-photosphere-speed`) / 4294967295,
+        );
+        lastVisualTimeSeconds = Number.NaN;
+      }
+      const semantic = new THREE.Color(configuration.bodyColor || "#9fb9db");
+      const hsl = { h: 0, s: 0, l: 0 };
+      semantic.getHSL(hsl);
+      semantic.setHSL(
+        hsl.h,
+        THREE.MathUtils.clamp(hsl.s * 0.50 + 0.16, 0.16, 0.30),
+        THREE.MathUtils.clamp(hsl.l * 0.52 + 0.16, 0.34, 0.52),
+      );
+      semantic.lerp(new THREE.Color("#7897c8"), 0.30);
+      bodyMaterial.uniforms.uBodyColor.value.copy(semantic);
+      energyVeilMaterial.uniforms.uVeilColor.value.copy(
+        semantic.clone().lerp(new THREE.Color("#edf3ff"), 0.82),
+      );
+      silhouetteRingMaterial.uniforms.uRingColor.value.copy(
+        semantic.clone().lerp(new THREE.Color("#e1e9ff"), 0.76),
+      );
+      const coronaColor = semantic.clone().lerp(
+        new THREE.Color(configuration.haloColor || "#b6c8ff"),
+        0.54,
+      );
+      coronaMaterial.uniforms.uCoronaColor.value.copy(coronaColor);
+      bodyMaterial.uniforms.uRepresentativeStrength.value = configuration.representative
+        ? 1
+        : 0;
+      coronaMaterial.uniforms.uCoronaStrength.value = configuration.representative
+        ? 0.16
+        : 0.14;
+    },
+    setVisual: ({
+      worldPosition,
+      camera,
+      viewportWidth,
+      viewportHeight,
+      inspectionBlend,
+      worldDiameter,
+      compactDiameter,
+      timeSeconds,
+      motionStrength,
+    }: PaperInspectionVisualFrame) => {
+      if (
+        !worldPosition
+        || viewportWidth < 1
+        || viewportHeight < 1
+        || inspectionBlend <= 0.002
+      ) {
+        object.visible = false;
+        projectedDiameter = 0;
+        viewportRatio = 0;
+        surfaceBlend = 0;
+        coronaBlend = 0;
+        handoffDiameterRatio = 1;
+        return;
+      }
+      viewPosition.copy(worldPosition).applyMatrix4(camera.matrixWorldInverse);
+      const viewDepth = -viewPosition.z;
+      if (viewDepth <= camera.near) {
+        object.visible = false;
+        projectedDiameter = 0;
+        viewportRatio = 0;
+        return;
+      }
+      const effectiveFov = THREE.MathUtils.degToRad(camera.getEffectiveFOV());
+      const visibleWorldHeight = 2 * viewDepth * Math.tan(effectiveFov * 0.5);
+      const inspectionWorldDiameter = Math.max(0.0001, worldDiameter);
+      projectedDiameter = inspectionWorldDiameter
+        * viewportHeight
+        / Math.max(0.0001, visibleWorldHeight);
+      viewportRatio = projectedDiameter / Math.max(1, viewportHeight);
+      handoffDiameterRatio = projectedDiameter / Math.max(0.0001, compactDiameter);
+      if (photosphereLodActive) {
+        photosphereLodActive = projectedDiameter > APP17_AGENT_PAPER_PHOTOSPHERE_LOD_EXIT_PX;
+      } else {
+        photosphereLodActive = projectedDiameter >= APP17_AGENT_PAPER_PHOTOSPHERE_LOD_ENTER_PX;
+      }
+      surfaceBlend = photosphereLodActive
+        ? smootherStep(THREE.MathUtils.clamp(
+          (projectedDiameter - APP17_AGENT_PAPER_PHOTOSPHERE_LOD_EXIT_PX)
+            / (
+              APP17_AGENT_PAPER_PHOTOSPHERE_LOD_ENTER_PX
+              - APP17_AGENT_PAPER_PHOTOSPHERE_LOD_EXIT_PX
+            ),
+          0,
+          1,
+        ))
+        : 0;
+      coronaBlend = smootherStep(THREE.MathUtils.clamp(
+        (projectedDiameter - 28) / 52,
+        0,
+        1,
+      ));
+      if (Number.isFinite(lastVisualTimeSeconds)) {
+        const elapsed = THREE.MathUtils.clamp(timeSeconds - lastVisualTimeSeconds, 0, 0.1);
+        rotationAngle += elapsed
+          * rotationSpeed
+          * THREE.MathUtils.clamp(motionStrength, 0, 1);
+      }
+      lastVisualTimeSeconds = timeSeconds;
+      object.position.copy(worldPosition);
+      object.quaternion.identity();
+      object.scale.setScalar(inspectionWorldDiameter);
+      body.scale.setScalar(1);
+      energyVeil.scale.setScalar(1.003);
+      corona.scale.setScalar(1.038);
+      object.updateWorldMatrix(true, true);
+      camera.getWorldQuaternion(cameraWorldQuaternion);
+      object.getWorldQuaternion(objectWorldQuaternion);
+      silhouetteRing.quaternion
+        .copy(objectWorldQuaternion.invert())
+        .multiply(cameraWorldQuaternion);
+      body.getWorldPosition(sphereWorldPosition);
+      body.getWorldScale(sphereWorldScale);
+      sphereCenterView
+        .copy(sphereWorldPosition)
+        .applyMatrix4(camera.matrixWorldInverse);
+      const sphereRadius = Math.max(
+        sphereWorldScale.x,
+        sphereWorldScale.y,
+        sphereWorldScale.z,
+      ) * 0.5;
+      const sphereDistance = Math.max(
+        sphereRadius + 0.0001,
+        sphereCenterView.length(),
+      );
+      const silhouetteProjectionCorrection = sphereDistance / Math.sqrt(
+        Math.max(
+          0.000001,
+          sphereDistance * sphereDistance - sphereRadius * sphereRadius,
+        ),
+      );
+      const silhouetteQuadScale = THREE.MathUtils.clamp(
+        silhouetteProjectionCorrection * 1.16,
+        1.16,
+        1.6,
+      );
+      silhouetteRing.scale.set(
+        silhouetteQuadScale,
+        silhouetteQuadScale,
+        1,
+      );
+      projectedSphereCenterNdc.copy(sphereWorldPosition).project(camera);
+      silhouetteRingMaterial.uniforms.uSphereCenterView.value.copy(
+        sphereCenterView,
+      );
+      silhouetteRingMaterial.uniforms.uSphereRadius.value = sphereRadius;
+      silhouetteRingMaterial.uniforms.uTanHalfFov.value = Math.tan(
+        effectiveFov * 0.5,
+      );
+      silhouetteRingMaterial.uniforms.uAspect.value = camera.aspect;
+      silhouetteRingMaterial.uniforms.uProjectedCenterNdc.value.set(
+        projectedSphereCenterNdc.x,
+        projectedSphereCenterNdc.y,
+      );
+      bodyMaterial.uniforms.uRotationAngle.value = rotationAngle;
+      bodyMaterial.uniforms.uOpacity.value = inspectionBlend;
+      bodyMaterial.uniforms.uSurfaceBlend.value = surfaceBlend;
+      bodyMaterial.depthWrite = inspectionBlend >= 0.985;
+      energyVeilMaterial.uniforms.uRotationAngle.value = rotationAngle;
+      energyVeilMaterial.uniforms.uOpacity.value = inspectionBlend;
+      energyVeilMaterial.uniforms.uSurfaceBlend.value = surfaceBlend;
+      silhouetteRingMaterial.uniforms.uOpacity.value = inspectionBlend;
+      silhouetteRingMaterial.uniforms.uSurfaceBlend.value = surfaceBlend;
+      coronaMaterial.uniforms.uRotationAngle.value = rotationAngle;
+      coronaMaterial.uniforms.uOpacity.value = inspectionBlend;
+      coronaMaterial.uniforms.uCoronaBlend.value = coronaBlend;
+      body.visible = inspectionBlend > 0.002;
+      energyVeil.visible = inspectionBlend * surfaceBlend > 0.002;
+      silhouetteRing.visible = inspectionBlend * surfaceBlend > 0.002;
+      corona.visible = inspectionBlend * coronaBlend > 0.002;
+      object.visible = true;
+      object.updateMatrixWorld(true);
+    },
+    getVisualState: () => ({
+      projectedDiameter,
+      viewportRatio,
+      drawCalls: object.visible
+        ? Number(body.visible)
+          + Number(energyVeil.visible)
+          + Number(silhouetteRing.visible)
+          + Number(corona.visible)
+        : 0,
+      bloomDrawCalls: 0,
+      energyDetailBlend: 0,
+      energyBloomOpacity: 0,
+      energyWispCount: 0,
+      energyCarrierScale: 1,
+      energyCloseupCompactness: 0,
+      energyVisibleRadius: 0,
+      energyBodyCoreDiameter: projectedDiameter,
+      energyBodyCoreBlend: surfaceBlend,
+      energyFresnelWidth: 1.25,
+      energyOuterGlowDiameter: projectedDiameter * 1.14,
+      energyOuterGlowMonotonic: true,
+      energyMicroCoreDiameter: 0,
+      energyMicroCoreBlend: 0,
+      energySoftCoreAttenuation: 1,
+      energyMicroCoreBrightness: 0,
+      ordinarySurfaceMorph: surfaceBlend,
+      ordinaryAtmosphereMorph: coronaBlend,
+      handoffDiameterRatio,
+      representativeCarrierEdgeLeak: 0,
+    }),
+    dispose: () => {
+      geometry.dispose();
+      silhouetteRingGeometry.dispose();
+      coronaGeometry.dispose();
+      bodyMaterial.dispose();
+      energyVeilMaterial.dispose();
+      silhouetteRingMaterial.dispose();
+      coronaMaterial.dispose();
     },
   };
 }
@@ -10033,28 +16124,33 @@ function createSystemStar(hotspot: App17GalaxyHotspotPoint) {
         float fineRidge = pow(max(0.0, 1.0 - abs(fineStructure * 2.0 - 1.0)), 4.0);
         float microRidge = pow(max(0.0, 1.0 - abs(microStructure * 2.0 - 1.0)), 5.0);
         float networkActivity = ((fineRidge - 0.34) * 0.055 + (microRidge - 0.28) * 0.035) * uSurfaceDetailBlend;
-        float activity = broadActivity * 0.26
-          + flowingActivity * 0.18
-          + (fineStructure - 0.5) * mix(0.025, 0.075, uSurfaceDetailBlend)
-          + (microStructure - 0.5) * 0.045 * uSurfaceDetailBlend
+        float activity = broadActivity * 0.30
+          + flowingActivity * 0.20
+          + (fineStructure - 0.5) * mix(0.018, 0.062, uSurfaceDetailBlend)
+          + (microStructure - 0.5) * 0.038 * uSurfaceDetailBlend
           + networkActivity;
         float cellNetwork = smoothstep(0.52, 0.84, fineRidge) * uSurfaceDetailBlend;
         float hotRegion = smoothstep(0.17, 0.3, activity);
-        float limb = mix(0.52, 1.0, pow(facing, 0.38));
+        float limb = mix(0.38, 1.0, pow(facing, 0.46));
         float centerHeat = pow(facing, 1.45);
         vec3 highTemperature = vec3(1.0, 0.955, 0.86);
         float fieldLuminance = dot(uColor, vec3(0.2126, 0.7152, 0.0722));
-        vec3 restrainedField = mix(vec3(fieldLuminance), uColor, 0.7);
+        vec3 restrainedField = mix(vec3(fieldLuminance), uColor, 0.78);
         vec3 chromaticBody = mix(
-          restrainedField * 0.72,
+          restrainedField * 0.76,
           highTemperature,
-          0.42 + hotRegion * 0.1
+          0.28 + hotRegion * 0.06
         );
-        vec3 body = chromaticBody * (0.62 + limb * 0.35 + activity * 0.86 + networkActivity * 0.18);
-        body *= 1.0 - cellNetwork * uSurfaceDetailBlend * 0.11;
-        body = mix(body, highTemperature * (0.96 + activity * 0.1), hotRegion * 0.07);
-        body = mix(body, highTemperature, centerHeat * 0.08);
-        body = vec3(1.0) - exp(-max(body, vec3(0.0)) * 1.5);
+        vec3 body = chromaticBody
+          * (0.56 + limb * 0.39 + activity * 0.72 + networkActivity * 0.14);
+        body *= 1.0 - cellNetwork * uSurfaceDetailBlend * 0.16;
+        body = mix(
+          body,
+          highTemperature * (0.93 + activity * 0.08),
+          hotRegion * 0.045
+        );
+        body = mix(body, highTemperature, centerHeat * 0.035);
+        body = vec3(1.0) - exp(-max(body, vec3(0.0)) * 1.32);
         float bodyOpacity = smoothstep(0.04, 0.92, uBodyBlend);
         float alpha = uSceneOpacity * bodyOpacity;
         if (alpha < 0.002) discard;
@@ -10141,10 +16237,14 @@ function createSystemStar(hotspot: App17GalaxyHotspotPoint) {
             ? "near"
             : "surface";
       const coreCssDiameter = THREE.MathUtils.clamp(nextProjectedDiameter * 0.18, 10, 24);
-      const nextCoronaCssExtension = THREE.MathUtils.clamp(nextProjectedDiameter * 0.14, 10, 52);
+      const nextCoronaCssExtension = THREE.MathUtils.clamp(
+        nextProjectedDiameter * 0.095,
+        7,
+        34,
+      );
       const spriteCssSize = Math.max(
-        coreCssDiameter + nextCoronaCssExtension * 2.1,
-        nextProjectedDiameter + nextCoronaCssExtension * 2.1,
+        coreCssDiameter + nextCoronaCssExtension * 1.8,
+        nextProjectedDiameter + nextCoronaCssExtension * 1.8,
       );
       const bloomSpriteCssSize = coreCssDiameter * 2.8;
       const changed = Math.abs(nextProjectedDiameter - projectedDiameter) > 0.05
@@ -10594,17 +16694,27 @@ function createSystemImpostorMaterial(color: THREE.Color, profile: GalaxyCoronaP
           + sectorB * uSectorOpacities.y
           + sectorC * uSectorOpacities.z
           + sectorD * uSectorOpacities.w;
-        float fineContour = 0.96 + sin(angle * 5.0 + seedAngle * 1.7 - coronaRotation * 0.45) * 0.04;
+        float fineContour = 0.91
+          + sin(angle * 5.0 + seedAngle * 1.7 - coronaRotation * 0.45) * 0.055
+          + sin(angle * 3.0 - seedAngle * 0.8 + coronaRotation * 0.22) * 0.035;
         float activeCoverage = smoothstep(0.015, 0.14, extensionField);
         float coronaRadius = sourceRadius + uCoronaCssExtension * extensionField * fineContour;
         float coronaMask = (1.0 - smoothstep(sourceRadius * 0.99, coronaRadius, radiusPx)) * activeCoverage;
-        float innerCorona = exp(-outsideDistance / max(1.0, uCoronaCssExtension * 0.14)) * uInnerHaloStrength * activeCoverage;
-        float streamerCorona = exp(-outsideDistance / max(1.0, uCoronaCssExtension * 0.38)) * streamerField;
+        float innerCorona = exp(
+          -outsideDistance / max(1.0, uCoronaCssExtension * 0.10)
+        ) * uInnerHaloStrength * activeCoverage;
+        float streamerCorona = exp(
+          -outsideDistance / max(1.0, uCoronaCssExtension * 0.26)
+        ) * streamerField;
         float corona = coronaMask * (innerCorona + streamerCorona);
         float core = exp(-radiusPx * radiusPx / max(1.0, coreRadius * coreRadius * 0.42));
         float innerGlow = exp(-radiusPx * radiusPx / max(1.0, coreRadius * coreRadius * 2.6));
+        float coronaEnergy = min(
+          0.12,
+          corona * uStrength * uCoronaBlend * 0.72
+        );
         float alpha = uFarCoreBlend * (core * 0.82 + innerGlow * 0.2)
-          + corona * uStrength * uCoronaBlend;
+          + coronaEnergy;
         alpha *= uSceneOpacity;
         if (alpha < 0.0015) discard;
         vec3 highTemperature = vec3(0.92, 0.86, 0.76);
@@ -11025,6 +17135,167 @@ function createAgentTheoryDecorativeLayer(
   };
 }
 
+function createAgentTheoryDynamicFocusLayer(
+  pixelRatio: number,
+  perimeterProfile: AgentTheoryPerimeterProfileV1,
+) {
+  const slotCount = 32;
+  const positions = new Float32Array(slotCount * 3);
+  const colors = new Float32Array(slotCount * 3);
+  const sizes = new Float32Array(slotCount);
+  const alphas = new Float32Array(slotCount);
+  const roles = new Float32Array(slotCount);
+  const geometry = new THREE.BufferGeometry();
+  const positionAttribute = new THREE.BufferAttribute(positions, 3);
+  const colorAttribute = new THREE.BufferAttribute(colors, 3);
+  const sizeAttribute = new THREE.BufferAttribute(sizes, 1);
+  const alphaAttribute = new THREE.BufferAttribute(alphas, 1);
+  const roleAttribute = new THREE.BufferAttribute(roles, 1);
+  geometry.setAttribute("position", positionAttribute);
+  geometry.setAttribute("color", colorAttribute);
+  geometry.setAttribute("pointSize", sizeAttribute);
+  geometry.setAttribute("pointAlpha", alphaAttribute);
+  geometry.setAttribute("focusRole", roleAttribute);
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: pixelRatio },
+    },
+    transparent: true,
+    depthWrite: true,
+    depthTest: true,
+    blending: THREE.NormalBlending,
+    toneMapped: false,
+    vertexShader: `
+      attribute vec3 color;
+      attribute float pointSize;
+      attribute float pointAlpha;
+      attribute float focusRole;
+      uniform float uPixelRatio;
+      varying vec3 vColor;
+      varying float vAlpha;
+      varying float vRole;
+      void main() {
+        vColor = color;
+        vAlpha = pointAlpha;
+        vRole = focusRole;
+        gl_PointSize = max(1.0, pointSize) * uPixelRatio;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vAlpha;
+      varying float vRole;
+      void main() {
+        if (vAlpha <= 0.001) discard;
+        vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(point);
+        if (radius >= 1.0) discard;
+        float aa = max(fwidth(radius), 0.008);
+        float core = exp(-radius * radius * 16.0);
+        float pin = 1.0 - smoothstep(
+          0.16,
+          0.16 + aa,
+          max(abs(point.x), abs(point.y))
+        );
+        float energy = max(core, pin * 0.78);
+        vec3 hotCore = mix(vColor, vec3(0.998, 0.998, 1.0), energy * 0.88);
+        float alpha = min(1.0, vAlpha * energy * (vRole > 2.5 ? 1.16 : 1.0));
+        if (alpha <= 0.006) discard;
+        gl_FragColor = vec4(hotCore, alpha);
+      }
+    `,
+  });
+  material.name = "AgentTheoryDynamicFocusCore";
+  const object = new THREE.Points(geometry, material);
+  object.frustumCulled = false;
+  object.renderOrder = 5;
+  const slotById = new Map<string, number>();
+  const idBySlot = new Array<string>(slotCount).fill("");
+  const color = new THREE.Color();
+  const center = new THREE.Vector3().fromArray(perimeterProfile.center);
+  const axisA = new THREE.Vector3().fromArray(perimeterProfile.principalAxes[0]);
+  const axisB = new THREE.Vector3().fromArray(perimeterProfile.principalAxes[1]);
+  const axisC = new THREE.Vector3().fromArray(perimeterProfile.principalAxes[2]);
+
+  const assignSlot = (entityId: string) => {
+    const existing = slotById.get(entityId);
+    if (existing !== undefined) return existing;
+    const start = stableHash(`agent-theory-dynamic-focus:${entityId}`) % slotCount;
+    for (let probe = 0; probe < slotCount; probe += 1) {
+      const slot = (start + probe) % slotCount;
+      if (idBySlot[slot]) continue;
+      idBySlot[slot] = entityId;
+      slotById.set(entityId, slot);
+      return slot;
+    }
+    return -1;
+  };
+
+  const setEntities = (
+    entities: AgentTheoryFocusVisualState["dynamicEntities"],
+    blend: number,
+  ) => {
+    alphas.fill(0);
+    roles.fill(0);
+    const activeIds = new Set(entities.map((entity) => entity.entityId));
+    Array.from(slotById.entries()).forEach(([entityId, slot]) => {
+      if (activeIds.has(entityId)) return;
+      slotById.delete(entityId);
+      idBySlot[slot] = "";
+    });
+    entities.slice(0, slotCount).forEach((entity) => {
+      const slot = assignSlot(entity.entityId);
+      if (slot < 0) return;
+      const hash = stableHash(`agent-theory-frontier:${entity.entityId}`);
+      const angle = (hash / 4294967296) * Math.PI * 2;
+      const radius = perimeterProfile.medianRadius * (
+        1.03 + ((hash >>> 8) % 1000) / 1000 * 0.08
+      );
+      const vertical = (
+        (((hash >>> 18) % 1000) / 1000) - 0.5
+      ) * perimeterProfile.verticalExtent * 0.42;
+      const position = center.clone()
+        .addScaledVector(axisA, Math.cos(angle) * radius)
+        .addScaledVector(axisB, Math.sin(angle) * radius)
+        .addScaledVector(axisC, vertical);
+      position.toArray(positions, slot * 3);
+      color.set(entity.color ?? "#cdd7e4");
+      const hsl = { h: 0, s: 0, l: 0 };
+      color.getHSL(hsl);
+      color.setHSL(hsl.h, Math.min(0.16, hsl.s * 0.35 + 0.025), 0.82);
+      color.toArray(colors, slot * 3);
+      roles[slot] = entity.role;
+      sizes[slot] = entity.role === 3 ? 4.8 : entity.role === 2 ? 3.7 : 3.1;
+      const energy = entity.role === 3 ? 0.94 : entity.role === 2 ? 0.76 : 0.66;
+      alphas[slot] = THREE.MathUtils.clamp(blend, 0, 1) * energy;
+    });
+    positionAttribute.needsUpdate = true;
+    colorAttribute.needsUpdate = true;
+    sizeAttribute.needsUpdate = true;
+    alphaAttribute.needsUpdate = true;
+    roleAttribute.needsUpdate = true;
+  };
+
+  return {
+    object,
+    setEntities,
+    getPosition: (entityId: string) => {
+      const slot = slotById.get(entityId);
+      if (slot === undefined) return null;
+      return new THREE.Vector3(
+        positions[slot * 3],
+        positions[slot * 3 + 1],
+        positions[slot * 3 + 2],
+      );
+    },
+    dispose: () => {
+      geometry.dispose();
+      material.dispose();
+    },
+  };
+}
+
 function createPaperLayer(
   papers: App17ParticlePoint[],
   pixelRatio: number,
@@ -11044,6 +17315,10 @@ function createPaperLayer(
   const stellarSeeds = new Float32Array(count);
   const stellarRayAngles = new Float32Array(count);
   const stellarRayStrengths = new Float32Array(count);
+  const agentFocusRoles = new Float32Array(count);
+  const agentLodWeights = new Float32Array(count);
+  const agentLodStartWeights = new Float32Array(count);
+  const agentLodTargetWeights = new Float32Array(count);
   const topicKeys = papers.map((paper) => paper.topicKey);
   const paperIds = papers.map((paper) => paper.paperId);
   const color = new THREE.Color();
@@ -11078,6 +17353,9 @@ function createPaperLayer(
     stellarRayStrengths[index] = rayEligibleIds.has(paper.paperId)
       ? 0.28 + paper.visualBrightnessVariation * 0.12
       : 0;
+    agentLodWeights[index] = visualProfile === "agent-theory" ? 0 : 1;
+    agentLodStartWeights[index] = agentLodWeights[index];
+    agentLodTargetWeights[index] = agentLodWeights[index];
   });
 
   const geometry = new THREE.BufferGeometry();
@@ -11105,18 +17383,56 @@ function createPaperLayer(
     "stellarRayStrength",
     new THREE.BufferAttribute(stellarRayStrengths, 1),
   );
+  const agentFocusRoleAttribute = new THREE.BufferAttribute(agentFocusRoles, 1);
+  geometry.setAttribute("agentFocusRole", agentFocusRoleAttribute);
+  const agentLodWeightAttribute = new THREE.BufferAttribute(agentLodWeights, 1);
+  geometry.setAttribute("agentLodWeight", agentLodWeightAttribute);
 
-  const material = createPaperMaterial(pixelRatio, kind, visualProfile);
-  const object = new THREE.Points(geometry, material);
-  object.frustumCulled = false;
+  const coreMaterial = createPaperMaterial(
+    pixelRatio,
+    kind,
+    visualProfile,
+    "core",
+  );
+  const coreObject = new THREE.Points(geometry, coreMaterial);
+  coreObject.frustumCulled = false;
+  coreObject.renderOrder = 1;
+  const opticalMaterial = visualProfile === "agent-theory"
+    ? createPaperMaterial(pixelRatio, kind, visualProfile, "optical")
+    : null;
+  const opticalObject = opticalMaterial
+    ? new THREE.Points(geometry, opticalMaterial)
+    : null;
+  if (opticalObject) {
+    opticalObject.frustumCulled = false;
+    opticalObject.renderOrder = 2;
+  }
+  const object = new THREE.Group();
+  object.add(coreObject);
+  if (opticalObject) object.add(opticalObject);
+  const materials = opticalMaterial
+    ? [coreMaterial, opticalMaterial]
+    : [coreMaterial];
+  let agentLodTransitionPausedAt = Number.NEGATIVE_INFINITY;
+  const agentLodTransitionStartTimes = new Float64Array(count);
+  const agentLodTransitionDurations = new Float32Array(count);
+  const agentLodTransitionDelays = new Float32Array(count);
+  const agentLodTransitionActiveMask = new Uint8Array(count);
+  const agentLodDesiredMask = new Uint8Array(count);
+  let agentLodTransitionActiveCount = 0;
   let selectedTopicKey = "";
   return {
     object,
+    pickObject: coreObject,
     setOpacity: (opacity: number) => {
-      material.uniforms.uSceneOpacity.value = opacity;
+      materials.forEach((material) => {
+        material.uniforms.uSceneOpacity.value = opacity;
+      });
     },
     setExplorationSelection: (topicKey: string, focusPosition: THREE.Vector3) => {
-      material.uniforms.uFocusPosition.value.copy(focusPosition);
+      materials.forEach((material) => {
+        material.uniforms.uFocusPosition.value.copy(focusPosition);
+      });
       if (selectedTopicKey === topicKey) return;
       selectedTopicKey = topicKey;
       for (let index = 0; index < selectedMasks.length; index += 1) {
@@ -11125,8 +17441,14 @@ function createPaperLayer(
       selectedMaskAttribute.needsUpdate = true;
     },
     setExplorationProgress: (progress: number, selectedTopicOpacity: number) => {
-      material.uniforms.uExplorationProgress.value = progress;
-      material.uniforms.uSelectedTopicOpacity.value = THREE.MathUtils.clamp(selectedTopicOpacity, 0, 1);
+      materials.forEach((material) => {
+        material.uniforms.uExplorationProgress.value = progress;
+        material.uniforms.uSelectedTopicOpacity.value = THREE.MathUtils.clamp(
+          selectedTopicOpacity,
+          0,
+          1,
+        );
+      });
     },
     setTheoryFarTransitionModes: (modeByTopic: Map<string, "retreat" | "crossfade">) => {
       for (let index = 0; index < crossfadeMasks.length; index += 1) {
@@ -11135,19 +17457,217 @@ function createPaperLayer(
       crossfadeMaskAttribute.needsUpdate = true;
     },
     setFarRotation: (rotationAngle: number) => {
-      material.uniforms.uFarRotationAngle.value = rotationAngle;
+      materials.forEach((material) => {
+        material.uniforms.uFarRotationAngle.value = rotationAngle;
+      });
     },
     setOverviewFarBlend: (blend: number) => {
-      material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(blend, 0, 1);
+      materials.forEach((material) => {
+        material.uniforms.uOverviewFarBlend.value = THREE.MathUtils.clamp(
+          blend,
+          0,
+          1,
+        );
+      });
     },
     setSystemDepthCue: (centerViewDepth: number, depthRange: number, strength: number) => {
-      material.uniforms.uSystemCenterViewDepth.value = centerViewDepth;
-      material.uniforms.uSystemDepthRange.value = Math.max(0.001, depthRange);
-      material.uniforms.uSystemDepthStrength.value = THREE.MathUtils.clamp(strength, 0, 1);
+      materials.forEach((material) => {
+        material.uniforms.uSystemCenterViewDepth.value = centerViewDepth;
+        material.uniforms.uSystemDepthRange.value = Math.max(0.001, depthRange);
+        material.uniforms.uSystemDepthStrength.value = THREE.MathUtils.clamp(
+          strength,
+          0,
+          1,
+        );
+      });
     },
     setAgentDepthRange: (nearDepth: number, farDepth: number) => {
-      material.uniforms.uAgentDepthNear.value = nearDepth;
-      material.uniforms.uAgentDepthFar.value = Math.max(nearDepth + 0.001, farDepth);
+      materials.forEach((material) => {
+        material.uniforms.uAgentDepthNear.value = nearDepth;
+        material.uniforms.uAgentDepthFar.value = Math.max(
+          nearDepth + 0.001,
+          farDepth,
+        );
+      });
+    },
+    setViewportHeight: (viewportHeight: number) => {
+      materials.forEach((material) => {
+        material.uniforms.uViewportHeight.value = Math.max(1, viewportHeight);
+      });
+    },
+    setAgentFocusVisual: (
+      primaryId: string | undefined,
+      evidenceIds: ReadonlySet<string>,
+      contextIds: ReadonlySet<string>,
+      blend: number,
+      backgroundBlend = blend,
+    ) => {
+      if (visualProfile !== "agent-theory") return;
+      const safeBlend = THREE.MathUtils.clamp(blend, 0, 1);
+      let changed = false;
+      for (let index = 0; index < paperIds.length; index += 1) {
+        const paperId = paperIds[index];
+        const nextRole = paperId === primaryId
+          ? 3
+          : evidenceIds.has(paperId)
+            ? 2
+            : contextIds.has(paperId)
+              ? 1
+              : 0;
+        if (agentFocusRoles[index] === nextRole) continue;
+        agentFocusRoles[index] = nextRole;
+        changed = true;
+      }
+      if (changed) agentFocusRoleAttribute.needsUpdate = true;
+      materials.forEach((material) => {
+        material.uniforms.uAgentFocusBlend.value = safeBlend;
+        material.uniforms.uAgentFocusBackgroundBlend.value =
+          THREE.MathUtils.clamp(backgroundBlend, 0, 1);
+      });
+    },
+    setAgentLodSelection: (
+      selectedIndices: readonly number[],
+      nowMs: number,
+      immediate = false,
+      options?: {
+        incomingDurationMs?: number;
+        retiringDurationMs?: number;
+        retiringDelayMs?: number;
+      },
+    ) => {
+      if (visualProfile !== "agent-theory") return;
+      agentLodDesiredMask.fill(0);
+      selectedIndices.forEach((index) => {
+        if (index >= 0 && index < count) agentLodDesiredMask[index] = 1;
+      });
+      if (immediate) {
+        for (let index = 0; index < count; index += 1) {
+          const desired = agentLodDesiredMask[index];
+          agentLodTargetWeights[index] = desired;
+          agentLodWeights[index] = desired;
+          agentLodStartWeights[index] = desired;
+          agentLodTransitionActiveMask[index] = 0;
+        }
+        agentLodTransitionActiveCount = 0;
+        agentLodTransitionPausedAt = Number.NEGATIVE_INFINITY;
+        agentLodWeightAttribute.needsUpdate = true;
+        return;
+      }
+      const incomingDurationMs = Math.max(
+        1,
+        options?.incomingDurationMs ?? 90,
+      );
+      const retiringDurationMs = Math.max(
+        1,
+        options?.retiringDurationMs ?? APP17_AGENT_THEORY_LOD_CROSSFADE_MS,
+      );
+      const retiringDelayMs = Math.max(
+        0,
+        options?.retiringDelayMs ?? APP17_AGENT_THEORY_LOD_CROSSFADE_MS,
+      );
+      for (let index = 0; index < count; index += 1) {
+        const desired = agentLodDesiredMask[index];
+        if (Math.abs(agentLodTargetWeights[index] - desired) <= 1e-5) {
+          continue;
+        }
+        agentLodTargetWeights[index] = desired;
+        agentLodStartWeights[index] = agentLodWeights[index];
+        agentLodTransitionStartTimes[index] = nowMs;
+        agentLodTransitionDurations[index] = desired > 0.5
+          ? incomingDurationMs
+          : retiringDurationMs;
+        agentLodTransitionDelays[index] = desired > 0.5
+          ? 0
+          : retiringDelayMs;
+        if (agentLodTransitionActiveMask[index] === 0) {
+          agentLodTransitionActiveMask[index] = 1;
+          agentLodTransitionActiveCount += 1;
+        }
+      }
+    },
+    setAgentLodTransitionPaused: (paused: boolean, nowMs: number) => {
+      if (agentLodTransitionActiveCount === 0) {
+        agentLodTransitionPausedAt = Number.NEGATIVE_INFINITY;
+        return;
+      }
+      if (paused) {
+        if (!Number.isFinite(agentLodTransitionPausedAt)) {
+          agentLodTransitionPausedAt = nowMs;
+        }
+        return;
+      }
+      if (Number.isFinite(agentLodTransitionPausedAt)) {
+        const pausedDuration = Math.max(
+          0,
+          nowMs - agentLodTransitionPausedAt,
+        );
+        for (let index = 0; index < count; index += 1) {
+          if (agentLodTransitionActiveMask[index] === 0) continue;
+          agentLodTransitionStartTimes[index] += pausedDuration;
+        }
+        agentLodTransitionPausedAt = Number.NEGATIVE_INFINITY;
+      }
+    },
+    advanceAgentLodTransition: (nowMs: number) => {
+      if (
+        agentLodTransitionActiveCount === 0
+        || Number.isFinite(agentLodTransitionPausedAt)
+      ) return false;
+      let changed = false;
+      for (let index = 0; index < count; index += 1) {
+        if (agentLodTransitionActiveMask[index] === 0) continue;
+        const progress = THREE.MathUtils.clamp(
+          (
+            nowMs
+            - agentLodTransitionStartTimes[index]
+            - agentLodTransitionDelays[index]
+          ) / Math.max(1, agentLodTransitionDurations[index]),
+          0,
+          1,
+        );
+        const eased = smootherStep(progress);
+        const nextWeight = THREE.MathUtils.lerp(
+          agentLodStartWeights[index],
+          agentLodTargetWeights[index],
+          eased,
+        );
+        if (Math.abs(nextWeight - agentLodWeights[index]) <= 1e-5) continue;
+        agentLodWeights[index] = nextWeight;
+        changed = true;
+        if (progress >= 1) {
+          agentLodWeights[index] = agentLodTargetWeights[index];
+          agentLodStartWeights[index] = agentLodTargetWeights[index];
+          agentLodTransitionActiveMask[index] = 0;
+          agentLodTransitionActiveCount = Math.max(
+            0,
+            agentLodTransitionActiveCount - 1,
+          );
+        }
+      }
+      if (changed) agentLodWeightAttribute.needsUpdate = true;
+      if (agentLodTransitionActiveCount === 0) {
+        agentLodTransitionPausedAt = Number.NEGATIVE_INFINITY;
+      }
+      return changed || agentLodTransitionActiveCount > 0;
+    },
+    isAgentLodTransitioning: () => (
+      agentLodTransitionActiveCount > 0
+      && !Number.isFinite(agentLodTransitionPausedAt)
+    ),
+    getAgentLodWeights: () => agentLodWeights,
+    getAgentLodTargetWeights: () => agentLodTargetWeights,
+    getPaperIds: () => paperIds,
+    getTopicKeys: () => topicKeys,
+    getSizes: () => sizes,
+    getOriginalAlphas: () => originalAlphas,
+    getPositions: () => positions,
+    getPaperIndex: (paperId: string) => paperIds.indexOf(paperId),
+    getAgentLodSelectionCount: () => {
+      let selected = 0;
+      for (let index = 0; index < count; index += 1) {
+        if (agentLodTargetWeights[index] >= 0.5) selected += 1;
+      }
+      return selected;
     },
     setHiddenPaperIds: (hiddenPaperIds: Set<string>) => {
       for (let index = 0; index < alphas.length; index += 1) {
@@ -11167,7 +17687,7 @@ function createPaperLayer(
     },
     dispose: () => {
       geometry.dispose();
-      material.dispose();
+      materials.forEach((material) => material.dispose());
     },
   };
 }
@@ -11191,6 +17711,7 @@ function createHotspotLayer(
   const selectedMasks = new Float32Array(count);
   const crossfadeMasks = new Float32Array(count);
   const sphereBlends = new Float32Array(count);
+  const agentFocusRoles = new Float32Array(count);
   const topicKeys = hotspots.map((hotspot) => topicKeyFromHotspot(hotspot));
   const hotspotIds = hotspots.map((hotspot) => hotspot.id);
   const color = new THREE.Color();
@@ -11198,9 +17719,10 @@ function createHotspotLayer(
     hotspots
       .slice()
       .sort((a, b) => b.paperCount - a.paperCount || a.id.localeCompare(b.id))
-      .slice(0, 8)
+      .slice(0, Math.max(1, Math.ceil(hotspots.length * 0.2)))
       .map((hotspot, rank) => [hotspot.id, rank]),
   );
+  const rayEligibleCount = Math.max(1, rayRankById.size);
 
   hotspots.forEach((hotspot, index) => {
     const importance = hotspot.importance;
@@ -11215,7 +17737,9 @@ function createHotspotLayer(
     sizes[index] = hotspot.displaySize;
     pointIntensities[index] = 0.68 + importance * 0.32;
     haloStrengths[index] = hotspot.glowStrength * (0.55 + importance * 0.45) * (kind === "app14" ? 1 : 0.72);
-    rayStrengths[index] = rayRank === undefined ? 0 : 0.08 + (1 - rayRank / 7) * 0.14;
+    rayStrengths[index] = rayRank === undefined
+      ? 0
+      : 0.025 + (1 - rayRank / Math.max(1, rayEligibleCount - 1)) * 0.045;
     breathPhases[index] = hotspot.seed * Math.PI * 2;
     breathSpeeds[index] = (Math.PI * 2) / hotspot.breathPeriodSeconds;
     breathAmplitudes[index] = visualProfile === "agent-theory"
@@ -11239,6 +17763,8 @@ function createHotspotLayer(
   geometry.setAttribute("crossfadeMask", crossfadeMaskAttribute);
   const sphereBlendAttribute = new THREE.BufferAttribute(sphereBlends, 1);
   geometry.setAttribute("sphereBlend", sphereBlendAttribute);
+  const agentFocusRoleAttribute = new THREE.BufferAttribute(agentFocusRoles, 1);
+  geometry.setAttribute("agentFocusRole", agentFocusRoleAttribute);
 
   const coreMaterial = createHotspotPointSourceMaterial(
     pixelRatio,
@@ -11315,6 +17841,36 @@ function createHotspotLayer(
         material.uniforms.uViewportHeight.value = Math.max(1, viewportHeight);
       });
     },
+    setAgentFocusVisual: (
+      primaryId: string | undefined,
+      evidenceIds: ReadonlySet<string>,
+      contextIds: ReadonlySet<string>,
+      blend: number,
+      backgroundBlend = blend,
+    ) => {
+      if (visualProfile !== "agent-theory") return;
+      const safeBlend = THREE.MathUtils.clamp(blend, 0, 1);
+      let changed = false;
+      for (let index = 0; index < hotspotIds.length; index += 1) {
+        const hotspotId = hotspotIds[index];
+        const nextRole = hotspotId === primaryId
+          ? 3
+          : evidenceIds.has(hotspotId)
+            ? 2
+            : contextIds.has(hotspotId)
+              ? 1
+              : 0;
+        if (agentFocusRoles[index] === nextRole) continue;
+        agentFocusRoles[index] = nextRole;
+        changed = true;
+      }
+      if (changed) agentFocusRoleAttribute.needsUpdate = true;
+      materials.forEach((material) => {
+        material.uniforms.uAgentFocusBlend.value = safeBlend;
+        material.uniforms.uAgentFocusBackgroundBlend.value =
+          THREE.MathUtils.clamp(backgroundBlend, 0, 1);
+      });
+    },
     setResolvedSphereBlends: (blendById: ReadonlyMap<string, number>) => {
       let changed = false;
       for (let index = 0; index < sphereBlends.length; index += 1) {
@@ -11340,6 +17896,7 @@ function createAgentTheoryHotspotSphereLayer(
   hotspots: App17RenderPoint[],
 ) {
   const maximumSlots = 12;
+  const maximumRetiringSlots = 12;
   const geometry = new THREE.SphereGeometry(1, 32, 24);
   const instanceSeeds = new Float32Array(maximumSlots);
   const instanceBlends = new Float32Array(maximumSlots);
@@ -11347,6 +17904,19 @@ function createAgentTheoryHotspotSphereLayer(
   const blendAttribute = new THREE.InstancedBufferAttribute(instanceBlends, 1);
   geometry.setAttribute("instanceSeed", seedAttribute);
   geometry.setAttribute("instanceBlend", blendAttribute);
+  const retiringGeometry = new THREE.SphereGeometry(1, 32, 24);
+  const retiringInstanceSeeds = new Float32Array(maximumRetiringSlots);
+  const retiringInstanceBlends = new Float32Array(maximumRetiringSlots);
+  const retiringSeedAttribute = new THREE.InstancedBufferAttribute(
+    retiringInstanceSeeds,
+    1,
+  );
+  const retiringBlendAttribute = new THREE.InstancedBufferAttribute(
+    retiringInstanceBlends,
+    1,
+  );
+  retiringGeometry.setAttribute("instanceSeed", retiringSeedAttribute);
+  retiringGeometry.setAttribute("instanceBlend", retiringBlendAttribute);
 
   const sharedVertexShader = `
     attribute float instanceSeed;
@@ -11460,14 +18030,30 @@ function createAgentTheoryHotspotSphereLayer(
   coronaMaterial.name = "AgentTheoryHotspotSphereCorona";
   const core = new THREE.InstancedMesh(geometry, coreMaterial, maximumSlots);
   const corona = new THREE.InstancedMesh(geometry, coronaMaterial, maximumSlots);
+  const retiringCore = new THREE.InstancedMesh(
+    retiringGeometry,
+    coreMaterial,
+    maximumRetiringSlots,
+  );
+  const retiringCorona = new THREE.InstancedMesh(
+    retiringGeometry,
+    coronaMaterial,
+    maximumRetiringSlots,
+  );
   core.frustumCulled = false;
   corona.frustumCulled = false;
+  retiringCore.frustumCulled = false;
+  retiringCorona.frustumCulled = false;
   core.renderOrder = 3;
   corona.renderOrder = 4;
+  retiringCore.renderOrder = 3;
+  retiringCorona.renderOrder = 4;
   // Keep one fully transparent instance available for the initial
   // renderer.compile() pass. The first LOD update replaces this sentinel.
   core.count = 1;
   corona.count = 1;
+  retiringCore.count = 0;
+  retiringCorona.count = 0;
   const neutral = new THREE.Color("#dbe5f1");
   const sentinelMatrix = new THREE.Matrix4();
   for (let slot = 0; slot < maximumSlots; slot += 1) {
@@ -11476,29 +18062,47 @@ function createAgentTheoryHotspotSphereLayer(
     core.setColorAt(slot, neutral);
     corona.setColorAt(slot, neutral);
   }
+  for (let slot = 0; slot < maximumRetiringSlots; slot += 1) {
+    retiringCore.setMatrixAt(slot, sentinelMatrix);
+    retiringCorona.setMatrixAt(slot, sentinelMatrix);
+    retiringCore.setColorAt(slot, neutral);
+    retiringCorona.setColorAt(slot, neutral);
+  }
   instanceBlends[0] = 0;
   core.instanceMatrix.needsUpdate = true;
   corona.instanceMatrix.needsUpdate = true;
+  retiringCore.instanceMatrix.needsUpdate = true;
+  retiringCorona.instanceMatrix.needsUpdate = true;
   if (!core.instanceColor || !corona.instanceColor) {
     throw new Error("Agent theory sphere instanceColor buffers were not created");
   }
+  if (!retiringCore.instanceColor || !retiringCorona.instanceColor) {
+    throw new Error("Agent theory retiring sphere instanceColor buffers were not created");
+  }
   core.instanceColor.needsUpdate = true;
   corona.instanceColor.needsUpdate = true;
+  retiringCore.instanceColor.needsUpdate = true;
+  retiringCorona.instanceColor.needsUpdate = true;
   blendAttribute.needsUpdate = true;
+  retiringBlendAttribute.needsUpdate = true;
 
   const object = new THREE.Group();
-  object.add(core, corona);
+  object.add(core, corona, retiringCore, retiringCorona);
   const lodById = new Map<string, AgentTheoryStellarLod>();
   const blendById = new Map<string, number>();
   const projectedDiameterById = new Map<string, number>();
   const worldPosition = new THREE.Vector3();
   const viewPosition = new THREE.Vector3();
+  const projectedPosition = new THREE.Vector3();
   const worldScale = new THREE.Vector3();
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3();
   let transitionCount = 0;
   let activeSphereCount = 0;
+  let currentSphereCount = 0;
+  let retiringSphereCount = 0;
+  let offscreenSphereSlotCount = 0;
 
   const update = ({
     camera,
@@ -11517,12 +18121,15 @@ function createAgentTheoryHotspotSphereLayer(
     camera.updateMatrixWorld(true);
     root.getWorldScale(worldScale);
     const rootScale = Math.max(worldScale.x, worldScale.y, worldScale.z);
-    const sphereCandidates: Array<{
+    type HotspotSphereCandidate = {
       hotspot: App17RenderPoint;
       worldPosition: THREE.Vector3;
       diameter: number;
       worldRadius: number;
-    }> = [];
+    };
+    const sphereCandidates: HotspotSphereCandidate[] = [];
+    const resolvedById = new Map<string, HotspotSphereCandidate>();
+    offscreenSphereSlotCount = 0;
     projectedDiameterById.clear();
     hotspots.forEach((hotspot) => {
       worldPosition.copy(hotspot.position).applyMatrix4(root.matrixWorld);
@@ -11539,22 +18146,34 @@ function createAgentTheoryHotspotSphereLayer(
           fovDegrees: camera.fov,
         })
         : 0;
+      const resolvedCandidate: HotspotSphereCandidate = {
+        hotspot,
+        worldPosition: worldPosition.clone(),
+        diameter,
+        worldRadius,
+      };
+      resolvedById.set(hotspot.id, resolvedCandidate);
       projectedDiameterById.set(hotspot.id, diameter);
       const previousLod = lodById.get(hotspot.id);
       const lod = resolveAgentTheoryStellarLod(
         diameter,
-        true,
+        false,
         previousLod,
       );
       if (lod !== previousLod && previousLod !== undefined) transitionCount += 1;
       lodById.set(hotspot.id, lod);
       if (lod !== "sphere") return;
-      sphereCandidates.push({
-        hotspot,
-        worldPosition: worldPosition.clone(),
-        diameter,
-        worldRadius,
-      });
+      projectedPosition.copy(worldPosition).project(camera);
+      if (
+        projectedPosition.z < -1
+        || projectedPosition.z > 1
+        || Math.abs(projectedPosition.x) > 1
+        || Math.abs(projectedPosition.y) > 1
+      ) {
+        offscreenSphereSlotCount += 1;
+        return;
+      }
+      sphereCandidates.push(resolvedCandidate);
     });
     sphereCandidates.sort((left, right) => (
       right.diameter - left.diameter
@@ -11563,14 +18182,13 @@ function createAgentTheoryHotspotSphereLayer(
     ));
     const selected = sphereCandidates.slice(0, maximumSlots);
     const selectedIds = new Set(selected.map(({ hotspot }) => hotspot.id));
+    const blendStep = Math.min(1, Math.max(0, deltaSeconds) / 0.4);
     hotspots.forEach((hotspot) => {
       const current = blendById.get(hotspot.id) ?? 0;
       const target = selectedIds.has(hotspot.id) ? 1 : 0;
-      const next = THREE.MathUtils.lerp(
-        current,
-        target,
-        Math.min(1, Math.max(0, deltaSeconds) / 0.4),
-      );
+      const next = target > current
+        ? Math.min(target, current + blendStep)
+        : Math.max(target, current - blendStep);
       if (next <= 0.001 && target === 0) blendById.delete(hotspot.id);
       else blendById.set(hotspot.id, next);
     });
@@ -11580,6 +18198,33 @@ function createAgentTheoryHotspotSphereLayer(
         blend: blendById.get(candidate.hotspot.id) ?? 0,
       }))
       .filter(({ blend }) => blend > 0.001);
+    const retiring = Array.from(blendById.entries())
+      .filter(([hotspotId, blend]) => (
+        !selectedIds.has(hotspotId)
+        && blend > 0.001
+        && resolvedById.has(hotspotId)
+      ))
+      .map(([hotspotId, blend]) => ({
+        ...resolvedById.get(hotspotId)!,
+        blend,
+      }))
+      .sort((left, right) => (
+        right.blend - left.blend
+        || right.diameter - left.diameter
+        || left.hotspot.id.localeCompare(right.hotspot.id)
+      ));
+    const retiringCapacity = Math.max(0, maximumSlots - rendered.length);
+    const renderedRetiring = retiring.slice(
+      0,
+      Math.min(maximumRetiringSlots, retiringCapacity),
+    );
+    retiring.slice(renderedRetiring.length).forEach(({ hotspot }) => {
+      // Extremely fast camera changes can retire more than one complete set
+      // inside the 400ms optical crossfade. Restore the point-source owner
+      // immediately for overflow entities rather than exceeding the global
+      // twelve-sphere visual budget or keeping the point source hidden.
+      blendById.delete(hotspot.id);
+    });
     rendered.forEach((candidate, slot) => {
       const color = new THREE.Color(candidate.hotspot.color);
       scale.setScalar(candidate.worldRadius);
@@ -11593,15 +18238,38 @@ function createAgentTheoryHotspotSphereLayer(
       instanceSeeds[slot] = candidate.hotspot.seed;
       instanceBlends[slot] = candidate.blend;
     });
-    activeSphereCount = rendered.length;
-    core.count = activeSphereCount;
-    corona.count = activeSphereCount;
+    renderedRetiring.forEach((candidate, slot) => {
+      const color = new THREE.Color(candidate.hotspot.color);
+      scale.setScalar(candidate.worldRadius);
+      matrix.compose(candidate.worldPosition, quaternion, scale);
+      retiringCore.setMatrixAt(slot, matrix);
+      retiringCore.setColorAt(slot, color);
+      scale.setScalar(candidate.worldRadius * 1.08);
+      matrix.compose(candidate.worldPosition, quaternion, scale);
+      retiringCorona.setMatrixAt(slot, matrix);
+      retiringCorona.setColorAt(slot, color);
+      retiringInstanceSeeds[slot] = candidate.hotspot.seed;
+      retiringInstanceBlends[slot] = candidate.blend;
+    });
+    currentSphereCount = rendered.length;
+    retiringSphereCount = renderedRetiring.length;
+    activeSphereCount = currentSphereCount + retiringSphereCount;
+    core.count = currentSphereCount;
+    corona.count = currentSphereCount;
+    retiringCore.count = retiringSphereCount;
+    retiringCorona.count = retiringSphereCount;
     core.instanceMatrix.needsUpdate = true;
     corona.instanceMatrix.needsUpdate = true;
+    retiringCore.instanceMatrix.needsUpdate = true;
+    retiringCorona.instanceMatrix.needsUpdate = true;
     if (core.instanceColor) core.instanceColor.needsUpdate = true;
     if (corona.instanceColor) corona.instanceColor.needsUpdate = true;
+    if (retiringCore.instanceColor) retiringCore.instanceColor.needsUpdate = true;
+    if (retiringCorona.instanceColor) retiringCorona.instanceColor.needsUpdate = true;
     seedAttribute.needsUpdate = true;
     blendAttribute.needsUpdate = true;
+    retiringSeedAttribute.needsUpdate = true;
+    retiringBlendAttribute.needsUpdate = true;
     coreMaterial.uniforms.uSurfaceTime.value = surfaceTimeSeconds;
     coronaMaterial.uniforms.uSurfaceTime.value = surfaceTimeSeconds;
     return {
@@ -11609,6 +18277,9 @@ function createAgentTheoryHotspotSphereLayer(
       lodById,
       projectedDiameterById,
       activeSphereCount,
+      currentSphereCount,
+      retiringSphereCount,
+      offscreenSphereSlotCount,
       transitionCount,
     };
   };
@@ -11626,9 +18297,13 @@ function createAgentTheoryHotspotSphereLayer(
     getLodById: () => lodById,
     getProjectedDiameterById: () => projectedDiameterById,
     getActiveSphereCount: () => activeSphereCount,
+    getCurrentSphereCount: () => currentSphereCount,
+    getRetiringSphereCount: () => retiringSphereCount,
+    getOffscreenSphereSlotCount: () => offscreenSphereSlotCount,
     getTransitionCount: () => transitionCount,
     dispose: () => {
       geometry.dispose();
+      retiringGeometry.dispose();
       coreMaterial.dispose();
       coronaMaterial.dispose();
     },
@@ -12095,7 +18770,36 @@ function createOrbitLayer(positions: Float32Array) {
   };
 }
 
-function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = false) {
+function createSystemPaperMaterial(
+  pixelRatio: number,
+  representativeEnergy = false,
+  visualProfile: GalaxyVisualProfile = "analysis",
+) {
+  const agentTheorySystem = visualProfile === "agent-theory";
+  const depthBrightnessFloor = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR
+    : APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR;
+  const depthSizeFloor = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_DEPTH_SIZE_FLOOR
+    : APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR;
+  const farMinimumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FAR_MINIMUM_SIZE
+    : 2.5;
+  const mediumMinimumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_MEDIUM_MINIMUM_SIZE
+    : 2.6;
+  const nearMinimumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_NEAR_MINIMUM_SIZE
+    : 2.8;
+  const maximumPointSize = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_MAXIMUM_SIZE
+    : 4.6;
+  const focusContextBrightness = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS
+    : APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS;
+  const focusNeighborBrightness = agentTheorySystem
+    ? APP17_AGENT_THEORY_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS
+    : APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS;
   return new THREE.ShaderMaterial({
     uniforms: {
       uPixelRatio: { value: pixelRatio },
@@ -12112,8 +18816,8 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
       uPaperInspectionBlend: { value: 0 },
       uPaperFocusFlightStrength: { value: 0 },
       uPaperFocusTargetCssSize: { value: APP17_SYSTEM_PAPER_FOCUS_ORDINARY_SIZE },
-      uPaperFocusContextBrightness: { value: APP17_SYSTEM_PAPER_FOCUS_CONTEXT_BRIGHTNESS },
-      uPaperFocusNeighborBrightness: { value: APP17_SYSTEM_PAPER_FOCUS_NEIGHBOR_BRIGHTNESS },
+      uPaperFocusContextBrightness: { value: focusContextBrightness },
+      uPaperFocusNeighborBrightness: { value: focusNeighborBrightness },
       uCarrierScale: { value: APP17_REPRESENTATIVE_ENERGY_CARRIER_SCALE },
       uEnergyTime: { value: 0 },
       uEnergyMotionStrength: { value: 1 },
@@ -12179,8 +18883,8 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         float distanceScale = clamp(10.0 / max(1.0, -viewPosition.z), 0.78, 1.18);
         float representativeMask = step(-0.5, representativeRank) * transitionStyle;
         float ordinaryMask = 1.0 - representativeMask;
-        float depthBrightnessFloor = mix(0.55, ${APP17_SYSTEM_PAPER_DEPTH_BRIGHTNESS_FLOOR.toFixed(2)}, ordinaryMask);
-        float depthSizeFloor = mix(0.78, ${APP17_SYSTEM_PAPER_DEPTH_SIZE_FLOOR.toFixed(2)}, ordinaryMask);
+        float depthBrightnessFloor = mix(0.55, ${depthBrightnessFloor.toFixed(2)}, ordinaryMask);
+        float depthSizeFloor = mix(0.78, ${depthSizeFloor.toFixed(2)}, ordinaryMask);
         float depthBrightness = mix(1.0, depthBrightnessFloor, deepPosition);
         float depthSize = mix(1.0, depthSizeFloor, deepPosition);
         float ordinaryExposure = mix(1.0, uOrdinaryExposure, uSystemRevealProgress);
@@ -12210,12 +18914,20 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         vRepresentativeStyle = transitionStyle;
         float depthScale = mix(1.0, depthSize, uSystemDepthStrength);
         float ordinaryScale = mix(1.0, 0.88, uPaperFarBlend) * mix(1.0, 1.05, uPaperNearBlend);
-        float ordinaryMinimum = mix(2.6, 2.5, uPaperFarBlend);
-        ordinaryMinimum = mix(ordinaryMinimum, 2.8, uPaperNearBlend);
+        float ordinaryMinimum = mix(
+          ${mediumMinimumPointSize.toFixed(2)},
+          ${farMinimumPointSize.toFixed(2)},
+          uPaperFarBlend
+        );
+        ordinaryMinimum = mix(
+          ordinaryMinimum,
+          ${nearMinimumPointSize.toFixed(2)},
+          uPaperNearBlend
+        );
         float ordinarySize = clamp(
           pointSize * sizeVariation * distanceScale * depthScale * ordinaryScale,
           ordinaryMinimum,
-          4.6
+          ${maximumPointSize.toFixed(2)}
         );
         float representativeSize = pointSize * distanceScale * depthScale;
         float baseSize = mix(ordinarySize, representativeSize, representativeMask);
@@ -12356,7 +19068,13 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         haloTightness = mix(haloTightness, 3.45, uPaperNearBlend);
         haloTightness *= mix(0.95, 1.05, vVisualSeed);
         float core = exp(-radius * radius * coreTightness);
-        float stableCore = (1.0 - smoothstep(0.12, 0.28, radius)) * vOrdinaryMask;
+        float stableCore = (
+          1.0 - smoothstep(
+            ${agentTheorySystem ? "0.12" : "0.12"},
+            ${agentTheorySystem ? "0.34" : "0.28"},
+            radius
+          )
+        ) * vOrdinaryMask;
         float innerGlow = exp(-radius * radius * 8.0);
         float halo = exp(-radius * radius * haloTightness) * edge;
         float rayCos = cos(vRayAngle);
@@ -12377,7 +19095,10 @@ function createSystemPaperMaterial(pixelRatio: number, representativeEnergy = fa
         float innerGlowWeight = mix(0.24, 0.27, vOrdinaryMask);
         float haloWeight = mix(0.08, 0.085, vOrdinaryMask);
         float alpha = (
-          max(core * coreWeight, stableCore * 0.58)
+          max(
+            core * coreWeight,
+            stableCore * ${agentTheorySystem ? "0.74" : "0.58"}
+          )
           + innerGlow * innerGlowWeight
           + halo * haloWeight
           + rays
@@ -12477,8 +19198,10 @@ function createPaperMaterial(
   pixelRatio: number,
   kind: App17SceneData["kind"],
   visualProfile: GalaxyVisualProfile = "analysis",
+  channel: "core" | "optical" = "core",
 ) {
   const agentTheory = visualProfile === "agent-theory";
+  const opticalPass = agentTheory && channel === "optical";
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uPixelRatio: { value: pixelRatio },
@@ -12496,9 +19219,11 @@ function createPaperMaterial(
       uAgentDepthNear: { value: 0 },
       uAgentDepthFar: { value: 1 },
       uViewportHeight: { value: 900 },
+      uAgentFocusBlend: { value: 0 },
+      uAgentFocusBackgroundBlend: { value: 0 },
     },
     transparent: true,
-    depthWrite: agentTheory,
+    depthWrite: agentTheory && !opticalPass,
     depthTest: true,
     blending: THREE.NormalBlending,
     toneMapped: false,
@@ -12512,6 +19237,8 @@ function createPaperMaterial(
       attribute float stellarSeed;
       attribute float stellarRayAngle;
       attribute float stellarRayStrength;
+      attribute float agentLodWeight;
+      attribute float agentFocusRole;
       uniform float uPixelRatio;
       uniform float uMinimumCssSize;
       uniform float uDistanceAttenuation;
@@ -12527,6 +19254,8 @@ function createPaperMaterial(
       uniform float uAgentDepthNear;
       uniform float uAgentDepthFar;
       uniform float uViewportHeight;
+      uniform float uAgentFocusBlend;
+      uniform float uAgentFocusBackgroundBlend;
       varying vec3 vColor;
       varying vec3 vSemanticColor;
       varying float vAlpha;
@@ -12535,12 +19264,20 @@ function createPaperMaterial(
       varying float vStellarSeed;
       varying float vStellarRayAngle;
       varying float vStellarRayStrength;
+      varying float vAgentLodWeight;
+      varying float vAgentFocusRole;
+      varying float vAgentFocusBlend;
       void main() {
         vColor = color;
         vSemanticColor = semanticColor;
         vStellarSeed = stellarSeed;
         vStellarRayAngle = stellarRayAngle;
         vStellarRayStrength = stellarRayStrength;
+        float focusSelected = step(0.5, agentFocusRole);
+        float effectiveFocus = focusSelected * uAgentFocusBlend;
+        vAgentFocusRole = agentFocusRole;
+        vAgentFocusBlend = effectiveFocus;
+        vAgentLodWeight = max(agentLodWeight, effectiveFocus);
         float isolationProgress = ${kind === "app15"
           ? "smoothstep(0.70, 1.0, uExplorationProgress)"
           : "uExplorationProgress"};
@@ -12576,15 +19313,33 @@ function createPaperMaterial(
           1.0
         );
         vAgentNearness = 1.0 - agentDepth;
+        float agentDepthBlend = smoothstep(0.0, 1.0, agentDepth);
         float agentAlphaScale = ${agentTheory
-          ? "mix(1.29, 0.56, smoothstep(0.0, 1.0, agentDepth))"
+          ? "mix(1.29, 0.88, agentDepthBlend)"
           : "1.0"};
-        vAlpha = pointAlpha
+        float minimumAgentAlpha = ${agentTheory
+          ? "mix(0.86, 0.55, agentDepthBlend)"
+          : "0.0"};
+        float focusEnergy = agentFocusRole > 2.5
+          ? 1.72
+          : agentFocusRole > 1.5
+            ? 1.36
+            : agentFocusRole > 0.5
+              ? 1.22
+              : 1.0;
+        float focusBackgroundScale = mix(
+          1.0,
+          0.43,
+          uAgentFocusBackgroundBlend * (1.0 - focusSelected)
+        );
+        vAlpha = max(pointAlpha * agentAlphaScale, minimumAgentAlpha)
           * uSceneOpacity
           * visibility
           * depthVisibility
           * overviewOpacity
-          * agentAlphaScale;
+          * ${agentTheory ? "max(agentLodWeight, effectiveFocus)" : "1.0"}
+          * mix(1.0, focusEnergy, effectiveFocus)
+          * focusBackgroundScale;
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.78, 1.2);
         float displayScale = mix(1.0, distanceScale, uDistanceAttenuation);
         float overviewPointScale = mix(1.0, 0.62, uOverviewFarBlend);
@@ -12593,22 +19348,34 @@ function createPaperMaterial(
           pointSize * pointScale * overviewPointScale,
           overviewMinimumCssSize * pointScale
         ) * displayScale;
-        float nearToMiddle = smoothstep(0.0, 0.52, agentDepth);
-        float middleToFar = smoothstep(0.48, 1.0, agentDepth);
-        float agentSizeScale = mix(1.42, 1.0, nearToMiddle);
-        agentSizeScale = mix(agentSizeScale, 0.62, middleToFar);
+        float agentSizeScale = mix(1.06, 0.72, agentDepthBlend);
+        float minimumAgentCssSize = mix(2.06, 1.35, agentDepthBlend);
         float angularCssSize = pointSize
           * pointScale
-          * clamp(18.0 / max(1.0, -mvPosition.z), 0.28, 3.6)
-          * mix(0.84, 1.16, vAgentNearness);
+          * agentSizeScale
+          * clamp(0.42 / max(0.08, -mvPosition.z), 0.78, 1.8);
+        float focusSize = agentFocusRole > 2.5
+          ? 1.62
+          : agentFocusRole > 1.5
+            ? 1.30
+            : agentFocusRole > 0.5
+              ? 1.16
+              : 1.0;
+        vCssSize = (${agentTheory
+          ? opticalPass
+            ? "clamp(max(angularCssSize, minimumAgentCssSize) * 1.65, 2.2, 7.9)"
+            : "clamp(max(angularCssSize, minimumAgentCssSize), minimumAgentCssSize, 4.8)"
+          : "baseCssSize"}) * mix(1.0, focusSize, effectiveFocus);
         vCssSize = ${agentTheory
-          ? "clamp(angularCssSize, 0.72, 16.0)"
-          : "baseCssSize"};
+          ? opticalPass
+            ? "min(vCssSize, 8.4)"
+            : "min(vCssSize, 4.8)"
+          : "vCssSize"};
         gl_PointSize = max(1.0, vCssSize) * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
-    fragmentShader: agentTheory ? `
+    fragmentShader: agentTheory ? (opticalPass ? `
       varying vec3 vColor;
       varying vec3 vSemanticColor;
       varying float vAlpha;
@@ -12617,62 +19384,103 @@ function createPaperMaterial(
       varying float vStellarSeed;
       varying float vStellarRayAngle;
       varying float vStellarRayStrength;
+      varying float vAgentFocusRole;
+      varying float vAgentFocusBlend;
       void main() {
         if (vAlpha <= 0.001) discard;
         vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
         float radius = length(point);
         if (radius >= 1.0) discard;
         float antialias = max(fwidth(radius), 0.008);
-        float pointLod = 1.0 - smoothstep(1.55, 1.95, vCssSize);
-        float nearLod = smoothstep(6.5, 9.0, vCssSize);
-        float coreTightness = max(8.0, vCssSize * vCssSize * 1.15);
-        float hotCore = exp(-radius * radius * coreTightness);
-        float pin = 1.0 - smoothstep(
-          0.26,
-          0.26 + antialias,
-          max(abs(point.x), abs(point.y))
-        );
         float angle = atan(point.y, point.x);
-        float irregular = 0.90 + 0.10 * sin(
+        float irregular = 0.88 + 0.12 * sin(
           angle * 5.0 + vStellarSeed * 19.0
         );
-        float shoulder = exp(
-          -radius * radius * mix(18.0, 6.4, nearLod)
-        ) * irregular;
+        float shoulder = exp(-radius * radius * 6.8) * irregular;
         float rayCos = cos(vStellarRayAngle);
         float raySin = sin(vStellarRayAngle);
         vec2 rayPoint = mat2(
           rayCos, -raySin,
           raySin, rayCos
         ) * point;
-        float rayWidth = max(antialias * 1.2, 0.012);
+        float rayWidth = max(antialias, 0.010);
         float horizontalRay = (
           1.0 - smoothstep(rayWidth, rayWidth * 2.1, abs(rayPoint.y))
-        ) * exp(-abs(rayPoint.x) * mix(8.5, 4.8, vStellarSeed));
+        ) * exp(-abs(rayPoint.x) * mix(9.5, 6.2, vStellarSeed));
         float verticalRay = (
           1.0 - smoothstep(rayWidth, rayWidth * 2.1, abs(rayPoint.x))
-        ) * exp(-abs(rayPoint.y) * mix(5.2, 8.0, vStellarSeed));
-        float rayEnvelope = 1.0 - smoothstep(0.30, 0.92, radius);
+        ) * exp(-abs(rayPoint.y) * mix(6.8, 9.2, vStellarSeed));
+        float rayEnvelope = 1.0 - smoothstep(0.22, 0.84, radius);
         float rays = (horizontalRay + verticalRay)
           * rayEnvelope
           * vStellarRayStrength
-          * smoothstep(1.8, 3.4, vCssSize);
+          * smoothstep(2.0, 3.8, vCssSize);
+        float arcRadius = abs(radius - 0.58);
+        float arcBand = 1.0 - smoothstep(0.035, 0.085, arcRadius);
+        float arcGapA = smoothstep(
+          -0.22,
+          0.20,
+          sin(angle * 1.35 + vStellarSeed * 13.0)
+        );
+        float arcGapB = smoothstep(
+          -0.30,
+          0.18,
+          cos(angle * 1.12 - vStellarSeed * 17.0)
+        );
+        float focusArc = arcBand
+          * max(arcGapA * (1.0 - arcGapB), arcGapB * (1.0 - arcGapA))
+          * step(2.5, vAgentFocusRole)
+          * vAgentFocusBlend;
         float luminance = dot(vSemanticColor, vec3(0.2126, 0.7152, 0.0722));
         float semanticChroma = mix(0.52, 0.78, vAgentNearness);
         vec3 semanticShell = mix(vec3(luminance), vSemanticColor, semanticChroma);
+        float opticalEnergy = shoulder * 0.13 + rays * 0.075;
+        float alpha = min(0.15, vAlpha * opticalEnergy + focusArc * 0.12);
+        if (alpha < 0.0025) discard;
+        gl_FragColor = vec4(semanticShell, alpha);
+      }
+    ` : `
+      varying vec3 vColor;
+      varying vec3 vSemanticColor;
+      varying float vAlpha;
+      varying float vCssSize;
+      varying float vAgentNearness;
+      varying float vStellarSeed;
+      varying float vStellarRayAngle;
+      varying float vStellarRayStrength;
+      varying float vAgentFocusRole;
+      varying float vAgentFocusBlend;
+      void main() {
+        if (vAlpha <= 0.001) discard;
+        vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
+        float radius = length(point);
+        if (radius >= 1.0) discard;
+        float antialias = max(fwidth(radius), 0.008);
+        float pointLod = 1.0 - smoothstep(1.55, 2.15, vCssSize);
+        float coreTightness = max(12.0, vCssSize * vCssSize * 1.85);
+        float hotCore = exp(-radius * radius * coreTightness);
+        float pin = 1.0 - smoothstep(
+          0.22,
+          0.22 + antialias,
+          max(abs(point.x), abs(point.y))
+        );
+        float luminance = dot(vSemanticColor, vec3(0.2126, 0.7152, 0.0722));
+        float semanticChroma = mix(0.54, 0.78, vAgentNearness);
+        vec3 semanticShell = mix(vec3(luminance), vSemanticColor, semanticChroma);
+        float coreEnergy = max(hotCore, pin * mix(0.78, 0.48, pointLod));
         vec3 color = mix(
           semanticShell,
           vec3(0.995, 0.997, 1.0),
-          clamp(hotCore * 0.92 + pin * pointLod * 0.38, 0.0, 0.96)
+          clamp(coreEnergy * 0.90, 0.0, 0.94)
         );
-        float psf = max(hotCore, pin * pointLod * 0.82)
-          + shoulder * mix(0.12, 0.24, nearLod)
-          + rays * 0.42;
-        float alpha = vAlpha * min(1.0, psf);
+        float alpha = vAlpha * min(1.0, coreEnergy * 1.14);
         if (alpha < 0.008) discard;
-        gl_FragColor = vec4(color * min(1.08, 0.86 + psf * 0.28), alpha);
+        float radianceCeiling = mix(1.0, 1.12, vAgentNearness);
+        float coreRadiance = 0.90
+          + coreEnergy * mix(0.10, 0.24, vAgentNearness);
+        gl_FragColor = vec4(color * min(radianceCeiling, coreRadiance), alpha);
       }
-    ` : `
+    `) : `
       varying vec3 vColor;
       varying float vAlpha;
       varying float vCssSize;
@@ -12693,9 +19501,27 @@ function createPaperMaterial(
     `,
   });
   material.name = agentTheory
-    ? "AgentTheoryPaperPSF"
+    ? opticalPass
+      ? "AgentTheoryPaperOptical"
+      : "AgentTheoryPaperCore"
     : `AnalysisPaperPSF:${kind}`;
   return material;
+}
+
+function resolveAgentTheoryHotspotCoreCssSize(importance: number) {
+  return THREE.MathUtils.lerp(
+    APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX,
+    APP17_AGENT_THEORY_HOTSPOT_CORE_MAX_CSS_PX,
+    Math.pow(THREE.MathUtils.clamp(importance, 0, 1), 0.72),
+  );
+}
+
+function resolveAgentTheoryHotspotOpticalCssSize(importance: number) {
+  return THREE.MathUtils.lerp(
+    APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX,
+    APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX,
+    Math.pow(THREE.MathUtils.clamp(importance, 0, 1), 0.72),
+  );
 }
 
 function createHotspotPointSourceMaterial(
@@ -12721,6 +19547,8 @@ function createHotspotPointSourceMaterial(
       uAgentDepthNear: { value: 0 },
       uAgentDepthFar: { value: 1 },
       uViewportHeight: { value: 900 },
+      uAgentFocusBlend: { value: 0 },
+      uAgentFocusBackgroundBlend: { value: 0 },
     },
     transparent: true,
     depthWrite: agentTheory && !opticalPass,
@@ -12743,6 +19571,7 @@ function createHotspotPointSourceMaterial(
       attribute float selectedMask;
       attribute float crossfadeMask;
       attribute float sphereBlend;
+      attribute float agentFocusRole;
       uniform float uPixelRatio;
       uniform float uDepthAttenuation;
       uniform float uSceneOpacity;
@@ -12756,6 +19585,8 @@ function createHotspotPointSourceMaterial(
       uniform float uAgentDepthNear;
       uniform float uAgentDepthFar;
       uniform float uViewportHeight;
+      uniform float uAgentFocusBlend;
+      uniform float uAgentFocusBackgroundBlend;
       varying vec3 vColor;
       varying float vPointIntensity;
       varying float vHaloStrength;
@@ -12766,12 +19597,26 @@ function createHotspotPointSourceMaterial(
       varying float vCssSize;
       varying float vAgentNearness;
       varying float vStellarSeed;
+      varying float vImportance;
+      varying float vAgentFocusRole;
+      varying float vAgentFocusBlend;
       void main() {
         vColor = color;
         vPointIntensity = pointIntensity;
         vHaloStrength = haloStrength;
         vRayStrength = rayStrength;
         vStellarSeed = fract(breathPhase / 6.28318530718);
+        float focusSelected = step(0.5, agentFocusRole);
+        float effectiveFocus = focusSelected * uAgentFocusBlend;
+        vAgentFocusRole = agentFocusRole;
+        vAgentFocusBlend = effectiveFocus;
+        float focusEnergy = agentFocusRole > 2.5
+          ? 1.68
+          : agentFocusRole > 1.5
+            ? 1.22
+            : agentFocusRole > 0.5
+              ? 1.12
+              : 1.0;
         float isolationProgress = ${kind === "app15"
           ? "smoothstep(0.70, 1.0, uExplorationProgress)"
           : "uExplorationProgress"};
@@ -12786,7 +19631,11 @@ function createHotspotPointSourceMaterial(
         farOffset.xy = farRotation * farOffset.xy;
         vec3 distantPosition = uFocusPosition + farOffset * retreatScale;
         vec3 transformedPosition = mix(distantPosition, position, selectedMask);
-        float selectedVisibility = 1.0 - smoothstep(${kind === "app15" ? "0.76, 1.0" : "0.32, 0.76"}, uExplorationProgress);
+        float selectedVisibility = 1.0 - smoothstep(${kind === "app15"
+          ? agentTheory
+            ? "0.80, 1.0"
+            : "0.76, 1.0"
+          : "0.32, 0.76"}, uExplorationProgress);
         float theorySourceVisibility = mix(
           1.0 - smoothstep(0.70, 0.76, uExplorationProgress),
           1.0 - smoothstep(0.76, 1.0, uExplorationProgress),
@@ -12808,13 +19657,18 @@ function createHotspotPointSourceMaterial(
         float baseCoreVisibility = mix(distantCoreVisibility, selectedVisibility, selectedMask);
         float baseHaloVisibility = mix(distantHaloVisibility, selectedVisibility, selectedMask);
         float spriteVisibility = 1.0 - smoothstep(0.02, 0.98, sphereBlend);
-        vCoreVisibility = spriteVisibility * uSceneOpacity * mix(1.0, 0.82, uOverviewFarBlend) * ${kind === "app14"
+        float focusBackgroundScale = mix(
+          1.0,
+          0.43,
+          uAgentFocusBackgroundBlend * (1.0 - focusSelected)
+        );
+        vCoreVisibility = spriteVisibility * uSceneOpacity * focusBackgroundScale * mix(1.0, 0.82, uOverviewFarBlend) * mix(1.0, focusEnergy, effectiveFocus) * ${kind === "app14"
           ? "baseCoreVisibility * (1.0 + breath * 0.04)"
           : "baseCoreVisibility * (1.0 + breath * 0.06)"};
-        vHaloVisibility = spriteVisibility * uSceneOpacity * mix(1.0, 0.45, uOverviewFarBlend) * ${kind === "app14"
+        vHaloVisibility = spriteVisibility * uSceneOpacity * focusBackgroundScale * mix(1.0, 0.45, uOverviewFarBlend) * mix(1.0, focusEnergy, effectiveFocus) * ${kind === "app14"
           ? "baseHaloVisibility * (1.0 + breath * 0.08)"
           : "baseHaloVisibility * (1.0 + breath * 0.12)"};
-        vRayVisibility = spriteVisibility * uSceneOpacity
+        vRayVisibility = spriteVisibility * uSceneOpacity * focusBackgroundScale
           * mix(1.0, 0.45, uOverviewFarBlend)
           * mix(distantRayVisibility, selectedVisibility, selectedMask);
         float distantPointScale = ${kind === "app15"
@@ -12832,6 +19686,7 @@ function createHotspotPointSourceMaterial(
         float distanceScale = clamp(10.0 / max(1.0, -mvPosition.z), 0.74, 1.22);
         float displayScale = mix(1.0, distanceScale, uDepthAttenuation);
         float importance = clamp((pointIntensity - 0.68) / 0.32, 0.0, 1.0);
+        vImportance = importance;
         float worldDiameter = mix(0.32, 0.68, importance)
           * ${APP15_COORD_SCALE.toFixed(4)};
         float angularCssDiameter = worldDiameter
@@ -12839,24 +19694,32 @@ function createHotspotPointSourceMaterial(
           / max(0.1, -mvPosition.z);
         float sourceCssSize = ${agentTheory
           ? opticalPass
-            ? "clamp(angularCssDiameter * 1.45, 1.0, 24.0)"
-            : "clamp(angularCssDiameter, 1.0, 16.0)"
+            ? `mix(${APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX.toFixed(1)}, ${APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX.toFixed(1)}, pow(importance, 0.72))`
+            : `mix(${APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX.toFixed(1)}, ${APP17_AGENT_THEORY_HOTSPOT_CORE_MAX_CSS_PX.toFixed(1)}, pow(importance, 0.72))`
           : "pointSize"};
         float depthSizeScale = ${agentTheory
-          ? "mix(0.76, 1.08, vAgentNearness)"
+          ? "mix(0.96, 1.05, vAgentNearness)"
           : "1.0"};
         float stagedCssSize = sourceCssSize
           * pointScale
           * mix(1.0, 0.68, uOverviewFarBlend)
           * displayScale
           * depthSizeScale;
+        stagedCssSize *= mix(
+          1.0,
+          agentFocusRole > 2.5 ? 1.32 : agentFocusRole > 1.5 ? 1.16 : 1.08,
+          effectiveFocus
+        );
         vCssSize = ${agentTheory
           ? opticalPass
-            ? "clamp(stagedCssSize, 1.0, 24.0)"
-            : "clamp(stagedCssSize, 1.0, 16.0)"
+            ? `clamp(stagedCssSize, ${APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX.toFixed(1)}, ${APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX.toFixed(1)})`
+            : `clamp(stagedCssSize, ${APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX.toFixed(1)}, ${APP17_AGENT_THEORY_HOTSPOT_CORE_MAX_CSS_PX.toFixed(1)})`
           : "stagedCssSize"};
         gl_PointSize = vCssSize * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
+        ${agentTheory && !opticalPass
+          ? "gl_Position.z -= 0.00002 * gl_Position.w;"
+          : ""}
       }
     `,
     fragmentShader: agentTheory ? (opticalPass ? `
@@ -12870,40 +19733,83 @@ function createHotspotPointSourceMaterial(
       varying float vCssSize;
       varying float vAgentNearness;
       varying float vStellarSeed;
+      varying float vImportance;
+      varying float vAgentFocusRole;
+      varying float vAgentFocusBlend;
       void main() {
         vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
         float radius = length(point);
         float antialias = max(fwidth(radius), 0.008);
         if (radius >= 1.0) discard;
-        float rayAngle = (vStellarSeed - 0.5) * 0.18;
+        float rayAngle = (vStellarSeed - 0.5) * 0.34;
         float rayCos = cos(rayAngle);
         float raySin = sin(rayAngle);
         vec2 rayPoint = mat2(
           rayCos, -raySin,
           raySin, rayCos
         ) * point;
-        float axis = min(
-          abs(rayPoint.x) * mix(0.92, 1.08, vStellarSeed),
-          abs(rayPoint.y) * mix(1.08, 0.92, vStellarSeed)
+        float asymmetry = mix(-0.13, 0.13, vStellarSeed);
+        vec2 shoulderPoint = vec2(
+          rayPoint.x * (0.91 + asymmetry),
+          rayPoint.y * (1.09 - asymmetry)
         );
-        float shortSpike = (
-          1.0 - smoothstep(0.012, 0.012 + antialias, axis)
-        ) * pow(max(0.0, 1.0 - radius), 5.2);
-        float corona = exp(-radius * radius * 9.5)
-          * (1.0 - smoothstep(0.58, 0.98, radius));
-        float haloEnergy = corona * 0.045 * vHaloStrength * vHaloVisibility;
-        float rayEnergy = shortSpike
-          * (0.060 + vRayStrength * 0.16)
-          * vRayVisibility;
-        float alpha = min(0.10, haloEnergy + rayEnergy);
+        float shoulderRadius = length(shoulderPoint);
+        float shoulderAngle = atan(shoulderPoint.y, shoulderPoint.x);
+        float contour = 0.88
+          + sin(shoulderAngle * 3.0 + vStellarSeed * 17.0) * 0.075
+          + sin(shoulderAngle * 5.0 - vStellarSeed * 11.0) * 0.045;
+        float shoulder = exp(-shoulderRadius * shoulderRadius * 6.8)
+          * (1.0 - smoothstep(0.58 * contour, 0.96 * contour, shoulderRadius));
+        float horizontalAxis = abs(rayPoint.y)
+          * mix(0.88, 1.12, vStellarSeed);
+        float verticalAxis = abs(rayPoint.x)
+          * mix(1.12, 0.88, vStellarSeed);
+        float horizontalSpike = (
+          1.0 - smoothstep(0.010, 0.010 + antialias, horizontalAxis)
+        ) * pow(max(0.0, 1.0 - abs(rayPoint.x)), 4.8);
+        float verticalSpike = (
+          1.0 - smoothstep(0.010, 0.010 + antialias, verticalAxis)
+        ) * pow(max(0.0, 1.0 - abs(rayPoint.y)), 5.6);
+        float rayEnergy = (
+          horizontalSpike * mix(1.08, 0.86, vStellarSeed)
+          + verticalSpike * mix(0.82, 1.05, vStellarSeed)
+        ) * vRayStrength * 0.12 * vRayVisibility;
+        float shoulderEnergy = shoulder
+          * (0.052 + vImportance * 0.018)
+          * vHaloStrength
+          * vHaloVisibility;
+        float arcRadius = abs(radius - 0.59);
+        float arcBand = 1.0 - smoothstep(0.035, 0.09, arcRadius);
+        float arcA = smoothstep(
+          -0.18,
+          0.22,
+          sin(shoulderAngle * 1.31 + vStellarSeed * 15.0)
+        );
+        float arcB = smoothstep(
+          -0.28,
+          0.16,
+          cos(shoulderAngle * 1.08 - vStellarSeed * 12.0)
+        );
+        float focusArc = arcBand
+          * max(arcA * (1.0 - arcB), arcB * (1.0 - arcA))
+          * step(2.5, vAgentFocusRole)
+          * vAgentFocusBlend;
+        float alpha = min(
+          0.12,
+          min(0.10, shoulderEnergy + rayEnergy) + focusArc * 0.12
+        );
         if (alpha < 0.003) discard;
         float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
         vec3 stellarColor = mix(
           vec3(luminance),
           vColor,
-          mix(0.34, 0.52, vAgentNearness)
+          mix(0.48, 0.66, vAgentNearness)
         );
-        vec3 color = mix(stellarColor, vec3(0.995, 0.997, 1.0), rayEnergy * 4.0);
+        vec3 color = mix(
+          stellarColor,
+          vec3(0.995, 0.997, 1.0),
+          clamp(rayEnergy * 4.5, 0.0, 0.78)
+        );
         gl_FragColor = vec4(color, alpha);
       }
     ` : `
@@ -12917,43 +19823,36 @@ function createHotspotPointSourceMaterial(
       varying float vCssSize;
       varying float vAgentNearness;
       varying float vStellarSeed;
+      varying float vImportance;
+      varying float vAgentFocusRole;
+      varying float vAgentFocusBlend;
       void main() {
         vec2 point = (gl_PointCoord - vec2(0.5)) * 2.0;
         float radius = length(point);
         float antialias = max(fwidth(radius), 0.010);
         if (radius >= 1.0 || vCoreVisibility <= 0.001) discard;
-        float pointLod = 1.0 - smoothstep(1.55, 1.95, vCssSize);
-        float nearLod = smoothstep(6.0, 10.0, vCssSize);
-        float coreTightness = max(10.0, vCssSize * vCssSize * 0.82);
-        float hotCore = exp(-radius * radius * coreTightness);
-        float diamond = 1.0 - smoothstep(
-          0.26,
-          0.26 + antialias,
-          max(abs(point.x), abs(point.y))
+        float hotCore = 1.0 - smoothstep(
+          0.42,
+          min(0.98, 0.42 + antialias * 2.4),
+          radius
         );
-        float angle = atan(point.y, point.x);
-        float irregular = 0.92 + 0.08 * sin(
-          angle * 5.0 + vStellarSeed * 21.0
-        );
-        float shoulder = exp(
-          -radius * radius * mix(18.0, 6.8, nearLod)
-        ) * irregular;
+        float subpixelShoulder = exp(-radius * radius * 7.5)
+          * (1.0 - smoothstep(0.55, 0.98, radius));
         float luminance = dot(vColor, vec3(0.2126, 0.7152, 0.0722));
         vec3 stellarShell = mix(
           vec3(luminance),
           vColor,
-          mix(0.38, 0.58, vAgentNearness)
+          mix(0.42, 0.58, vAgentNearness)
         );
         vec3 color = mix(
           stellarShell,
           vec3(0.995, 0.997, 1.0),
-          clamp(hotCore * 0.92 + diamond * pointLod * 0.26, 0.0, 0.96)
+          clamp(0.72 + hotCore * 0.22, 0.0, 0.94)
         );
-        float energy = hotCore
-          + max(diamond * pointLod * 0.76, shoulder * mix(0.10, 0.24, nearLod));
+        float energy = hotCore + subpixelShoulder * (0.18 + vImportance * 0.08);
         float alpha = vCoreVisibility * min(1.0, energy);
         if (alpha < 0.008) discard;
-        gl_FragColor = vec4(color * min(1.08, energy), alpha);
+        gl_FragColor = vec4(color * min(1.06, 0.94 + energy * 0.12), alpha);
       }
     `) : `
       varying vec3 vColor;
@@ -13132,6 +20031,14 @@ function isSystemPaperOccludedByStar(
   return nearestHit > 0 && nearestHit < paperDistance - starWorldRadius * 0.02;
 }
 
+type AgentTheoryLabelRuntimeState = {
+  opacity: number;
+  targetOpacity: number;
+  collisionFreePasses: number;
+  collisionStartedAtMs: number;
+  lastUpdatedAtMs: number;
+};
+
 function drawSystemLabels(
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
@@ -13228,6 +20135,215 @@ function drawSystemLabels(
   });
 }
 
+function drawAgentTheoryLabels(
+  canvas: HTMLCanvasElement,
+  camera: THREE.PerspectiveCamera,
+  root: THREE.Group,
+  sceneData: App17SceneData,
+  rankedHotspots: App17RenderPoint[],
+  hotspotById: Map<string, App17RenderPoint>,
+  labelTextById: Map<string, string>,
+  selectedId: string,
+  hoverId: string,
+  cameraDistance: number,
+  width: number,
+  height: number,
+  states: Map<string, AgentTheoryLabelRuntimeState>,
+  now: number,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return false;
+  const pixelRatio = canvas.width / Math.max(1, width);
+  const selected = hotspotById.get(selectedId);
+  const hovered = hotspotById.get(hoverId);
+  const labelLimit = cameraDistance <= APP17_ZOOM_LABEL_RADIUS
+    ? APP17_ZOOM_LABEL_LIMIT
+    : APP17_DEFAULT_LABEL_LIMIT;
+  const primaryHotspots = rankedHotspots.slice(0, APP17_PRIMARY_LABEL_COUNT);
+  const secondaryHotspots = cameraDistance <= APP17_ZOOM_LABEL_RADIUS
+    ? rankedHotspots.slice(APP17_PRIMARY_LABEL_COUNT, labelLimit)
+    : [];
+  const secondaryIds = new Set(secondaryHotspots.map((hotspot) => hotspot.id));
+  const candidates = uniqueHotspots([
+    selected,
+    hovered,
+    ...primaryHotspots,
+    ...secondaryHotspots,
+  ]);
+  const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const worldPosition = new THREE.Vector3();
+  const screenPosition = new THREE.Vector3();
+  const seenIds = new Set<string>();
+  const renderEntries: Array<{
+    hotspot: App17RenderPoint;
+    state: AgentTheoryLabelRuntimeState;
+    x: number;
+    y: number;
+    title: string;
+    isPriority: boolean;
+    isSecondary: boolean;
+  }> = [];
+  let transitionActive = false;
+
+  for (const hotspot of candidates) {
+    worldPosition.copy(hotspot.position).applyMatrix4(root.matrixWorld);
+    screenPosition.copy(worldPosition).project(camera);
+    if (screenPosition.z < -1 || screenPosition.z > 1) continue;
+    const x = (screenPosition.x * 0.5 + 0.5) * width;
+    const opticalDiameter =
+      APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX
+      + Math.pow(hotspot.importance, 0.72)
+        * (
+          APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX
+          - APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX
+        );
+    const baseLabelOffset = Math.max(10, opticalDiameter * 0.5 + 5);
+    const selectedLabelOffset =
+      focusMarkerCssDiameter() * 0.5
+      + (sceneData.kind === "app15" ? 26 : 12);
+    const labelOffset = hotspot.id === selectedId
+      ? Math.max(baseLabelOffset, selectedLabelOffset)
+      : baseLabelOffset;
+    const y = (-screenPosition.y * 0.5 + 0.5) * height - labelOffset;
+    if (x < -90 || x > width + 90 || y < -40 || y > height + 40) continue;
+
+    const isPriority = hotspot.id === selectedId || hotspot.id === hoverId;
+    const title = isPriority
+      ? ellipsis(hotspot.title, 38)
+      : labelTextById.get(hotspot.id) ?? hotspot.title;
+    const estimatedWidth = THREE.MathUtils.clamp(
+      title.length * 7,
+      72,
+      isPriority ? 230 : 200,
+    );
+    const box = {
+      x: x - estimatedWidth / 2,
+      y: y - 15,
+      w: estimatedWidth,
+      h: isPriority && sceneData.kind === "app15" ? 34 : 24,
+    };
+    const collides = !isPriority
+      && occupied.some((item) => rectsOverlap(item, box));
+    let state = states.get(hotspot.id);
+    if (!state) {
+      state = {
+        opacity: 0,
+        targetOpacity: 0,
+        collisionFreePasses: 0,
+        collisionStartedAtMs: 0,
+        lastUpdatedAtMs: now,
+      };
+      states.set(hotspot.id, state);
+    }
+    seenIds.add(hotspot.id);
+
+    if (isPriority) {
+      state.collisionFreePasses = 2;
+      state.collisionStartedAtMs = 0;
+      state.targetOpacity = 1;
+    } else if (!collides) {
+      state.collisionFreePasses = Math.min(
+        2,
+        state.collisionFreePasses + 1,
+      );
+      state.collisionStartedAtMs = 0;
+      if (state.collisionFreePasses >= 2) state.targetOpacity = 1;
+    } else {
+      state.collisionFreePasses = 0;
+      if (state.collisionStartedAtMs <= 0) {
+        state.collisionStartedAtMs = now;
+      }
+      if (
+        now - state.collisionStartedAtMs
+          >= APP17_AGENT_THEORY_LABEL_COLLISION_HIDE_MS
+      ) {
+        state.targetOpacity = 0;
+      }
+    }
+
+    const elapsedMs = Math.max(0, now - state.lastUpdatedAtMs);
+    const opacityStep = elapsedMs / APP17_AGENT_THEORY_LABEL_FADE_MS;
+    state.opacity = state.opacity < state.targetOpacity
+      ? Math.min(state.targetOpacity, state.opacity + opacityStep)
+      : Math.max(state.targetOpacity, state.opacity - opacityStep);
+    state.lastUpdatedAtMs = now;
+    if (
+      Math.abs(state.opacity - state.targetOpacity) > 0.001
+      || (!collides && !isPriority && state.collisionFreePasses < 2)
+      || (
+        collides
+        && state.collisionStartedAtMs > 0
+        && now - state.collisionStartedAtMs
+          < APP17_AGENT_THEORY_LABEL_COLLISION_HIDE_MS
+      )
+    ) {
+      transitionActive = true;
+    }
+    if (state.opacity > 0.001 || state.targetOpacity > 0) {
+      occupied.push(box);
+      renderEntries.push({
+        hotspot,
+        state,
+        x,
+        y,
+        title,
+        isPriority,
+        isSecondary: !isPriority && secondaryIds.has(hotspot.id),
+      });
+    }
+  }
+
+  for (const [hotspotId, state] of states) {
+    if (seenIds.has(hotspotId)) continue;
+    state.targetOpacity = 0;
+    const elapsedMs = Math.max(0, now - state.lastUpdatedAtMs);
+    state.opacity = Math.max(
+      0,
+      state.opacity
+        - elapsedMs / APP17_AGENT_THEORY_LABEL_FADE_MS,
+    );
+    state.lastUpdatedAtMs = now;
+    if (state.opacity <= 0.001) states.delete(hotspotId);
+    else transitionActive = true;
+  }
+
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const entry of renderEntries) {
+    if (entry.state.opacity <= 0.001) continue;
+    ctx.globalAlpha = entry.state.opacity;
+    ctx.font = entry.isPriority
+      ? "650 12px Inter, Microsoft YaHei, system-ui, sans-serif"
+      : entry.isSecondary
+        ? "600 10px Inter, system-ui, sans-serif"
+        : "620 11px Inter, system-ui, sans-serif";
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = "rgba(0,0,0,0.82)";
+    ctx.fillStyle = entry.isPriority
+      ? "rgba(255,255,255,0.98)"
+      : entry.isSecondary
+        ? "rgba(235,243,255,0.58)"
+        : "rgba(241,247,255,0.82)";
+    ctx.strokeText(entry.title, entry.x, entry.y);
+    ctx.fillText(entry.title, entry.x, entry.y);
+
+    if (entry.isPriority && sceneData.kind === "app15") {
+      const subtitle =
+        `${entry.hotspot.field} | ${entry.hotspot.paperCount.toLocaleString()}`;
+      ctx.font = "600 10px Inter, system-ui, sans-serif";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.88)";
+      ctx.fillStyle = "rgba(218,232,255,0.78)";
+      ctx.strokeText(subtitle, entry.x, entry.y + 15);
+      ctx.fillText(subtitle, entry.x, entry.y + 15);
+    }
+  }
+  ctx.globalAlpha = 1;
+  return transitionActive;
+}
+
 function drawLabels(
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
@@ -13243,9 +20359,29 @@ function drawLabels(
   width: number,
   height: number,
   visualProfile: GalaxyVisualProfile,
+  agentTheoryStates?: Map<string, AgentTheoryLabelRuntimeState>,
+  now = performance.now(),
 ) {
+  if (visualProfile === "agent-theory" && agentTheoryStates) {
+    return drawAgentTheoryLabels(
+      canvas,
+      camera,
+      root,
+      sceneData,
+      rankedHotspots,
+      hotspotById,
+      labelTextById,
+      selectedId,
+      hoverId,
+      cameraDistance,
+      width,
+      height,
+      agentTheoryStates,
+      now,
+    );
+  }
   const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  if (!ctx) return false;
   const pixelRatio = canvas.width / Math.max(1, width);
   ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   ctx.clearRect(0, 0, width, height);
@@ -13274,9 +20410,15 @@ function drawLabels(
     screenPosition.copy(worldPosition).project(camera);
     if (screenPosition.z < -1 || screenPosition.z > 1) continue;
     const x = (screenPosition.x * 0.5 + 0.5) * width;
-    const agentOpticalDiameter = 8 + hotspot.importance * 10;
+    const agentOpticalDiameter =
+      APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX
+      + Math.pow(hotspot.importance, 0.72)
+        * (
+          APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX
+          - APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX
+        );
     const baseLabelOffset = visualProfile === "agent-theory"
-      ? Math.max(15, agentOpticalDiameter * 0.5 + 7)
+      ? Math.max(10, agentOpticalDiameter * 0.5 + 5)
       : Math.max(15, hotspot.size * 0.5 + hotspot.displaySize * 0.08);
     const selectedLabelOffset = focusMarkerCssDiameter() * 0.5 + (sceneData.kind === "app15" ? 26 : 12);
     const labelOffset = hotspot.id === selectedId ? Math.max(baseLabelOffset, selectedLabelOffset) : baseLabelOffset;
@@ -13292,19 +20434,35 @@ function drawLabels(
 
     const isSecondary = !isPriority && secondaryIds.has(hotspot.id);
     ctx.font = isPriority
-      ? "700 13px Inter, Microsoft YaHei, system-ui, sans-serif"
+      ? visualProfile === "agent-theory"
+        ? "650 12px Inter, Microsoft YaHei, system-ui, sans-serif"
+        : "700 13px Inter, Microsoft YaHei, system-ui, sans-serif"
       : sceneData.kind === "app14"
         ? "700 10px Inter, Microsoft YaHei, system-ui, sans-serif"
         : isSecondary
-          ? "700 11px Inter, system-ui, sans-serif"
-          : "700 12px Inter, system-ui, sans-serif";
-    ctx.lineWidth = sceneData.kind === "app14" ? 3.2 : 4;
-    ctx.strokeStyle = "rgba(0,0,0,0.94)";
+          ? visualProfile === "agent-theory"
+            ? "600 10px Inter, system-ui, sans-serif"
+            : "700 11px Inter, system-ui, sans-serif"
+          : visualProfile === "agent-theory"
+            ? "620 11px Inter, system-ui, sans-serif"
+            : "700 12px Inter, system-ui, sans-serif";
+    ctx.lineWidth = sceneData.kind === "app14"
+      ? 3.2
+      : visualProfile === "agent-theory"
+        ? 2.6
+        : 4;
+    ctx.strokeStyle = visualProfile === "agent-theory"
+      ? "rgba(0,0,0,0.82)"
+      : "rgba(0,0,0,0.94)";
     ctx.fillStyle = isPriority
       ? "rgba(255,255,255,0.98)"
       : isSecondary
-        ? "rgba(246,250,255,0.72)"
-        : "rgba(246,250,255,0.95)";
+        ? visualProfile === "agent-theory"
+          ? "rgba(235,243,255,0.58)"
+          : "rgba(246,250,255,0.72)"
+        : visualProfile === "agent-theory"
+          ? "rgba(241,247,255,0.82)"
+          : "rgba(246,250,255,0.95)";
     ctx.strokeText(title, x, y);
     ctx.fillText(title, x, y);
 
@@ -13318,6 +20476,7 @@ function drawLabels(
       ctx.fillText(subtitle, x, y + 15);
     }
   }
+  return false;
 }
 
 function stableShuffleHotspotsApp14(hotspots: App17GalaxyHotspotPoint[]) {

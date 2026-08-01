@@ -55,9 +55,8 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let root = argument("--root").unwrap_or_else(|| {
-        PathBuf::from("src-tauri/target/agent-performance-audit")
-    });
+    let root = argument("--root")
+        .unwrap_or_else(|| PathBuf::from("src-tauri/target/agent-performance-audit"));
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let database_path = root.join("agent-performance-v11.sqlite");
     remove_sqlite_family(&database_path);
@@ -65,7 +64,9 @@ fn run() -> Result<(), String> {
     migrate_library_file(&database_path, PROJECT_ID, 1_000, false)?;
     let mut connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
     connection
-        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+        )
         .map_err(|error| error.to_string())?;
 
     let insert_started = Instant::now();
@@ -88,9 +89,11 @@ fn run() -> Result<(), String> {
             project_id: PROJECT_ID.into(),
             algorithm_version: V20_ALGORITHM_VERSION.into(),
             layout_version: research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION.into(),
-            projection_version: research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION.into(),
+            projection_version:
+                research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION.into(),
             embedding_model_id: research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID.into(),
-            embedding_model_revision: research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION.into(),
+            embedding_model_revision:
+                research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION.into(),
             hotspot_identity_version: research_hotspots_core::HOTSPOT_IDENTITY_VERSION.into(),
             paper_count: PAPER_COUNT,
             created_at,
@@ -156,8 +159,11 @@ fn run() -> Result<(), String> {
         thresholds,
     };
     let encoded = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
-    fs::write(root.join("agent-performance-report.json"), format!("{encoded}\n"))
-        .map_err(|error| error.to_string())?;
+    fs::write(
+        root.join("agent-performance-report.json"),
+        format!("{encoded}\n"),
+    )
+    .map_err(|error| error.to_string())?;
     println!("{encoded}");
     remove_sqlite_family(&database_path);
     if !ok {
@@ -182,17 +188,49 @@ fn create_v8_fixture(path: &Path) -> Result<(), String> {
 }
 
 fn insert_rows(connection: &mut Connection, from: i64, to: i64) -> Result<(), String> {
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
     {
         let mut statement = transaction.prepare("INSERT INTO papers(id,project_id,source,title,abstract,authors,categories,field,published_date,year,url,doi,created_at,updated_at,search_blob) VALUES(?1,?2,'local',?3,?4,?5,?6,?7,?8,?9,?10,?11,'performance','performance',?12)").map_err(|error|error.to_string())?;
         for index in from..to {
-            let discipline = ["Quantum Physics", "Medical Imaging", "Protein Science", "Artificial Intelligence"][(index as usize) % 4];
-            let topic = ["error correction", "foundation model", "protein design", "retrieval agent"][(index as usize) % 4];
-            let method = ["graph evidence", "benchmark evaluation", "multimodal learning", "temporal audit"][(index as usize / 4) % 4];
+            let discipline = [
+                "Quantum Physics",
+                "Medical Imaging",
+                "Protein Science",
+                "Artificial Intelligence",
+            ][(index as usize) % 4];
+            let topic = [
+                "error correction",
+                "foundation model",
+                "protein design",
+                "retrieval agent",
+            ][(index as usize) % 4];
+            let method = [
+                "graph evidence",
+                "benchmark evaluation",
+                "multimodal learning",
+                "temporal audit",
+            ][(index as usize / 4) % 4];
             let title = format!("{topic} {method} study {index}");
             let abstract_text = format!("This reproducible {discipline} paper studies {topic} with {method}, evidence retrieval, semantic clustering, limitations, and reliable local analysis at realistic field lengths. Record {index}.");
             let search_blob = format!("{title} {abstract_text} {discipline}").to_lowercase();
-            statement.execute(params![format!("paper-{index:06}"),PROJECT_ID,title,abstract_text,format!("Author {}, Coauthor {}",index%997,index%389),topic,discipline,format!("202{}-01-01",index%7),2020+index%7,format!("https://example.org/paper/{index}"),format!("10.0000/performance.{index:06}"),search_blob]).map_err(|error|error.to_string())?;
+            statement
+                .execute(params![
+                    format!("paper-{index:06}"),
+                    PROJECT_ID,
+                    title,
+                    abstract_text,
+                    format!("Author {}, Coauthor {}", index % 997, index % 389),
+                    topic,
+                    discipline,
+                    format!("202{}-01-01", index % 7),
+                    2020 + index % 7,
+                    format!("https://example.org/paper/{index}"),
+                    format!("10.0000/performance.{index:06}"),
+                    search_blob
+                ])
+                .map_err(|error| error.to_string())?;
         }
     }
     transaction.commit().map_err(|error| error.to_string())
@@ -200,30 +238,63 @@ fn insert_rows(connection: &mut Connection, from: i64, to: i64) -> Result<(), St
 
 fn search_p95(connection: &Connection) -> Result<u128, String> {
     let mut samples = Vec::new();
-    for term in ["graph", "foundation", "protein", "retrieval", "benchmark"].into_iter().cycle().take(31) {
+    for term in ["graph", "foundation", "protein", "retrieval", "benchmark"]
+        .into_iter()
+        .cycle()
+        .take(31)
+    {
         let started = Instant::now();
         let mut statement = connection.prepare("SELECT id,title FROM papers WHERE project_id=?1 AND search_blob LIKE ?2 ORDER BY year DESC,updated_at DESC LIMIT 20").map_err(|error|error.to_string())?;
-        let rows = statement.query_map(params![PROJECT_ID,format!("%{term}%")],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))).map_err(|error|error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error|error.to_string())?;
-        if rows.is_empty() { return Err("PERFORMANCE_SEARCH_EMPTY".into()); }
+        let rows = statement
+            .query_map(params![PROJECT_ID, format!("%{term}%")], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        if rows.is_empty() {
+            return Err("PERFORMANCE_SEARCH_EMPTY".into());
+        }
         samples.push(started.elapsed().as_millis());
     }
     samples.sort_unstable();
     Ok(samples[((samples.len() as f64 * 0.95).ceil() as usize).saturating_sub(1)])
 }
 
-fn prepare_snapshot_rows(connection: &Connection) -> Result<(Vec<SnapshotHotspot>, Vec<SnapshotMembership>), String> {
+fn prepare_snapshot_rows(
+    connection: &Connection,
+) -> Result<(Vec<SnapshotHotspot>, Vec<SnapshotMembership>), String> {
     let mut counts = vec![0_i64; HOTSPOT_COUNT];
     let mut memberships = Vec::with_capacity(PAPER_COUNT as usize);
-    let mut statement = connection.prepare("SELECT id,title,abstract FROM papers WHERE project_id=?1 ORDER BY id").map_err(|error|error.to_string())?;
-    let rows = statement.query_map(params![PROJECT_ID],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?))).map_err(|error|error.to_string())?;
+    let mut statement = connection
+        .prepare("SELECT id,title,abstract FROM papers WHERE project_id=?1 ORDER BY id")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![PROJECT_ID], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?;
     for row in rows {
         let (paper_id, title, abstract_text) = row.map_err(|error| error.to_string())?;
         let mut hasher = DefaultHasher::new();
-        title.hash(&mut hasher); abstract_text.hash(&mut hasher);
+        title.hash(&mut hasher);
+        abstract_text.hash(&mut hasher);
         let hash = hasher.finish();
         let index = (hash as usize) % HOTSPOT_COUNT;
         counts[index] += 1;
-        memberships.push(SnapshotMembership { paper_id, hotspot_id: format!("hotspot-{index:03}"), x: ((hash & 0xffff) as f64 / 65535.0) * 20.0 - 10.0, y: (((hash>>16)&0xffff) as f64 / 65535.0) * 20.0 - 10.0, z: (((hash>>32)&0xffff) as f64 / 65535.0) * 20.0 - 10.0, representative_rank: (counts[index] <= 10).then_some(counts[index]), score: 0.5 + (hash % 5000) as f64 / 10000.0 });
+        memberships.push(SnapshotMembership {
+            paper_id,
+            hotspot_id: format!("hotspot-{index:03}"),
+            x: ((hash & 0xffff) as f64 / 65535.0) * 20.0 - 10.0,
+            y: (((hash >> 16) & 0xffff) as f64 / 65535.0) * 20.0 - 10.0,
+            z: (((hash >> 32) & 0xffff) as f64 / 65535.0) * 20.0 - 10.0,
+            representative_rank: (counts[index] <= 10).then_some(counts[index]),
+            score: 0.5 + (hash % 5000) as f64 / 10000.0,
+        });
     }
     let hotspots = counts.into_iter().enumerate().map(|(index,paper_count)| SnapshotHotspot { hotspot_id: format!("hotspot-{index:03}"), payload_json: format!(r#"{{"id":"hotspot-{index:03}","title":"Performance hotspot {index}","paperCount":{paper_count}}}"#), identity_key_sha256: format!("identity-{index:03}"), x: (index % 20) as f64 - 10.0, y: ((index / 20) % 8) as f64 - 4.0, z: (index % 7) as f64 - 3.0, paper_count, updated_at: "performance".into() }).collect();
     Ok((hotspots, memberships))
@@ -231,22 +302,97 @@ fn prepare_snapshot_rows(connection: &Connection) -> Result<(Vec<SnapshotHotspot
 
 fn load_evidence(connection: &Connection, snapshot_id: &str) -> Result<Vec<String>, String> {
     let mut statement = connection.prepare("SELECT p.title FROM v20_paper_memberships m JOIN papers p ON p.id=m.paper_id AND p.project_id=m.project_id WHERE m.snapshot_id=?1 AND m.hotspot_id='hotspot-000' ORDER BY COALESCE(m.representative_rank,2147483647),m.paper_id LIMIT 18").map_err(|error|error.to_string())?;
-    let rows = statement.query_map(params![snapshot_id],|row|row.get::<_,String>(0)).map_err(|error|error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error|error.to_string())?;
+    let rows = statement
+        .query_map(params![snapshot_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     Ok(rows)
 }
 
-fn argument(name: &str) -> Option<PathBuf> { let values=env::args().collect::<Vec<_>>(); values.iter().position(|value|value==name).and_then(|index|values.get(index+1)).map(PathBuf::from) }
-fn file_size(path: &Path) -> u64 { fs::metadata(path).map(|value|value.len()).unwrap_or(0) }
-fn directory_size(path: &Path) -> u64 { if !path.exists(){return 0} fs::read_dir(path).map(|rows|rows.filter_map(Result::ok).map(|row|if row.path().is_dir(){directory_size(&row.path())}else{file_size(&row.path())}).sum()).unwrap_or(0) }
-fn remove_sqlite_family(path: &Path) { for suffix in ["", "-wal", "-shm", "-journal"] { let _=fs::remove_file(format!("{}{}",path.display(),suffix)); } }
+fn argument(name: &str) -> Option<PathBuf> {
+    let values = env::args().collect::<Vec<_>>();
+    values
+        .iter()
+        .position(|value| value == name)
+        .and_then(|index| values.get(index + 1))
+        .map(PathBuf::from)
+}
+fn file_size(path: &Path) -> u64 {
+    fs::metadata(path).map(|value| value.len()).unwrap_or(0)
+}
+fn directory_size(path: &Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    fs::read_dir(path)
+        .map(|rows| {
+            rows.filter_map(Result::ok)
+                .map(|row| {
+                    if row.path().is_dir() {
+                        directory_size(&row.path())
+                    } else {
+                        file_size(&row.path())
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+fn remove_sqlite_family(path: &Path) {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let _ = fs::remove_file(format!("{}{}", path.display(), suffix));
+    }
+}
 
 #[cfg(windows)]
 fn working_set_bytes() -> u64 {
-    #[repr(C)] struct Counters { cb:u32,page_fault_count:u32,peak_working_set_size:usize,working_set_size:usize,quota_peak_paged_pool_usage:usize,quota_paged_pool_usage:usize,quota_peak_non_paged_pool_usage:usize,quota_non_paged_pool_usage:usize,pagefile_usage:usize,peak_pagefile_usage:usize }
-    #[link(name="kernel32")] extern "system" { fn GetCurrentProcess() -> *mut core::ffi::c_void; }
-    #[link(name="psapi")] extern "system" { fn GetProcessMemoryInfo(process:*mut core::ffi::c_void,counters:*mut Counters,size:u32)->i32; }
-    let mut counters=Counters{cb:std::mem::size_of::<Counters>() as u32,page_fault_count:0,peak_working_set_size:0,working_set_size:0,quota_peak_paged_pool_usage:0,quota_paged_pool_usage:0,quota_peak_non_paged_pool_usage:0,quota_non_paged_pool_usage:0,pagefile_usage:0,peak_pagefile_usage:0};
-    unsafe { if GetProcessMemoryInfo(GetCurrentProcess(),&mut counters,counters.cb)!=0 { counters.peak_working_set_size as u64 } else { 0 } }
+    #[repr(C)]
+    struct Counters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+    }
+    #[link(name = "psapi")]
+    extern "system" {
+        fn GetProcessMemoryInfo(
+            process: *mut core::ffi::c_void,
+            counters: *mut Counters,
+            size: u32,
+        ) -> i32;
+    }
+    let mut counters = Counters {
+        cb: std::mem::size_of::<Counters>() as u32,
+        page_fault_count: 0,
+        peak_working_set_size: 0,
+        working_set_size: 0,
+        quota_peak_paged_pool_usage: 0,
+        quota_paged_pool_usage: 0,
+        quota_peak_non_paged_pool_usage: 0,
+        quota_non_paged_pool_usage: 0,
+        pagefile_usage: 0,
+        peak_pagefile_usage: 0,
+    };
+    unsafe {
+        if GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 {
+            counters.peak_working_set_size as u64
+        } else {
+            0
+        }
+    }
 }
 #[cfg(not(windows))]
-fn working_set_bytes() -> u64 { 0 }
+fn working_set_bytes() -> u64 {
+    0
+}

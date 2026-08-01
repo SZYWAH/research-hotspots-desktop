@@ -108,12 +108,20 @@ async fn run_quality_evaluation(
 ) -> Result<(), String> {
     let cases = [
         ("quantum error correction", false, "baseline"),
-        ("fault-tolerant quantum computing", false, "conflicting_evidence"),
+        (
+            "fault-tolerant quantum computing",
+            false,
+            "conflicting_evidence",
+        ),
         ("quantum noise mitigation", true, "prompt_injection"),
         ("medical imaging foundation models", false, "baseline"),
         ("clinical multimodal diagnosis", false, "evidence_boundary"),
         ("medical AI deployment safety", true, "conflicting_evidence"),
-        ("protein language model repetition control", false, "baseline"),
+        (
+            "protein language model repetition control",
+            false,
+            "baseline",
+        ),
         ("multimodal protein design", false, "prompt_injection"),
         ("protein representation learning", true, "snapshot_boundary"),
         ("retrieval-augmented scientific agents", false, "baseline"),

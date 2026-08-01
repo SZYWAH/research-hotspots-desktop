@@ -31,7 +31,7 @@ export type AgentGalaxyFocusIntent = {
   kind: "paper" | "hotspot";
   entityId: string;
   mode: "signal" | "soft-focus" | "full-focus";
-  reason: "query" | "citation-click" | "reading";
+  reason: "query" | "citation-click" | "reading" | "visual-review";
 };
 
 export type BackgroundMembership =

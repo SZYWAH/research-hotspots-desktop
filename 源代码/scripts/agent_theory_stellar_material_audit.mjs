@@ -75,22 +75,29 @@ for (const [name, passed, detail] of [
     "hotspot pickObject",
   ],
   [
-    "Agent theory core size follows projected angular diameter",
+    "Agent theory hotspot core stays a clear 2.8-5.2px point source",
     /float angularCssDiameter = worldDiameter/.test(hotspotMaterial)
-      && /clamp\(angularCssDiameter, 1\.0, 16\.0\)/.test(hotspotMaterial)
+      && /APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX = 2\.8/.test(source)
+      && /APP17_AGENT_THEORY_HOTSPOT_CORE_MAX_CSS_PX = 5\.2/.test(source)
+      && /APP17_AGENT_THEORY_HOTSPOT_CORE_MIN_CSS_PX\.toFixed/.test(
+        hotspotMaterial,
+      )
       && /\* \$\{APP15_COORD_SCALE\.toFixed\(4\)\}/.test(hotspotMaterial),
-    "angular core LOD",
+    "compact overview core",
   ],
   [
-    "Agent theory optical size follows the bounded PSF shoulder",
-    /clamp\(angularCssDiameter \* 1\.45, 1\.0, 24\.0\)/.test(
-      hotspotMaterial,
-    ),
+    "Agent theory optical shoulder is bounded to 5.5-10px",
+    /APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX = 5\.5/.test(source)
+      && /APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MAX_CSS_PX = 10/.test(source)
+      && /APP17_AGENT_THEORY_HOTSPOT_OPTICAL_MIN_CSS_PX\.toFixed/.test(
+        hotspotMaterial,
+      ),
     "optical PSF LOD",
   ],
   [
-    "optical corona opacity is capped at 10%",
-    /min\(0\.10, haloEnergy \+ rayEnergy\)/.test(hotspotMaterial),
+    "optical shoulder and rays are capped at 10%",
+    /min\(0\.10, shoulderEnergy \+ rayEnergy\)/.test(hotspotMaterial)
+      && /focusArc \* 0\.12/.test(hotspotMaterial),
     "optical opacity cap",
   ],
   [
@@ -101,19 +108,30 @@ for (const [name, passed, detail] of [
   ],
   [
     "Agent hotspot uses a point-spread function rather than a full disc",
-    /coreTightness/.test(agentHotspotFragment)
-      && /shoulder/.test(agentHotspotFragment)
-      && /shortSpike/.test(agentHotspotFragment)
+    /subpixelShoulder/.test(agentHotspotFragment)
+      && /shoulderPoint/.test(hotspotMaterial)
+      && /horizontalSpike/.test(hotspotMaterial)
+      && /verticalSpike/.test(hotspotMaterial)
       && !/directionalLight|Lambert/i.test(agentHotspotFragment),
     "hybrid stellar LOD",
   ],
   [
-    "nearby Agent hotspots use no more than 12 shared sphere slots",
-    /const maximumSlots = 12/.test(source)
-      && /new THREE\.InstancedMesh\(geometry, coreMaterial, maximumSlots\)/.test(
+    "Ambient and Explore disable overview sphere eligibility",
+    /resolveAgentTheoryStellarLod\(\s*diameter,\s*false,\s*previousLod,\s*\)/.test(
+      sphereLayer,
+    )
+      && /hotspotLayer\.setResolvedSphereBlends\(sphereState\.blendById\)/.test(
         source,
       ),
-    "resolved hotspot sphere LOD",
+    "overview PSF ownership",
+  ],
+  [
+    "the local system photosphere crossfades only in the final 400ms",
+    /systemResources\.star\.setOpacity\(\s*smoothStepRange\(0\.80, 1\.0, exploration\.blend\)/.test(
+      source,
+    )
+      && /agentTheory\s*\?\s*\"0\.80, 1\.0\"/.test(hotspotMaterial),
+    "two-second entry final 20%",
   ],
   [
     "InstancedMesh shader relies on the Three.js injected instanceColor",
@@ -127,7 +145,8 @@ for (const [name, passed, detail] of [
   [
     "Agent theory materials have diagnostic names",
     [
-      "AgentTheoryPaperPSF",
+      "AgentTheoryPaperCore",
+      "AgentTheoryPaperOptical",
       "AgentTheoryHotspotCorePSF",
       "AgentTheoryHotspotOpticalPSF",
       "AgentTheoryHotspotSphereCore",
@@ -170,10 +189,11 @@ const result = {
   status: failed.length === 0 ? "PASS" : "FAIL",
   diagnostics: {
     paperSemanticChromaScale: [0.52, 0.78],
-    hotspotCoreCssSize: [1, 16],
-    hotspotOpticalCssSize: [1, 24],
-    hotspotCoronaOpacityMaximum: 0.10,
-    overviewEntityPasses: "point/psf plus at most 12 resolved sphere slots",
+    hotspotCoreCssSize: [2.8, 5.2],
+    hotspotOpticalCssSize: [5.5, 10],
+    hotspotOpticalOpacityMaximum: 0.10,
+    overviewEntityPasses:
+      "point/psf only; true photosphere begins in the final 400ms of system entry",
   },
   checks,
   failedChecks: failed,

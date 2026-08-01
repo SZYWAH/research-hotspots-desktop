@@ -161,10 +161,8 @@ fn run() -> Result<(), String> {
         snapshot
             .execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(|error| format!("cannot enable seed foreign keys: {error}"))?;
-        let library_revision = research_hotspots_core::current_library_revision(
-            &snapshot,
-            &project_id,
-        )?;
+        let library_revision =
+            research_hotspots_core::current_library_revision(&snapshot, &project_id)?;
         let (
             algorithm_version,
             paper_layout_version,
@@ -178,14 +176,16 @@ fn run() -> Result<(), String> {
                         embedding_model_id,embedding_model_revision,hotspot_identity_version
                  FROM v20_analysis_snapshots WHERE id=?1 AND project_id=?2",
                 params![snapshot_id, project_id],
-                |row| Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                )),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .map_err(|error| format!("cannot read active semantic algorithm: {error}"))?;
         if algorithm_version != research_hotspots_core::V20_ALGORITHM_VERSION
@@ -193,8 +193,7 @@ fn run() -> Result<(), String> {
                 != research_hotspots_core::semantic_layout::SEMANTIC_LAYOUT_VERSION
             || projection_version
                 != research_hotspots_core::semantic_layout::SEMANTIC_PROJECTION_VERSION
-            || embedding_model_id
-                != research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID
+            || embedding_model_id != research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID
             || embedding_model_revision
                 != research_hotspots_core::semantic_layout::SEMANTIC_MODEL_REVISION
             || hotspot_identity_version != research_hotspots_core::HOTSPOT_IDENTITY_VERSION

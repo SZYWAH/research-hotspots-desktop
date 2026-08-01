@@ -147,14 +147,22 @@ fn run() -> Result<(), String> {
     let args = parse_args()?;
     let database_path = resolve_database_path(&args)?;
     if !database_path.exists() || !database_path.is_file() {
-        return Err(format!("SQLite database does not exist: {}", database_path.display()));
+        return Err(format!(
+            "SQLite database does not exist: {}",
+            database_path.display()
+        ));
     }
 
     let conn = Connection::open_with_flags(
         &database_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|error| format!("Cannot open SQLite database {}: {error}", database_path.display()))?;
+    .map_err(|error| {
+        format!(
+            "Cannot open SQLite database {}: {error}",
+            database_path.display()
+        )
+    })?;
 
     ensure_papers_table(&conn)?;
 
@@ -178,7 +186,8 @@ fn run() -> Result<(), String> {
     )?;
     let duplicate_doi_risk_count = duplicate_risk_count(&conn, &args.project_id, "doi")?;
     let duplicate_url_risk_count = duplicate_risk_count(&conn, &args.project_id, "url")?;
-    let duplicate_title_risk_count = duplicate_risk_count(&conn, &args.project_id, "LOWER(TRIM(title))")?;
+    let duplicate_title_risk_count =
+        duplicate_risk_count(&conn, &args.project_id, "LOWER(TRIM(title))")?;
     let sources = facet(&conn, &args.project_id, "source", 20)?;
     let fields = facet(&conn, &args.project_id, "field", 80)?;
     let years = facet(&conn, &args.project_id, "CAST(year AS TEXT)", 80)?;
@@ -187,17 +196,22 @@ fn run() -> Result<(), String> {
     let cluster_smoke = cluster_smoke(&conn, &args.project_id)?;
 
     let size_bytes = file_size(&database_path);
-    let wal_bytes = file_size(PathBuf::from(format!("{}-wal", database_path.to_string_lossy())).as_path());
-    let shm_bytes = file_size(PathBuf::from(format!("{}-shm", database_path.to_string_lossy())).as_path());
+    let wal_bytes =
+        file_size(PathBuf::from(format!("{}-wal", database_path.to_string_lossy())).as_path());
+    let shm_bytes =
+        file_size(PathBuf::from(format!("{}-shm", database_path.to_string_lossy())).as_path());
 
-    let strict_gate = build_gate(&args, GateInputs {
-        paper_count,
-        missing_abstract_rate: rate(missing_abstract_count, paper_count),
-        missing_year_rate: rate(missing_year_count, paper_count),
-        query_ms,
-        cluster_count: cluster_smoke.visible_hotspot_count,
-        missing_indexes: &missing_indexes,
-    });
+    let strict_gate = build_gate(
+        &args,
+        GateInputs {
+            paper_count,
+            missing_abstract_rate: rate(missing_abstract_count, paper_count),
+            missing_year_rate: rate(missing_year_count, paper_count),
+            query_ms,
+            cluster_count: cluster_smoke.visible_hotspot_count,
+            missing_indexes: &missing_indexes,
+        },
+    );
 
     let result = AuditResult {
         generated_at: now_iso_like(),
@@ -235,9 +249,12 @@ fn run() -> Result<(), String> {
     let json = serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?;
     if let Some(output) = args.output.as_ref() {
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Cannot create output dir {}: {error}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Cannot create output dir {}: {error}", parent.display())
+            })?;
         }
-        fs::write(output, format!("{json}\n")).map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
+        fs::write(output, format!("{json}\n"))
+            .map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
     }
 
     println!(
@@ -309,7 +326,8 @@ fn parse_args() -> Result<Args, String> {
                 index += 2;
             }
             "--max-missing-abstract-rate" => {
-                args.max_missing_abstract_rate = Some(parse_rate(&read_value(&raw, index, key)?, key)?);
+                args.max_missing_abstract_rate =
+                    Some(parse_rate(&read_value(&raw, index, key)?, key)?);
                 index += 2;
             }
             "--max-missing-year-rate" => {
@@ -349,7 +367,9 @@ fn read_value(raw: &[String], index: usize, key: &str) -> Result<String, String>
 }
 
 fn parse_i64(value: &str, key: &str) -> Result<i64, String> {
-    let parsed = value.parse::<i64>().map_err(|_| format!("{key} must be an integer."))?;
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("{key} must be an integer."))?;
     if parsed <= 0 {
         return Err(format!("{key} must be positive."));
     }
@@ -357,7 +377,9 @@ fn parse_i64(value: &str, key: &str) -> Result<i64, String> {
 }
 
 fn parse_usize(value: &str, key: &str) -> Result<usize, String> {
-    let parsed = value.parse::<usize>().map_err(|_| format!("{key} must be an integer."))?;
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("{key} must be an integer."))?;
     if parsed == 0 {
         return Err(format!("{key} must be positive."));
     }
@@ -365,7 +387,9 @@ fn parse_usize(value: &str, key: &str) -> Result<usize, String> {
 }
 
 fn parse_u128(value: &str, key: &str) -> Result<u128, String> {
-    let parsed = value.parse::<u128>().map_err(|_| format!("{key} must be an integer."))?;
+    let parsed = value
+        .parse::<u128>()
+        .map_err(|_| format!("{key} must be an integer."))?;
     if parsed == 0 {
         return Err(format!("{key} must be positive."));
     }
@@ -373,7 +397,9 @@ fn parse_u128(value: &str, key: &str) -> Result<u128, String> {
 }
 
 fn parse_rate(value: &str, key: &str) -> Result<f64, String> {
-    let parsed = value.parse::<f64>().map_err(|_| format!("{key} must be a number."))?;
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("{key} must be a number."))?;
     if !(0.0..=1.0).contains(&parsed) {
         return Err(format!("{key} must be between 0 and 1."));
     }
@@ -473,8 +499,17 @@ fn duplicate_risk_count(conn: &Connection, project_id: &str, expr: &str) -> Resu
         .map_err(|error| error.to_string())
 }
 
-fn facet(conn: &Connection, project_id: &str, expr: &str, limit: i64) -> Result<Vec<Facet>, String> {
-    let null_guard = if expr.contains("year") { "AND year IS NOT NULL" } else { "" };
+fn facet(
+    conn: &Connection,
+    project_id: &str,
+    expr: &str,
+    limit: i64,
+) -> Result<Vec<Facet>, String> {
+    let null_guard = if expr.contains("year") {
+        "AND year IS NOT NULL"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT {expr} AS value, COUNT(*) AS count
          FROM papers
@@ -487,14 +522,14 @@ fn facet(conn: &Connection, project_id: &str, expr: &str, limit: i64) -> Result<
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let rows = stmt
         .query_map(params![project_id, limit], |row| {
-        Ok(Facet {
-            value: row.get(0)?,
-            count: row.get(1)?,
+            Ok(Facet {
+                value: row.get(0)?,
+                count: row.get(1)?,
+            })
         })
-    })
-    .map_err(|error| error.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     Ok(rows)
 }
 
@@ -513,7 +548,9 @@ fn year_range(conn: &Connection, project_id: &str) -> Result<Option<String>, Str
 }
 
 fn index_status(conn: &Connection) -> Result<(Vec<IndexStatus>, Vec<String>), String> {
-    let mut stmt = conn.prepare("PRAGMA index_list('papers')").map_err(|error| error.to_string())?;
+    let mut stmt = conn
+        .prepare("PRAGMA index_list('papers')")
+        .map_err(|error| error.to_string())?;
     let indexes = stmt
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|error| error.to_string())?
@@ -539,7 +576,9 @@ fn cluster_smoke(conn: &Connection, project_id: &str) -> Result<ClusterSmoke, St
     let mut stmt = conn
         .prepare("SELECT id, field, title, abstract, year, source, categories FROM papers WHERE project_id = ?1")
         .map_err(|error| error.to_string())?;
-    let mut rows = stmt.query(params![project_id]).map_err(|error| error.to_string())?;
+    let mut rows = stmt
+        .query(params![project_id])
+        .map_err(|error| error.to_string())?;
     let mut groups: HashMap<String, ClusterGroup> = HashMap::new();
 
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
@@ -550,8 +589,13 @@ fn cluster_smoke(conn: &Connection, project_id: &str) -> Result<ClusterSmoke, St
         let year: Option<i64> = row.get(4).map_err(|error| error.to_string())?;
         let source: String = row.get(5).map_err(|error| error.to_string())?;
         let categories: Option<String> = row.get(6).map_err(|error| error.to_string())?;
-        let keyword = top_keyword(&format!("{} {} {}", title, abstract_text, categories.unwrap_or_default()))
-            .unwrap_or_else(|| normalize_group_key(&field));
+        let keyword = top_keyword(&format!(
+            "{} {} {}",
+            title,
+            abstract_text,
+            categories.unwrap_or_default()
+        ))
+        .unwrap_or_else(|| normalize_group_key(&field));
         let key = format!("{field}::{keyword}");
         let group = groups.entry(key).or_insert_with(|| ClusterGroup {
             field: field.clone(),
@@ -569,7 +613,11 @@ fn cluster_smoke(conn: &Connection, project_id: &str) -> Result<ClusterSmoke, St
     }
 
     let mut sorted = groups.into_values().collect::<Vec<_>>();
-    sorted.sort_by(|a, b| b.paper_count.cmp(&a.paper_count).then_with(|| a.field.cmp(&b.field)));
+    sorted.sort_by(|a, b| {
+        b.paper_count
+            .cmp(&a.paper_count)
+            .then_with(|| a.field.cmp(&b.field))
+    });
     let sample_hotspots = sorted
         .iter()
         .take(12)
@@ -628,7 +676,10 @@ fn tokenize_ascii(text: &str) -> Vec<String> {
     if !current.is_empty() {
         tokens.push(current.trim_matches('-').to_string());
     }
-    tokens.into_iter().filter(|token| !token.is_empty()).collect()
+    tokens
+        .into_iter()
+        .filter(|token| !token.is_empty())
+        .collect()
 }
 
 fn is_stopword(token: &str) -> bool {
@@ -731,7 +782,12 @@ fn build_gate(args: &Args, inputs: GateInputs<'_>) -> StrictGate {
     let failures = checks
         .iter()
         .filter(|check| !check.passed)
-        .map(|check| format!("{} expected {}, actual {}.", check.name, check.expected, check.actual))
+        .map(|check| {
+            format!(
+                "{} expected {}, actual {}.",
+                check.name, check.expected, check.actual
+            )
+        })
         .collect::<Vec<_>>();
 
     StrictGate {
@@ -743,7 +799,9 @@ fn build_gate(args: &Args, inputs: GateInputs<'_>) -> StrictGate {
 }
 
 fn file_size(path: &Path) -> u64 {
-    fs::metadata(path).map(|metadata| metadata.len()).unwrap_or_default()
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default()
 }
 
 fn rate(count: i64, total: i64) -> f64 {

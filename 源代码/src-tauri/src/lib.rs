@@ -1,6 +1,7 @@
 mod agent_model_gateway;
 mod agent_runtime;
 pub mod semantic_embedding;
+mod sidera_pi_runtime;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -38,9 +39,8 @@ use research_hotspots_core::{
     read_unified_hotspot_rows, validate_active_snapshot, validate_library_candidate_connection,
     validate_library_candidate_file, write_snapshot_in_transaction, write_snapshot_transaction,
     AnalysisState, FirstRunMode, SeedExpectation, SnapshotHotspot, SnapshotHotspotLineage,
-    SnapshotMembership, SnapshotWriteInput,
-    UnifiedGalaxyRows, ValidatedLibraryCandidate, HOTSPOT_IDENTITY_VERSION,
-    V20_ALGORITHM_VERSION,
+    SnapshotMembership, SnapshotWriteInput, UnifiedGalaxyRows, ValidatedLibraryCandidate,
+    HOTSPOT_IDENTITY_VERSION, V20_ALGORITHM_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -868,6 +868,16 @@ struct V20HotspotSnapshot {
     hotspots: Vec<HotspotRecord>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SideraPiStartSessionInput {
+    project_id: String,
+    provider: String,
+    base_url: String,
+    model: String,
+    use_env_key: bool,
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentGalaxyEntityResolveItem {
@@ -888,7 +898,7 @@ struct AgentGalaxyEntityResolveInput {
     entities: Vec<AgentGalaxyEntityResolveItem>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentGalaxyResolvedEntity {
     kind: String,
@@ -904,6 +914,32 @@ struct AgentGalaxyResolvedEntity {
     year: Option<i64>,
     color: Option<String>,
     placement_rule: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDualFocusResolveInput {
+    database_dir: Option<String>,
+    project_id: Option<String>,
+    source_snapshot_id: String,
+    #[serde(default)]
+    sampled_paper_ids: Vec<String>,
+    primary: AgentGalaxyEntityResolveItem,
+    #[serde(default)]
+    evidence_entity_ids: Vec<String>,
+    #[serde(default)]
+    context_entity_ids: Vec<String>,
+    relation: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDualFocusScene {
+    primary: AgentGalaxyResolvedEntity,
+    evidence: Vec<AgentGalaxyResolvedEntity>,
+    context: Vec<AgentGalaxyResolvedEntity>,
+    relation: String,
+    source_snapshot_id: String,
 }
 
 #[derive(Deserialize)]
@@ -1865,10 +1901,7 @@ async fn restore_paper_library(
         ));
     }
     let database_dir = resolve_database_dir(&app, database_dir)?;
-    let permit = state.try_acquire(
-        &database_dir.join("research-hotspots-v7.sqlite"),
-        "restore",
-    )?;
+    let permit = state.try_acquire(&database_dir.join("research-hotspots-v7.sqlite"), "restore")?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
@@ -2780,8 +2813,7 @@ fn control_semantic_modeling(
 }
 
 #[tauri::command]
-fn get_semantic_embedding_capabilities(
-) -> semantic_embedding::SemanticEmbeddingCapabilities {
+fn get_semantic_embedding_capabilities() -> semantic_embedding::SemanticEmbeddingCapabilities {
     semantic_embedding::inspect_semantic_embedding_capabilities()
 }
 
@@ -3098,7 +3130,8 @@ fn prepare_library_cluster_with_control(
         .into_iter()
         .map(|record| (record.paper_id.clone(), record))
         .collect::<HashMap<_, _>>();
-    let mut assigned_candidates = vec![Vec::<(RepresentativeCandidate, f64)>::new(); hotspots.len()];
+    let mut assigned_candidates =
+        vec![Vec::<(RepresentativeCandidate, f64)>::new(); hotspots.len()];
     for group in &sorted_groups {
         let group_key = format!("{}::{}", group.field, group.keyword);
         let target_index = retained_index.get(&group_key).copied().unwrap_or_else(|| {
@@ -3262,20 +3295,20 @@ fn prepare_library_cluster_with_control(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let snapshot = SnapshotWriteInput {
-            snapshot_id: snapshot_id.clone(),
-            project_id: project_id.to_string(),
-            algorithm_version: V20_ALGORITHM_VERSION.to_string(),
-            layout_version: SEMANTIC_LAYOUT_VERSION.to_string(),
-            projection_version: SEMANTIC_PROJECTION_VERSION.to_string(),
-            embedding_model_id: SEMANTIC_MODEL_ID.to_string(),
-            embedding_model_revision: SEMANTIC_MODEL_REVISION.to_string(),
-            hotspot_identity_version: HOTSPOT_IDENTITY_VERSION.to_string(),
-            paper_count: before_count,
-            created_at: timestamp.clone(),
-            hotspots: snapshot_hotspots,
-            memberships: memberships.clone(),
-            lineage,
-        };
+        snapshot_id: snapshot_id.clone(),
+        project_id: project_id.to_string(),
+        algorithm_version: V20_ALGORITHM_VERSION.to_string(),
+        layout_version: SEMANTIC_LAYOUT_VERSION.to_string(),
+        projection_version: SEMANTIC_PROJECTION_VERSION.to_string(),
+        embedding_model_id: SEMANTIC_MODEL_ID.to_string(),
+        embedding_model_revision: SEMANTIC_MODEL_REVISION.to_string(),
+        hotspot_identity_version: HOTSPOT_IDENTITY_VERSION.to_string(),
+        paper_count: before_count,
+        created_at: timestamp.clone(),
+        hotspots: snapshot_hotspots,
+        memberships: memberships.clone(),
+        lineage,
+    };
 
     let result = LibraryClusterResult {
         before_count,
@@ -3411,7 +3444,12 @@ fn build_hotspot_lineage(
     let old_identity = previous
         .hotspots
         .iter()
-        .map(|hotspot| (hotspot.hotspot_id.clone(), hotspot.identity_key_sha256.clone()))
+        .map(|hotspot| {
+            (
+                hotspot.hotspot_id.clone(),
+                hotspot.identity_key_sha256.clone(),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let mut candidates = Vec::new();
     for old in &previous.hotspots {
@@ -3423,10 +3461,7 @@ fn build_hotspot_lineage(
             if old_fields.get(&old.hotspot_id) != new_fields.get(&hotspot.id) {
                 continue;
             }
-            let new_set = new_members
-                .get(&hotspot.id)
-                .cloned()
-                .unwrap_or_default();
+            let new_set = new_members.get(&hotspot.id).cloned().unwrap_or_default();
             let intersection = old_set.intersection(&new_set).count();
             let union = old_set.union(&new_set).count();
             let overlap = if union == 0 {
@@ -4245,6 +4280,96 @@ async fn ai_chat(
 }
 
 #[tauri::command]
+fn sidera_pi_start_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+    input: SideraPiStartSessionInput,
+) -> Result<sidera_pi_runtime::SideraPiSessionInfo, String> {
+    let provider = input.provider.trim().to_ascii_lowercase();
+    let service = format!("ai-{provider}");
+    let api_key = read_app_credential(&input.project_id, &service)
+        .or_else(|| {
+            if input.use_env_key && provider == "deepseek" {
+                std::env::var("DEEPSEEK_API_KEY").ok()
+            } else {
+                None
+            }
+        })
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "SIDERA_PI_CREDENTIAL_REQUIRED".to_string())?;
+    let base_url = if provider == "deepseek" {
+        std::env::var("DEEPSEEK_BASE_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(input.base_url)
+    } else {
+        input.base_url
+    };
+    let model = if provider == "deepseek" {
+        std::env::var("DEEPSEEK_MODEL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(input.model)
+    } else {
+        input.model
+    };
+    let root = find_project_root().ok_or_else(|| "SIDERA_PI_PROJECT_ROOT_NOT_FOUND".to_string())?;
+    let package_json_path = root
+        .join("node_modules")
+        .join("@earendil-works")
+        .join("pi-coding-agent")
+        .join("package.json");
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("SIDERA_PI_CACHE_PATH_FAILED:{error}"))?;
+    state.start_session(
+        &app,
+        sidera_pi_runtime::PiLaunchConfig {
+            project_id: input.project_id,
+            provider,
+            base_url,
+            model,
+            api_key,
+            package_json_path,
+            cache_root,
+        },
+    )
+}
+
+#[tauri::command]
+fn sidera_pi_submit_prompt(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+    input: sidera_pi_runtime::SideraPiSubmitPromptInput,
+) -> Result<(), String> {
+    state.submit_prompt(&app, input)
+}
+
+#[tauri::command]
+fn sidera_pi_abort_turn(
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+    input: sidera_pi_runtime::SideraPiAbortTurnInput,
+) -> Result<(), String> {
+    state.abort_turn(input)
+}
+
+#[tauri::command]
+fn sidera_pi_get_status(
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+) -> sidera_pi_runtime::SideraPiRuntimeStatus {
+    state.status()
+}
+
+#[tauri::command]
+fn sidera_pi_stop_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+) {
+    state.stop_session(Some(&app));
+}
+
+#[tauri::command]
 fn cancel_ai_task(
     state: tauri::State<'_, AiTaskRegistry>,
     task_key: String,
@@ -4623,9 +4748,7 @@ fn allocate_agent_immersive_papers(
                 if assigned >= target_count {
                     return Ok(allocations);
                 }
-                let available = candidates_by_hotspot
-                    .get(&hotspot.id)
-                    .map_or(0, Vec::len);
+                let available = candidates_by_hotspot.get(&hotspot.id).map_or(0, Vec::len);
                 if available > round {
                     *allocations.entry(hotspot.id.clone()).or_default() += 1;
                     assigned += 1;
@@ -4636,9 +4759,7 @@ fn allocate_agent_immersive_papers(
     }
 
     for hotspot in hotspots {
-        let available = candidates_by_hotspot
-            .get(&hotspot.id)
-            .map_or(0, Vec::len);
+        let available = candidates_by_hotspot.get(&hotspot.id).map_or(0, Vec::len);
         allocations.insert(
             hotspot.id.clone(),
             available.min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT),
@@ -4649,9 +4770,7 @@ fn allocate_agent_immersive_papers(
     let total_capacity = hotspots
         .iter()
         .map(|hotspot| {
-            let available = candidates_by_hotspot
-                .get(&hotspot.id)
-                .map_or(0, Vec::len);
+            let available = candidates_by_hotspot.get(&hotspot.id).map_or(0, Vec::len);
             let allocated = allocations.get(&hotspot.id).copied().unwrap_or_default();
             available.saturating_sub(allocated)
         })
@@ -4663,9 +4782,7 @@ fn allocate_agent_immersive_papers(
     let mut remainders = Vec::with_capacity(hotspots.len());
     let initial_remaining = remaining;
     for hotspot in hotspots {
-        let available = candidates_by_hotspot
-            .get(&hotspot.id)
-            .map_or(0, Vec::len);
+        let available = candidates_by_hotspot.get(&hotspot.id).map_or(0, Vec::len);
         let allocated = allocations.get(&hotspot.id).copied().unwrap_or_default();
         let capacity = available.saturating_sub(allocated);
         let numerator = initial_remaining.saturating_mul(capacity);
@@ -4695,9 +4812,7 @@ fn allocate_agent_immersive_papers(
             if remaining == 0 {
                 break;
             }
-            let available = candidates_by_hotspot
-                .get(hotspot_id)
-                .map_or(0, Vec::len);
+            let available = candidates_by_hotspot.get(hotspot_id).map_or(0, Vec::len);
             let allocated = allocations.get(hotspot_id).copied().unwrap_or_default();
             if allocated < available {
                 *allocations.entry(hotspot_id.clone()).or_default() += 1;
@@ -4728,23 +4843,15 @@ fn load_agent_immersive_background(
         .clamp(1, AGENT_IMMERSIVE_MAX_PAPER_COUNT);
     let database_dir = resolve_database_dir(&app, input.database_dir)?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    let conn = Connection::open_with_flags(
-        &database_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|error| {
-        format!(
-            "Cannot open immersive background database read-only {:?}: {error}",
-            database_path
-        )
-    })?;
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| {
+            format!(
+                "Cannot open immersive background database read-only {:?}: {error}",
+                database_path
+            )
+        })?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
-    build_agent_immersive_background_payload(
-        &conn,
-        &project_id,
-        &session_seed,
-        requested_count,
-    )
+    build_agent_immersive_background_payload(&conn, &project_id, &session_seed, requested_count)
 }
 
 fn build_agent_immersive_background_payload(
@@ -4774,8 +4881,7 @@ fn build_agent_immersive_background_payload(
         })
         .map_err(|error| error.to_string())?
         .map(|result| {
-            let (id, payload_json, paper_count) =
-                result.map_err(|error| error.to_string())?;
+            let (id, payload_json, paper_count) = result.map_err(|error| error.to_string())?;
             let record = serde_json::from_str::<HotspotRecord>(&payload_json)
                 .map_err(|error| format!("Invalid V20 hotspot payload {id}: {error}"))?;
             Ok(AgentImmersiveBackgroundHotspotV2 {
@@ -4892,16 +4998,13 @@ pub fn audit_agent_immersive_background_database(
     database_path: &Path,
     project_id: &str,
 ) -> Result<serde_json::Value, String> {
-    let conn = Connection::open_with_flags(
-        database_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|error| {
-        format!(
-            "Cannot open immersive background audit database {:?}: {error}",
-            database_path
-        )
-    })?;
+    let conn = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| {
+            format!(
+                "Cannot open immersive background audit database {:?}: {error}",
+                database_path
+            )
+        })?;
     let state = read_analysis_state(&conn, project_id)?
         .ok_or_else(|| "AGENT_IMMERSIVE_ACTIVE_SNAPSHOT_MISSING".to_string())?;
     let first = build_agent_immersive_background_payload(
@@ -4959,8 +5062,8 @@ pub fn audit_agent_immersive_background_database(
         return Err("AGENT_IMMERSIVE_UNKNOWN_PAPER_HOTSPOT".to_string());
     }
 
-    let expected_paper_count = (state.membership_count.max(0) as usize)
-        .min(AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT);
+    let expected_paper_count =
+        (state.membership_count.max(0) as usize).min(AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT);
     if first.papers.len() != expected_paper_count {
         return Err(format!(
             "AGENT_IMMERSIVE_AUDIT_PAPER_COUNT_MISMATCH:{}:{}",
@@ -4976,13 +5079,14 @@ pub fn audit_agent_immersive_background_database(
         ));
     }
 
-    let selected_count_by_hotspot = first.papers.iter().fold(
-        HashMap::<&str, usize>::new(),
-        |mut counts, paper| {
-            *counts.entry(paper.hotspot_id.as_str()).or_default() += 1;
-            counts
-        },
-    );
+    let selected_count_by_hotspot =
+        first
+            .papers
+            .iter()
+            .fold(HashMap::<&str, usize>::new(), |mut counts, paper| {
+                *counts.entry(paper.hotspot_id.as_str()).or_default() += 1;
+                counts
+            });
     if expected_paper_count
         >= first
             .hotspots
@@ -4999,8 +5103,7 @@ pub fn audit_agent_immersive_background_database(
             let minimum = hotspot
                 .paper_count
                 .max(0)
-                .min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT as i64)
-                as usize;
+                .min(AGENT_IMMERSIVE_MIN_PER_HOTSPOT as i64) as usize;
             let selected = selected_count_by_hotspot
                 .get(hotspot.id.as_str())
                 .copied()
@@ -5019,12 +5122,8 @@ pub fn audit_agent_immersive_background_database(
         .iter()
         .map(|paper| paper.id.as_str())
         .collect::<HashSet<_>>();
-    let changed_paper_count = first_paper_ids
-        .symmetric_difference(&alternate_ids)
-        .count();
-    let required_change = expected_paper_count
-        .saturating_div(5)
-        .min(1_000);
+    let changed_paper_count = first_paper_ids.symmetric_difference(&alternate_ids).count();
+    let required_change = expected_paper_count.saturating_div(5).min(1_000);
     if expected_paper_count >= 1_000 && changed_paper_count < required_change {
         return Err(format!(
             "AGENT_IMMERSIVE_ALTERNATE_SEED_TOO_SIMILAR:{}:{}",
@@ -5071,21 +5170,15 @@ fn resolve_agent_galaxy_entities(
     }
     let database_dir = resolve_database_dir(&app, input.database_dir)?;
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
-    let conn = Connection::open_with_flags(
-        &database_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|error| {
-        format!(
-            "Cannot open agent galaxy database read-only {:?}: {error}",
-            database_path
-        )
-    })?;
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| {
+            format!(
+                "Cannot open agent galaxy database read-only {:?}: {error}",
+                database_path
+            )
+        })?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
-    let sampled_ids = input
-        .sampled_entity_ids
-        .into_iter()
-        .collect::<HashSet<_>>();
+    let sampled_ids = input.sampled_entity_ids.into_iter().collect::<HashSet<_>>();
     let scale_position = |x: f64, y: f64, z: f64| {
         [
             (x - input.source_centroid[0]) * input.isotropic_scale,
@@ -5143,9 +5236,7 @@ fn resolve_agent_galaxy_entities(
                 .map_err(|error| error.to_string())?;
             if let Some((x, y, z, payload_json)) = hotspot {
                 let record = serde_json::from_str::<HotspotRecord>(&payload_json)
-                    .map_err(|error| {
-                        format!("Invalid V20 hotspot payload {entity_id}: {error}")
-                    })?;
+                    .map_err(|error| format!("Invalid V20 hotspot payload {entity_id}: {error}"))?;
                 let position = scale_position(x, y, z);
                 results.push(AgentGalaxyResolvedEntity {
                     kind: "hotspot".to_string(),
@@ -5239,15 +5330,11 @@ fn resolve_agent_galaxy_entities(
             .optional()
             .map_err(|error| error.to_string())?;
 
-        if let Some((hotspot_id, px, py, pz, hx, hy, hz, payload_json)) = membership
-        {
+        if let Some((hotspot_id, px, py, pz, hx, hy, hz, payload_json)) = membership {
             let hotspot = serde_json::from_str::<HotspotRecord>(&payload_json)
-                .map_err(|error| {
-                    format!("Invalid V20 hotspot payload {hotspot_id}: {error}")
-                })?;
-            let (title, field, year) = paper_metadata.unwrap_or_else(|| {
-                (entity_id.clone(), hotspot.field.clone(), None)
-            });
+                .map_err(|error| format!("Invalid V20 hotspot payload {hotspot_id}: {error}"))?;
+            let (title, field, year) =
+                paper_metadata.unwrap_or_else(|| (entity_id.clone(), hotspot.field.clone(), None));
             results.push(AgentGalaxyResolvedEntity {
                 kind: "paper".to_string(),
                 entity_id: entity_id.clone(),
@@ -5304,6 +5391,353 @@ fn resolve_agent_galaxy_entities(
         }
     }
     Ok(results)
+}
+
+fn missing_agent_dual_focus_entity(kind: &str, entity_id: String) -> AgentGalaxyResolvedEntity {
+    AgentGalaxyResolvedEntity {
+        kind: kind.to_string(),
+        entity_id,
+        hotspot_id: None,
+        membership: "missing".to_string(),
+        semantic_position: None,
+        hotspot_position: None,
+        semantic_offset: None,
+        source_snapshot_id: None,
+        title: None,
+        field: None,
+        year: None,
+        color: None,
+        placement_rule: None,
+    }
+}
+
+fn resolve_agent_dual_focus_entity(
+    conn: &Connection,
+    project_id: &str,
+    source_snapshot_id: &str,
+    sampled_ids: &HashSet<String>,
+    kind_hint: Option<&str>,
+    requested_id: &str,
+) -> Result<AgentGalaxyResolvedEntity, String> {
+    let entity_id = requested_id.trim().to_string();
+    if entity_id.is_empty() {
+        return Ok(missing_agent_dual_focus_entity(
+            kind_hint.unwrap_or("paper"),
+            entity_id,
+        ));
+    }
+    #[cfg(debug_assertions)]
+    if kind_hint != Some("hotspot") && entity_id == "fixture:active-only:paper-001" {
+        return Ok(AgentGalaxyResolvedEntity {
+            kind: "paper".to_string(),
+            entity_id,
+            hotspot_id: None,
+            membership: "active-only".to_string(),
+            semantic_position: None,
+            hotspot_position: None,
+            semantic_offset: None,
+            source_snapshot_id: Some(source_snapshot_id.to_string()),
+            title: Some("Development fixture: active-only paper".to_string()),
+            field: Some("Unclassified".to_string()),
+            year: None,
+            color: None,
+            placement_rule: Some("unclassified-frontier-v1".to_string()),
+        });
+    }
+
+    let hotspot_exists = conn
+        .query_row(
+            "SELECT x,y,z,payload_json
+             FROM v20_hotspots
+             WHERE project_id=?1 AND snapshot_id=?2 AND hotspot_id=?3",
+            params![project_id, source_snapshot_id, entity_id],
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if kind_hint == Some("hotspot") || (kind_hint.is_none() && hotspot_exists.is_some()) {
+        if let Some((x, y, z, payload_json)) = hotspot_exists {
+            let record = serde_json::from_str::<HotspotRecord>(&payload_json)
+                .map_err(|error| format!("Invalid V20 hotspot payload {entity_id}: {error}"))?;
+            let position = [x, y, z];
+            return Ok(AgentGalaxyResolvedEntity {
+                kind: "hotspot".to_string(),
+                entity_id: entity_id.clone(),
+                hotspot_id: Some(entity_id),
+                membership: "sampled".to_string(),
+                semantic_position: Some(position),
+                hotspot_position: Some(position),
+                semantic_offset: Some([0.0, 0.0, 0.0]),
+                source_snapshot_id: Some(source_snapshot_id.to_string()),
+                title: Some(record.title),
+                field: Some(record.field.clone()),
+                year: None,
+                color: Some(app17_topic_color(&record.field, record.topic_id)),
+                placement_rule: Some("semantic".to_string()),
+            });
+        }
+        return Ok(missing_agent_dual_focus_entity("hotspot", entity_id));
+    }
+
+    let scoped_entity_id = scoped_id(project_id, &entity_id);
+    let membership = conn
+        .query_row(
+            "SELECT membership.paper_id,membership.hotspot_id,
+                    membership.x,membership.y,membership.z,
+                    hotspot.x,hotspot.y,hotspot.z,
+                    hotspot.payload_json
+             FROM v20_paper_memberships AS membership
+             JOIN v20_hotspots AS hotspot
+               ON hotspot.project_id=membership.project_id
+              AND hotspot.snapshot_id=membership.snapshot_id
+              AND hotspot.hotspot_id=membership.hotspot_id
+             WHERE membership.project_id=?1
+               AND membership.snapshot_id=?2
+               AND membership.paper_id IN (?3,?4)
+             ORDER BY CASE WHEN membership.paper_id=?3 THEN 0 ELSE 1 END
+             LIMIT 1",
+            params![project_id, source_snapshot_id, entity_id, scoped_entity_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, f64>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let paper_metadata = conn
+        .query_row(
+            "SELECT title,field,year
+             FROM papers
+             WHERE project_id=?1 AND id IN (?2,?3)
+             ORDER BY CASE WHEN id=?2 THEN 0 ELSE 1 END
+             LIMIT 1",
+            params![project_id, entity_id, scoped_entity_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+
+    if let Some((canonical_paper_id, hotspot_id, px, py, pz, hx, hy, hz, payload_json)) = membership
+    {
+        let hotspot = serde_json::from_str::<HotspotRecord>(&payload_json)
+            .map_err(|error| format!("Invalid V20 hotspot payload {hotspot_id}: {error}"))?;
+        let (title, field, year) =
+            paper_metadata.unwrap_or_else(|| (entity_id.clone(), hotspot.field.clone(), None));
+        return Ok(AgentGalaxyResolvedEntity {
+            kind: "paper".to_string(),
+            entity_id: canonical_paper_id.clone(),
+            hotspot_id: Some(hotspot_id),
+            membership: if sampled_ids.contains(&canonical_paper_id)
+                || sampled_ids.contains(&entity_id)
+                || sampled_ids.contains(&scoped_entity_id)
+            {
+                "sampled".to_string()
+            } else {
+                "snapshot-unsampled".to_string()
+            },
+            semantic_position: Some([px, py, pz]),
+            hotspot_position: Some([hx, hy, hz]),
+            semantic_offset: Some([px - hx, py - hy, pz - hz]),
+            source_snapshot_id: Some(source_snapshot_id.to_string()),
+            title: Some(title),
+            field: Some(field),
+            year,
+            color: Some(app17_topic_color(&hotspot.field, hotspot.topic_id)),
+            placement_rule: Some("semantic".to_string()),
+        });
+    }
+    if let Some((title, field, year)) = paper_metadata {
+        return Ok(AgentGalaxyResolvedEntity {
+            kind: "paper".to_string(),
+            entity_id,
+            hotspot_id: None,
+            membership: "active-only".to_string(),
+            semantic_position: None,
+            hotspot_position: None,
+            semantic_offset: None,
+            source_snapshot_id: Some(source_snapshot_id.to_string()),
+            title: Some(title),
+            field: Some(field),
+            year,
+            color: None,
+            placement_rule: Some("unclassified-frontier-v1".to_string()),
+        });
+    }
+    Ok(missing_agent_dual_focus_entity("paper", entity_id))
+}
+
+#[tauri::command]
+fn resolve_agent_dual_focus_scene(
+    app: tauri::AppHandle,
+    input: AgentDualFocusResolveInput,
+) -> Result<AgentDualFocusScene, String> {
+    if input.evidence_entity_ids.len() > 5 {
+        return Err("AGENT_DUAL_FOCUS_EVIDENCE_LIMIT_EXCEEDED".to_string());
+    }
+    if input.context_entity_ids.len() > 24 {
+        return Err("AGENT_DUAL_FOCUS_CONTEXT_LIMIT_EXCEEDED".to_string());
+    }
+    if !matches!(
+        input.relation.as_str(),
+        "answer-evidence" | "citation-neighborhood" | "hotspot-membership" | "visual-review"
+    ) {
+        return Err("AGENT_DUAL_FOCUS_RELATION_INVALID".to_string());
+    }
+    let database_dir = resolve_database_dir(&app, input.database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| {
+            format!(
+                "Cannot open dual focus database read-only {:?}: {error}",
+                database_path
+            )
+        })?;
+    let project_id = input.project_id.unwrap_or_else(default_project_id);
+    let sampled_ids = input.sampled_paper_ids.into_iter().collect::<HashSet<_>>();
+    let primary = resolve_agent_dual_focus_entity(
+        &conn,
+        &project_id,
+        &input.source_snapshot_id,
+        &sampled_ids,
+        Some(input.primary.kind.as_str()),
+        &input.primary.entity_id,
+    )?;
+
+    let mut seen = HashSet::<String>::new();
+    seen.insert(primary.entity_id.clone());
+    let mut evidence = Vec::with_capacity(input.evidence_entity_ids.len());
+    for entity_id in input.evidence_entity_ids {
+        let entity = resolve_agent_dual_focus_entity(
+            &conn,
+            &project_id,
+            &input.source_snapshot_id,
+            &sampled_ids,
+            None,
+            &entity_id,
+        )?;
+        if entity.membership != "missing" && seen.insert(entity.entity_id.clone()) {
+            evidence.push(entity);
+        }
+    }
+
+    let mut context = Vec::with_capacity(24);
+    for entity_id in input.context_entity_ids {
+        let entity = resolve_agent_dual_focus_entity(
+            &conn,
+            &project_id,
+            &input.source_snapshot_id,
+            &sampled_ids,
+            None,
+            &entity_id,
+        )?;
+        if entity.membership != "missing" && seen.insert(entity.entity_id.clone()) {
+            context.push(entity);
+        }
+    }
+
+    if primary.membership != "missing" && context.len() < 24 {
+        if let Some(hotspot_id) = primary.hotspot_id.as_ref() {
+            let mut context_stmt = if primary.kind == "paper" {
+                conn.prepare(
+                    "SELECT paper_id
+                     FROM v20_paper_memberships
+                     WHERE project_id=?1 AND snapshot_id=?2 AND hotspot_id=?3
+                     ORDER BY
+                       ((x-?4)*(x-?4) + (y-?5)*(y-?5) + (z-?6)*(z-?6)) ASC,
+                       CASE WHEN representative_rank IS NULL THEN 1 ELSE 0 END ASC,
+                       representative_rank ASC,
+                       paper_id ASC
+                     LIMIT 96",
+                )
+            } else {
+                conn.prepare(
+                    "SELECT paper_id
+                     FROM v20_paper_memberships
+                     WHERE project_id=?1 AND snapshot_id=?2 AND hotspot_id=?3
+                     ORDER BY
+                       CASE WHEN representative_rank IS NULL THEN 1 ELSE 0 END ASC,
+                       representative_rank ASC,
+                       score DESC,
+                       paper_id ASC
+                     LIMIT 96",
+                )
+            }
+            .map_err(|error| error.to_string())?;
+            let candidate_ids = if primary.kind == "paper" {
+                let position = primary.semantic_position.unwrap_or([0.0, 0.0, 0.0]);
+                context_stmt
+                    .query_map(
+                        params![
+                            project_id,
+                            input.source_snapshot_id,
+                            hotspot_id,
+                            position[0],
+                            position[1],
+                            position[2],
+                        ],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|error| error.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?
+            } else {
+                context_stmt
+                    .query_map(
+                        params![project_id, input.source_snapshot_id, hotspot_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|error| error.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?
+            };
+            for entity_id in candidate_ids {
+                if context.len() >= 24 || seen.contains(&entity_id) {
+                    continue;
+                }
+                let entity = resolve_agent_dual_focus_entity(
+                    &conn,
+                    &project_id,
+                    &input.source_snapshot_id,
+                    &sampled_ids,
+                    Some("paper"),
+                    &entity_id,
+                )?;
+                if entity.membership != "missing" && seen.insert(entity.entity_id.clone()) {
+                    context.push(entity);
+                }
+            }
+        }
+    }
+
+    Ok(AgentDualFocusScene {
+        primary,
+        evidence,
+        context,
+        relation: input.relation,
+        source_snapshot_id: input.source_snapshot_id,
+    })
 }
 
 fn build_v20_galaxy_payload(
@@ -5580,7 +6014,13 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
                 center.1,
                 center.2
             ],
-            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
         )
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
@@ -5661,9 +6101,18 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
         .collect::<HashSet<_>>()
         .len();
     let global_axes = [
-        hotspot_coordinates.iter().map(|row| row.1).collect::<Vec<_>>(),
-        hotspot_coordinates.iter().map(|row| row.2).collect::<Vec<_>>(),
-        hotspot_coordinates.iter().map(|row| row.3).collect::<Vec<_>>(),
+        hotspot_coordinates
+            .iter()
+            .map(|row| row.1)
+            .collect::<Vec<_>>(),
+        hotspot_coordinates
+            .iter()
+            .map(|row| row.2)
+            .collect::<Vec<_>>(),
+        hotspot_coordinates
+            .iter()
+            .map(|row| row.3)
+            .collect::<Vec<_>>(),
     ];
     let correlation = |left: &[f64], right: &[f64]| {
         let left_mean = left.iter().sum::<f64>() / left.len().max(1) as f64;
@@ -5694,7 +6143,11 @@ pub fn audit_galaxy_semantic_layout_database(root: &Path) -> Result<serde_json::
         maximum - minimum
     });
     let global_span_ratio = global_spans.iter().copied().fold(f64::INFINITY, f64::min)
-        / global_spans.iter().copied().fold(0.0_f64, f64::max).max(1e-12);
+        / global_spans
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max)
+            .max(1e-12);
     if points.len() < 64
         || cache_count != 512
         || global_octants < 6
@@ -5743,20 +6196,16 @@ pub fn rebuild_semantic_galaxy_snapshot(
         now_millis().min(i64::MAX as u128) as i64,
         true,
     )?;
-    let source_before = research_hotspots_core::validate_library_candidate_file(
-        &database_path,
-        project_id,
-    )?;
+    let source_before =
+        research_hotspots_core::validate_library_candidate_file(&database_path, project_id)?;
     let started = Instant::now();
     let result = cluster_library_from_database_path(
         database_path.clone(),
         project_id,
         semantic_embedding::SemanticEmbeddingDevice::parse(Some(device))?,
     )?;
-    let validated = research_hotspots_core::validate_library_candidate_file(
-        &database_path,
-        project_id,
-    )?;
+    let validated =
+        research_hotspots_core::validate_library_candidate_file(&database_path, project_id)?;
     let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| error.to_string())?;
     let embedding_count: i64 = conn
@@ -5787,14 +6236,16 @@ pub fn rebuild_semantic_galaxy_snapshot(
              FROM v20_analysis_snapshots
              WHERE project_id=?1 AND id=?2",
             params![project_id, result.snapshot_id],
-            |row| Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            )),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
         .map_err(|error| error.to_string())?;
     if validated.paper_count != source_before.paper_count
@@ -6415,15 +6866,9 @@ fn build_agent_galaxy_background_payload(
         .map(|hotspot| AgentGalaxyBackgroundHotspotV1 {
             id: hotspot.id.clone(),
             position: [
-                agent_background_coordinate(
-                    (hotspot.x - source_centroid[0]) * isotropic_scale,
-                ),
-                agent_background_coordinate(
-                    (hotspot.y - source_centroid[1]) * isotropic_scale,
-                ),
-                agent_background_coordinate(
-                    (hotspot.z - source_centroid[2]) * isotropic_scale,
-                ),
+                agent_background_coordinate((hotspot.x - source_centroid[0]) * isotropic_scale),
+                agent_background_coordinate((hotspot.y - source_centroid[1]) * isotropic_scale),
+                agent_background_coordinate((hotspot.z - source_centroid[2]) * isotropic_scale),
             ],
             field: hotspot.field.clone(),
             color: hotspot.color.clone(),
@@ -6449,27 +6894,27 @@ fn build_agent_galaxy_background_payload(
             .push(paper);
     }
 
-    let mut papers =
-        Vec::with_capacity(hotspots.len() * AGENT_BACKGROUND_MAX_PAPERS_PER_HOTSPOT);
+    let mut papers = Vec::with_capacity(hotspots.len() * AGENT_BACKGROUND_MAX_PAPERS_PER_HOTSPOT);
     for hotspot in &hotspots {
         let source_hotspot = source_hotspot_by_id
             .get(hotspot.id.as_str())
-            .ok_or_else(|| format!("Agent background hotspot source is missing: {}.", hotspot.id))?;
+            .ok_or_else(|| {
+                format!(
+                    "Agent background hotspot source is missing: {}.",
+                    hotspot.id
+                )
+            })?;
         let mut candidates = candidates_by_hotspot
             .remove(&hotspot.id)
             .unwrap_or_default();
         candidates.sort_by(|left, right| {
-            agent_background_sample_hash(
-                &source_snapshot_id,
-                &hotspot.id,
-                &left.raw_paper_id,
-            )
-            .cmp(&agent_background_sample_hash(
-                &source_snapshot_id,
-                &hotspot.id,
-                &right.raw_paper_id,
-            ))
-            .then_with(|| left.raw_paper_id.cmp(&right.raw_paper_id))
+            agent_background_sample_hash(&source_snapshot_id, &hotspot.id, &left.raw_paper_id)
+                .cmp(&agent_background_sample_hash(
+                    &source_snapshot_id,
+                    &hotspot.id,
+                    &right.raw_paper_id,
+                ))
+                .then_with(|| left.raw_paper_id.cmp(&right.raw_paper_id))
         });
         for paper in candidates
             .into_iter()
@@ -6479,15 +6924,9 @@ fn build_agent_galaxy_background_payload(
                 id: paper.raw_paper_id.clone(),
                 hotspot_id: hotspot.id.clone(),
                 offset: [
-                    agent_background_coordinate(
-                        (paper.x - source_hotspot.x) * isotropic_scale,
-                    ),
-                    agent_background_coordinate(
-                        (paper.y - source_hotspot.y) * isotropic_scale,
-                    ),
-                    agent_background_coordinate(
-                        (paper.z - source_hotspot.z) * isotropic_scale,
-                    ),
+                    agent_background_coordinate((paper.x - source_hotspot.x) * isotropic_scale),
+                    agent_background_coordinate((paper.y - source_hotspot.y) * isotropic_scale),
+                    agent_background_coordinate((paper.z - source_hotspot.z) * isotropic_scale),
                 ],
                 color: paper.color.clone(),
                 year: paper.year,
@@ -6569,7 +7008,10 @@ pub fn export_app17_visual_review_snapshot(
                 )
             })?;
             let bytes = fs::read(&path).map_err(|error| {
-                format!("Cannot read coordinate override {}: {error}", path.display())
+                format!(
+                    "Cannot read coordinate override {}: {error}",
+                    path.display()
+                )
             })?;
             let sha256 = format!("{:x}", Sha256::digest(&bytes));
             let coordinate_override = serde_json::from_slice::<App17CoordinateOverride>(&bytes)
@@ -6592,8 +7034,7 @@ pub fn export_app17_visual_review_snapshot(
             AGENT_BACKGROUND_MAX_SIZE_BYTES
         ));
     }
-    let agent_background_sha256 =
-        format!("{:x}", Sha256::digest(&agent_background_bytes));
+    let agent_background_sha256 = format!("{:x}", Sha256::digest(&agent_background_bytes));
 
     fs::create_dir_all(&output_dir).map_err(|error| {
         format!(
@@ -6651,8 +7092,7 @@ pub fn export_app17_visual_review_snapshot(
             10,
         )?;
         evidence.database_path = "snapshot://v20-semantic".to_string();
-        let papers =
-            query_v20_visual_review_hotspot_papers(&conn, &project_id, &hotspot.id)?;
+        let papers = query_v20_visual_review_hotspot_papers(&conn, &project_id, &hotspot.id)?;
         write_visual_review_json(&evidence_dir.join(format!("{file_id}.json")), &evidence)?;
         write_visual_review_json(&papers_dir.join(format!("{file_id}.json")), &papers)?;
         topics.push(App17VisualReviewTopicEntry {
@@ -6750,9 +7190,13 @@ fn apply_app17_coordinate_override(
     if coordinate_override.paper_layout_version.trim().is_empty()
         || coordinate_override.projection_version.trim().is_empty()
     {
-        return Err("Coordinate override layout and projection versions must be non-empty.".to_string());
+        return Err(
+            "Coordinate override layout and projection versions must be non-empty.".to_string(),
+        );
     }
-    if !coordinate_override.paper_layout_local_p95_radius.is_finite()
+    if !coordinate_override
+        .paper_layout_local_p95_radius
+        .is_finite()
         || coordinate_override.paper_layout_local_p95_radius <= 0.0
         || !coordinate_override.paper_layout_shared_scale.is_finite()
         || coordinate_override.paper_layout_shared_scale <= 0.0
@@ -6772,16 +7216,26 @@ fn apply_app17_coordinate_override(
     let hotspot_id_by_topic = payload
         .hotspots
         .iter()
-        .map(|hotspot| ((hotspot.field.clone(), hotspot.topic_id), hotspot.id.clone()))
+        .map(|hotspot| {
+            (
+                (hotspot.field.clone(), hotspot.topic_id),
+                hotspot.id.clone(),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let mut paper_coordinates = HashMap::with_capacity(coordinate_override.papers.len());
     for point in coordinate_override.papers {
         if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
-            return Err(format!("Coordinate override contains non-finite paper coordinates: {}.", point.id));
+            return Err(format!(
+                "Coordinate override contains non-finite paper coordinates: {}.",
+                point.id
+            ));
         }
         let point_id = point.id.clone();
         if paper_coordinates.insert(point_id.clone(), point).is_some() {
-            return Err(format!("Coordinate override contains duplicate paper id: {point_id}."));
+            return Err(format!(
+                "Coordinate override contains duplicate paper id: {point_id}."
+            ));
         }
     }
     if paper_coordinates.len() != payload.papers.len() {
@@ -6792,12 +7246,14 @@ fn apply_app17_coordinate_override(
         ));
     }
     for paper in &mut payload.papers {
-        let point = paper_coordinates.remove(&paper.raw_paper_id).ok_or_else(|| {
-            format!(
-                "Coordinate override is missing paper id: {}.",
-                paper.raw_paper_id
-            )
-        })?;
+        let point = paper_coordinates
+            .remove(&paper.raw_paper_id)
+            .ok_or_else(|| {
+                format!(
+                    "Coordinate override is missing paper id: {}.",
+                    paper.raw_paper_id
+                )
+            })?;
         let expected_hotspot_id = hotspot_id_by_topic
             .get(&(paper.field.clone(), paper.topic_id))
             .ok_or_else(|| {
@@ -6817,17 +7273,27 @@ fn apply_app17_coordinate_override(
         paper.z = point.z;
     }
     if let Some(extra_id) = paper_coordinates.keys().next() {
-        return Err(format!("Coordinate override contains unknown paper id: {extra_id}."));
+        return Err(format!(
+            "Coordinate override contains unknown paper id: {extra_id}."
+        ));
     }
 
     let mut hotspot_coordinates = HashMap::with_capacity(coordinate_override.hotspots.len());
     for point in coordinate_override.hotspots {
         if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
-            return Err(format!("Coordinate override contains non-finite hotspot coordinates: {}.", point.id));
+            return Err(format!(
+                "Coordinate override contains non-finite hotspot coordinates: {}.",
+                point.id
+            ));
         }
         let point_id = point.id.clone();
-        if hotspot_coordinates.insert(point_id.clone(), point).is_some() {
-            return Err(format!("Coordinate override contains duplicate hotspot id: {point_id}."));
+        if hotspot_coordinates
+            .insert(point_id.clone(), point)
+            .is_some()
+        {
+            return Err(format!(
+                "Coordinate override contains duplicate hotspot id: {point_id}."
+            ));
         }
     }
     if hotspot_coordinates.len() != payload.hotspots.len() {
@@ -6838,23 +7304,23 @@ fn apply_app17_coordinate_override(
         ));
     }
     for hotspot in &mut payload.hotspots {
-        let point = hotspot_coordinates.remove(&hotspot.id).ok_or_else(|| {
-            format!("Coordinate override is missing hotspot id: {}.", hotspot.id)
-        })?;
+        let point = hotspot_coordinates
+            .remove(&hotspot.id)
+            .ok_or_else(|| format!("Coordinate override is missing hotspot id: {}.", hotspot.id))?;
         hotspot.x = point.x;
         hotspot.y = point.y;
         hotspot.z = point.z;
     }
     if let Some(extra_id) = hotspot_coordinates.keys().next() {
-        return Err(format!("Coordinate override contains unknown hotspot id: {extra_id}."));
+        return Err(format!(
+            "Coordinate override contains unknown hotspot id: {extra_id}."
+        ));
     }
 
     payload.paper_layout_version = Some(coordinate_override.paper_layout_version);
-    payload.paper_layout_coordinate_space =
-        Some(coordinate_override.paper_layout_coordinate_space);
+    payload.paper_layout_coordinate_space = Some(coordinate_override.paper_layout_coordinate_space);
     payload.paper_layout_scale_mode = Some(coordinate_override.paper_layout_scale_mode);
-    payload.paper_layout_local_p95_radius =
-        Some(coordinate_override.paper_layout_local_p95_radius);
+    payload.paper_layout_local_p95_radius = Some(coordinate_override.paper_layout_local_p95_radius);
     payload.paper_layout_shared_scale = Some(coordinate_override.paper_layout_shared_scale);
     payload.projection_version = Some(coordinate_override.projection_version);
     payload.message = format!(
@@ -8988,8 +9454,8 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         == Some("v20-semantic-e5-small-2")
         && manifest.paper_layout_version.as_deref() == Some("semantic-hierarchical-pca3-v2")
         && manifest.projection_version.as_deref() == Some("centroid-pca3-robust-whiten-v2");
-    let semantic_v5_compatible = semantic_v5_common
-        && (semantic_v5_current || semantic_v5_published_v2);
+    let semantic_v5_compatible =
+        semantic_v5_common && (semantic_v5_current || semantic_v5_published_v2);
     if !beta2_compatible && !v022_compatible && !semantic_v4_compatible && !semantic_v5_compatible {
         return Err("默认论文库清单版本与当前应用不兼容。".to_string());
     }
@@ -11120,6 +11586,7 @@ pub fn run() {
         .manage(LibraryMutationRegistry::default())
         .manage(AiTaskRegistry::default())
         .manage(agent_runtime::AgentRuntimeState::default())
+        .manage(sidera_pi_runtime::SideraPiRuntimeState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -11176,10 +11643,16 @@ pub fn run() {
             get_v20_galaxy_payload,
             load_agent_immersive_background,
             resolve_agent_galaxy_entities,
+            resolve_agent_dual_focus_scene,
             set_app_credential,
             get_app_credential_status,
             delete_app_credential,
             ai_chat,
+            sidera_pi_start_session,
+            sidera_pi_submit_prompt,
+            sidera_pi_abort_turn,
+            sidera_pi_get_status,
+            sidera_pi_stop_session,
             cancel_ai_task,
             write_text_file,
             read_markdown_exports,

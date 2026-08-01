@@ -1,12 +1,20 @@
 import {
   ArrowLeft,
+  Atom,
+  BookOpen,
+  ChevronRight,
+  Crosshair,
+  ExternalLink,
+  Eye,
   Maximize2,
   MessageSquareText,
+  Minimize2,
   MoreHorizontal,
   Orbit,
   RefreshCw,
   Send,
   Sparkles,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -16,27 +24,72 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
+  type CSSProperties,
 } from "react";
 
 import type {
   AgentImmersiveBackgroundPayloadV2,
   AiSettings,
   App17GalaxyPayload,
+  Hotspot,
+  Paper,
   Project,
 } from "../types";
 import {
+  getPapersByIds,
   getV20GalaxyPayload,
   loadAgentImmersiveBackground,
+  resolveAgentDualFocusScene,
 } from "../lib/desktop";
-import type { GalaxyCameraPose } from "./App17GalaxyCanvas";
+import {
+  createIdleAgentDualFocusRuntime,
+  normalizeAgentDualFocusIntent,
+  validateAgentDualFocusScene,
+  type AgentDualFocusIntent,
+  type AgentDualFocusPresentation,
+  type AgentDualFocusRelation,
+  type AgentDualFocusRuntimeSnapshot,
+} from "../lib/agentDualFocus";
+import type {
+  AgentGalaxyFocusIntent,
+} from "../lib/agentGalaxyFlowContract";
+import {
+  agentImmersiveLayoutVersion,
+  type AgentImmersiveStyle,
+} from "../lib/agentImmersiveStarRiver";
+import {
+  buildSideraCarouselWindow,
+  chooseSideraFallbackSide,
+  isSideraMessageFocusReady,
+  membershipLabel,
+  normalizeSideraReferences,
+  resolveSideraInitialIndex,
+  type SideraAnswerEntityReference,
+  type SideraAnswerResolution,
+  type SideraAssistantMessage,
+  type SideraFocusSession,
+  type SideraResolvedReference,
+} from "../lib/sideraFocus";
+import type {
+  AgentTheoryReturnProgressSnapshot,
+  GalaxyCameraPose,
+} from "./App17GalaxyCanvas";
 import {
   AgentImmersiveStarfieldCanvas,
   type AgentImmersiveFlowCheckpointV1,
   type AgentImmersiveFlowMetrics,
 } from "./AgentImmersiveStarfieldCanvas";
-import { AgentTheoryBackgroundCanvas } from "./AgentTheoryBackgroundCanvas";
+import {
+  AgentTheoryBackgroundCanvas,
+  type AgentTheoryNavigationRequest,
+  type AgentTheoryNavigationSnapshot,
+} from "./AgentTheoryBackgroundCanvas";
 import "./AgentDualBackgroundPage.css";
+
+export type {
+  SideraAnswerEntityReference,
+  SideraAssistantMessage,
+} from "../lib/sideraFocus";
 
 export type AgentBackgroundMode = "immersive" | "theory";
 
@@ -44,6 +97,7 @@ export type AgentBackgroundSessionState = {
   mode: AgentBackgroundMode;
   immersiveSeed: string;
   immersiveElapsedSeconds: number;
+  immersiveStyle?: AgentImmersiveStyle;
   theoryCameraPose?: GalaxyCameraPose;
 };
 
@@ -53,15 +107,33 @@ export type AgentPromptSubmitEvent = {
   submittedAtMs: number;
 };
 
+export type SideraShellPresentation = "agent" | "workbench" | "suspended";
+
 type AgentDualBackgroundPageProps = {
   settings: AiSettings;
   activeProject: Project;
-  advancedWorkspace: ReactNode;
+  hotspots?: Hotspot[];
+  onOpenRunCenter?: () => void;
+  navigationOpen?: boolean;
+  onCloseNavigation?: () => void;
   onPromptSubmit?: (event: AgentPromptSubmitEvent) => void;
+  assistantMessages?: SideraAssistantMessage[];
+  conversationGenerating?: boolean;
+  conversationError?: string;
+  onStopGeneration?: () => void;
+  onOpenSettings?: () => void;
+  onOpenPaperDetail?: (paperId: string, title?: string) => void;
+  onOpenHotspotDetail?: (hotspotId: string) => void;
+  onInitialReady?: () => void;
+  onInitialError?: (message: string) => void;
+  forceStaticBackground?: boolean;
+  shellPresentation?: SideraShellPresentation;
 };
 
 const MODE_STORAGE_KEY = "research-agent:background-mode:v2";
+const IMMERSIVE_STYLE_STORAGE_KEY = "research-agent:immersive-style:v1";
 const SESSION_SEED_STORAGE_KEY = "research-agent:immersive-session-seed:v2";
+const SIDERA_SESSION_STORAGE_PREFIX = "research-agent:sidera-session:v1";
 
 function readBackgroundMode(): AgentBackgroundMode {
   try {
@@ -70,6 +142,16 @@ function readBackgroundMode(): AgentBackgroundMode {
       : "immersive";
   } catch {
     return "immersive";
+  }
+}
+
+function readImmersiveStyle(): AgentImmersiveStyle {
+  try {
+    return window.localStorage.getItem(IMMERSIVE_STYLE_STORAGE_KEY) === "random-field"
+      ? "random-field"
+      : "star-river";
+  } catch {
+    return "star-river";
   }
 }
 
@@ -135,6 +217,8 @@ function readFlowCheckpoint(
     if (!raw) return undefined;
     const stored = JSON.parse(raw) as {
       sessionSeed?: string;
+      style?: AgentImmersiveStyle;
+      layoutVersion?: string;
       stepIndex?: number;
       textureWidth?: number;
       textureHeight?: number;
@@ -154,6 +238,8 @@ function readFlowCheckpoint(
     }
     return {
       sessionSeed,
+      style: stored.style,
+      layoutVersion: stored.layoutVersion,
       stepIndex: Math.max(0, Math.floor(stored.stepIndex ?? 0)),
       textureWidth: Math.max(1, Math.floor(stored.textureWidth ?? 1)),
       textureHeight: Math.max(1, Math.floor(stored.textureHeight ?? 1)),
@@ -173,6 +259,8 @@ function writeFlowCheckpoint(
   try {
     window.sessionStorage.setItem(key, JSON.stringify({
       sessionSeed: checkpoint.sessionSeed,
+      style: checkpoint.style,
+      layoutVersion: checkpoint.layoutVersion,
       stepIndex: checkpoint.stepIndex,
       textureWidth: checkpoint.textureWidth,
       textureHeight: checkpoint.textureHeight,
@@ -218,22 +306,103 @@ function delay(milliseconds: number) {
   });
 }
 
+function parseFocusEntityIds(value: string) {
+  return value
+    .split(/[\s,，;；]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+type StoredSideraSession = {
+  messageId: string;
+  entityId: string;
+  side: "left" | "right";
+  backgroundMode: AgentBackgroundMode;
+  dialogCollapsed: boolean;
+  devMessages: SideraAssistantMessage[];
+};
+
+function readStoredSideraSession(key: string): StoredSideraSession | null {
+  try {
+    const value = JSON.parse(
+      window.sessionStorage.getItem(key) ?? "null",
+    ) as StoredSideraSession | null;
+    if (
+      !value
+      || typeof value.messageId !== "string"
+      || typeof value.entityId !== "string"
+      || (value.side !== "left" && value.side !== "right")
+      || (value.backgroundMode !== "immersive" && value.backgroundMode !== "theory")
+      || !Array.isArray(value.devMessages)
+    ) {
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSideraSession(
+  key: string,
+  value: StoredSideraSession | null,
+) {
+  try {
+    if (!value) {
+      window.sessionStorage.removeItem(key);
+      return;
+    }
+    window.sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Session continuity is best effort and must not block the starfield.
+  }
+}
+
+function compactText(value: string | undefined, maximumLength: number) {
+  const normalized = value?.replace(/\s+/gu, " ").trim() ?? "";
+  if (normalized.length <= maximumLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maximumLength - 1)).trimEnd()}…`;
+}
+
+function referenceLabel(reference: SideraAnswerEntityReference) {
+  return reference.kind === "paper" ? "论文" : "热点";
+}
+
 export function AgentDualBackgroundPage({
   settings,
   activeProject,
-  advancedWorkspace,
+  hotspots = [],
+  onOpenRunCenter,
+  navigationOpen = false,
+  onCloseNavigation,
   onPromptSubmit,
+  assistantMessages = [],
+  conversationGenerating = false,
+  conversationError = "",
+  onStopGeneration,
+  onOpenSettings,
+  onOpenPaperDetail,
+  onOpenHotspotDetail,
+  onInitialReady,
+  onInitialError,
+  forceStaticBackground = false,
+  shellPresentation = "agent",
 }: AgentDualBackgroundPageProps) {
+  const developmentFixturesEnabled = useMemo(() => {
+    if (!import.meta.env.DEV) return false;
+    const review = new URLSearchParams(window.location.search).get("visual-review") ?? "";
+    return review.startsWith("agent-") || review === "agent";
+  }, []);
   const projectKey = `${settings.databaseDir}\u0000${activeProject.id}`;
   const sessionSeed = useMemo(createSessionSeed, []);
-  const elapsedStorageKey = useMemo(
-    () => `research-agent:immersive-elapsed:v2:${activeProject.id}:${sessionSeed}`,
-    [activeProject.id, sessionSeed],
-  );
-  const flowCheckpointStorageKey = useMemo(
-    () => `research-agent:immersive-flow-checkpoint:v1:${activeProject.id}:${sessionSeed}`,
-    [activeProject.id, sessionSeed],
-  );
+  const elapsedStorageKeys = useMemo(() => ({
+    "random-field": `research-agent:immersive-elapsed:v2:${activeProject.id}:${sessionSeed}`,
+    "star-river": `research-agent:immersive-elapsed:star-river-v1:${activeProject.id}:${sessionSeed}`,
+  }), [activeProject.id, sessionSeed]);
+  const flowCheckpointStorageKeys = useMemo(() => ({
+    "random-field": `research-agent:immersive-flow-checkpoint:v1:${activeProject.id}:${sessionSeed}`,
+    "star-river": `research-agent:immersive-flow-checkpoint:star-river-v1:${activeProject.id}:${sessionSeed}`,
+  }), [activeProject.id, sessionSeed]);
   const flowFallbackStorageKey = useMemo(
     () => `research-agent:immersive-flow-fallback:v1:${activeProject.id}:${sessionSeed}`,
     [activeProject.id, sessionSeed],
@@ -242,18 +411,34 @@ export function AgentDualBackgroundPage({
     () => `research-agent:theory-pose:v3-agent-depth:${activeProject.id}`,
     [activeProject.id],
   );
+  const sideraSessionStorageKey = useMemo(
+    () => `${SIDERA_SESSION_STORAGE_PREFIX}:${activeProject.id}`,
+    [activeProject.id],
+  );
+  const storedSideraSession = useMemo(
+    () => readStoredSideraSession(sideraSessionStorageKey),
+    [sideraSessionStorageKey],
+  );
   const initialMode = useMemo(readBackgroundMode, []);
+  const initialImmersiveStyle = useMemo(readImmersiveStyle, []);
   const [preferredMode, setPreferredMode] =
     useState<AgentBackgroundMode>(initialMode);
+  const [immersiveStyle, setImmersiveStyle] =
+    useState<AgentImmersiveStyle>(initialImmersiveStyle);
   const [mountedMode, setMountedMode] =
     useState<AgentBackgroundMode | null>(null);
+  const [mountedImmersiveStyle, setMountedImmersiveStyle] =
+    useState<AgentImmersiveStyle | null>(null);
   const [immersivePayload, setImmersivePayload] =
     useState<AgentImmersiveBackgroundPayloadV2 | null>(null);
   const [theoryPayload, setTheoryPayload] =
     useState<App17GalaxyPayload | null>(null);
-  const [immersiveElapsedSeconds, setImmersiveElapsedSeconds] = useState(
-    () => readElapsedSeconds(elapsedStorageKey),
-  );
+  const [immersiveElapsedByStyle, setImmersiveElapsedByStyle] = useState<
+    Record<AgentImmersiveStyle, number>
+  >(() => ({
+    "random-field": readElapsedSeconds(elapsedStorageKeys["random-field"]),
+    "star-river": readElapsedSeconds(elapsedStorageKeys["star-river"]),
+  }));
   const [forceAnalyticFallback, setForceAnalyticFallback] = useState(() => {
     if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("flowBackend") === "analytic") {
       return true;
@@ -270,25 +455,121 @@ export function AgentDualBackgroundPage({
   const [switching, setSwitching] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [exploreTheory, setExploreTheory] = useState(false);
+  const [theoryReturnActive, setTheoryReturnActive] = useState(false);
+  const [theoryReturnPhase, setTheoryReturnPhase] = useState<
+    AgentTheoryReturnProgressSnapshot["phase"]
+  >("idle");
+  const [theoryNavigation, setTheoryNavigation] =
+    useState<AgentTheoryNavigationSnapshot>({
+      level: "overview",
+      explorationState: "overview",
+      paperFocusState: "idle",
+      transitioning: false,
+    });
+  const [theoryNavigationRequest, setTheoryNavigationRequest] =
+    useState<AgentTheoryNavigationRequest>({
+      kind: "return-overview",
+      nonce: 0,
+    });
   const [resetTheoryNonce, setResetTheoryNonce] = useState(0);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [submittedPrompts, setSubmittedPrompts] =
     useState<AgentPromptSubmitEvent[]>([]);
+  const [devAssistantMessages, setDevAssistantMessages] =
+    useState<SideraAssistantMessage[]>(() => (
+      developmentFixturesEnabled ? storedSideraSession?.devMessages ?? [] : []
+    ));
+  const visibleAssistantMessages = useMemo(
+    () => [
+      ...assistantMessages,
+      ...(developmentFixturesEnabled ? devAssistantMessages : []),
+    ],
+    [assistantMessages, devAssistantMessages, developmentFixturesEnabled],
+  );
+  const [answerResolutions, setAnswerResolutions] =
+    useState<Record<string, SideraAnswerResolution>>({});
+  const [focusSession, setFocusSession] =
+    useState<SideraFocusSession | null>(null);
+  const [focusPresentation, setFocusPresentation] =
+    useState<AgentDualFocusPresentation | null>(null);
+  const [focusRuntime, setFocusRuntime] =
+    useState<AgentDualFocusRuntimeSnapshot>(() => (
+      createIdleAgentDualFocusRuntime(initialMode)
+    ));
+  const [focusPanelOpen, setFocusPanelOpen] = useState(false);
+  const [focusEntityKind, setFocusEntityKind] =
+    useState<AgentGalaxyFocusIntent["kind"]>("paper");
+  const [focusEntityId, setFocusEntityId] =
+    useState("project-default:openalex:W2582012066");
+  const [focusEvidenceInput, setFocusEvidenceInput] = useState("");
+  const [dialogCollapsed, setDialogCollapsed] = useState(
+    () => storedSideraSession?.dialogCollapsed ?? false,
+  );
+  const [allObjectsMessageId, setAllObjectsMessageId] = useState("");
+  const [focusPaperDetail, setFocusPaperDetail] = useState<Paper | null>(null);
+  const [focusPaperDetailStatus, setFocusPaperDetailStatus] =
+    useState<"idle" | "loading" | "ready" | "missing" | "error">("idle");
+  const [pendingExploreAfterFocus, setPendingExploreAfterFocus] = useState(false);
+  const focusPaperPresets = useMemo(() => {
+    const sampled = immersivePayload?.papers[0]?.id;
+    const sampledIds = new Set(
+      immersivePayload?.papers.map((paper) => paper.id) ?? [],
+    );
+    const unsampledPaper = theoryPayload?.papers.find((paper) => (
+      !sampledIds.has(paper.rawPaperId)
+      && !sampledIds.has(paper.scopedPaperId)
+    ));
+    return {
+      sampled,
+      unsampled: unsampledPaper?.scopedPaperId ?? unsampledPaper?.rawPaperId,
+    };
+  }, [immersivePayload, theoryPayload]);
+  const focusHotspotPresets = useMemo(() => {
+    const hotspots = immersivePayload?.hotspots.slice().sort((left, right) => (
+      left.paperCount - right.paperCount || left.id.localeCompare(right.id)
+    )) ?? [];
+    if (!hotspots.length) return [];
+    return [
+      { label: "small hotspot", hotspot: hotspots[0] },
+      {
+        label: "medium hotspot",
+        hotspot: hotspots[Math.floor((hotspots.length - 1) / 2)],
+      },
+      { label: "large hotspot", hotspot: hotspots[hotspots.length - 1] },
+    ];
+  }, [immersivePayload]);
+  const focusRevisionRef = useRef(0);
+  const focusReleaseTimerRef = useRef(0);
+  const answerResolutionRevisionRef = useRef(new Map<string, number>());
+  const restoredSideraSessionRef = useRef(false);
+  const devMessageSequenceRef = useRef(0);
   const immersivePayloadRef = useRef(immersivePayload);
   const theoryPayloadRef = useRef(theoryPayload);
   const theoryPoseRef = useRef<GalaxyCameraPose | undefined>(
     readTheoryCameraPose(theoryPoseStorageKey),
   );
-  const flowCheckpointRef = useRef<AgentImmersiveFlowCheckpointV1 | undefined>(
-    readFlowCheckpoint(flowCheckpointStorageKey, sessionSeed),
-  );
+  const immersiveStyleRef = useRef<AgentImmersiveStyle>(initialImmersiveStyle);
+  const flowCheckpointRefs = useRef<Record<
+    AgentImmersiveStyle,
+    AgentImmersiveFlowCheckpointV1 | undefined
+  >>({
+    "random-field": readFlowCheckpoint(
+      flowCheckpointStorageKeys["random-field"],
+      sessionSeed,
+    ),
+    "star-river": readFlowCheckpoint(
+      flowCheckpointStorageKeys["star-river"],
+      sessionSeed,
+    ),
+  });
   const mountedFlowCheckpointRef = useRef<
     AgentImmersiveFlowCheckpointV1 | undefined
-  >(flowCheckpointRef.current);
+  >(flowCheckpointRefs.current[initialImmersiveStyle]);
   const switchTokenRef = useRef(0);
   const revealTimerRef = useRef(0);
+  const initialReadyReportedRef = useRef(false);
+  const pageRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     immersivePayloadRef.current = immersivePayload;
@@ -298,24 +579,30 @@ export function AgentDualBackgroundPage({
     theoryPayloadRef.current = theoryPayload;
   }, [theoryPayload]);
 
-  const saveElapsed = useCallback((value: number) => {
+  useEffect(() => {
+    immersiveStyleRef.current = immersiveStyle;
+  }, [immersiveStyle]);
+
+  const saveElapsed = useCallback((style: AgentImmersiveStyle, value: number) => {
     const safeValue = Math.max(0, value);
-    setImmersiveElapsedSeconds((current) => (
-      Math.abs(current - safeValue) <= 1e-6 ? current : safeValue
+    setImmersiveElapsedByStyle((current) => (
+      Math.abs(current[style] - safeValue) <= 1e-6
+        ? current
+        : { ...current, [style]: safeValue }
     ));
     try {
-      window.sessionStorage.setItem(elapsedStorageKey, String(safeValue));
+      window.sessionStorage.setItem(elapsedStorageKeys[style], String(safeValue));
     } catch {
       // A blocked storage provider must not interrupt the starfield.
     }
-  }, [elapsedStorageKey]);
+  }, [elapsedStorageKeys]);
 
-  const saveFlowCheckpoint = useCallback((
+  const saveFlowCheckpoint = useCallback((style: AgentImmersiveStyle,
     checkpoint: AgentImmersiveFlowCheckpointV1,
   ) => {
-    flowCheckpointRef.current = checkpoint;
-    writeFlowCheckpoint(flowCheckpointStorageKey, checkpoint);
-  }, [flowCheckpointStorageKey]);
+    flowCheckpointRefs.current[style] = checkpoint;
+    writeFlowCheckpoint(flowCheckpointStorageKeys[style], checkpoint);
+  }, [flowCheckpointStorageKeys]);
 
   const lockAnalyticFallback = useCallback((reason: string) => {
     setForceAnalyticFallback(true);
@@ -367,17 +654,442 @@ export function AgentDualBackgroundPage({
     return payload;
   }, [activeProject.id, sessionSeed, settings.databaseDir]);
 
+  const resolveMessageReferences = useCallback(async (
+    message: SideraAssistantMessage,
+  ): Promise<SideraAnswerResolution> => {
+    const references = normalizeSideraReferences(message.entityRefs);
+    if (!isSideraMessageFocusReady(message) || references.length === 0) {
+      const empty: SideraAnswerResolution = {
+        status: "idle",
+        entities: [],
+        missing: [],
+      };
+      setAnswerResolutions((current) => ({ ...current, [message.id]: empty }));
+      return empty;
+    }
+    const requestRevision = (
+      answerResolutionRevisionRef.current.get(message.id) ?? 0
+    ) + 1;
+    answerResolutionRevisionRef.current.set(message.id, requestRevision);
+    setAnswerResolutions((current) => ({
+      ...current,
+      [message.id]: {
+        status: "resolving",
+        entities: current[message.id]?.entities ?? [],
+        missing: current[message.id]?.missing ?? [],
+      },
+    }));
+    try {
+      const identityPayload = await ensurePayload(
+        "immersive",
+      ) as AgentImmersiveBackgroundPayloadV2;
+      const scene = await resolveAgentDualFocusScene({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        sourceSnapshotId: identityPayload.sourceSnapshotId,
+        sampledPaperIds: identityPayload.papers.map((paper) => paper.id),
+        primary: {
+          kind: references[0].kind,
+          entityId: references[0].entityId,
+        },
+        evidenceEntityIds: references
+          .slice(1, 6)
+          .map((reference) => reference.entityId),
+        contextEntityIds: references
+          .slice(6)
+          .map((reference) => reference.entityId),
+        relation: "answer-evidence",
+      });
+      if (
+        answerResolutionRevisionRef.current.get(message.id) !== requestRevision
+      ) {
+        return {
+          status: "failed",
+          entities: [],
+          missing: [],
+          error: "SIDERA_STALE_RESOLUTION",
+        };
+      }
+      const resolvedEntities = [
+        scene.primary,
+        ...scene.evidence,
+        ...scene.context,
+      ];
+      const resolvedById = new Map(
+        resolvedEntities.map((entity) => [entity.entityId, entity]),
+      );
+      const resolved = references.map((reference) => ({
+        reference,
+        entity: resolvedById.get(reference.entityId) ?? {
+          kind: reference.kind,
+          entityId: reference.entityId,
+          membership: "missing" as const,
+        },
+      }));
+      const result: SideraAnswerResolution = {
+        status: "ready",
+        entities: resolved.filter(({ entity }) => entity.membership !== "missing"),
+        missing: resolved
+          .filter(({ entity }) => entity.membership === "missing")
+          .map(({ reference }) => reference),
+      };
+      setAnswerResolutions((current) => ({
+        ...current,
+        [message.id]: result,
+      }));
+      return result;
+    } catch (error) {
+      const result: SideraAnswerResolution = {
+        status: "failed",
+        entities: [],
+        missing: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+      if (
+        answerResolutionRevisionRef.current.get(message.id) === requestRevision
+      ) {
+        setAnswerResolutions((current) => ({
+          ...current,
+          [message.id]: result,
+        }));
+      }
+      return result;
+    }
+  }, [
+    activeProject.id,
+    ensurePayload,
+    settings.databaseDir,
+  ]);
+
+  const presentSideraSession = useCallback((
+    nextSession: SideraFocusSession,
+    phase: "acquiring" | "retargeting",
+  ) => {
+    const current = nextSession.candidates[nextSession.currentIndex];
+    if (!current) return;
+    const revision = focusRevisionRef.current + 1;
+    focusRevisionRef.current = revision;
+    window.clearTimeout(focusReleaseTimerRef.current);
+    const intent: AgentDualFocusIntent = normalizeAgentDualFocusIntent({
+      revision,
+      primary: {
+        kind: current.entity.kind,
+        entityId: current.entity.entityId,
+        mode: "full-focus",
+        reason: "citation-click",
+      },
+      evidenceEntityIds: [],
+      contextEntityIds: [],
+    });
+    const scene = {
+      primary: current.entity,
+      evidence: [],
+      context: [],
+      relation: "answer-evidence" as AgentDualFocusRelation,
+      sourceSnapshotId: current.entity.sourceSnapshotId
+        ?? immersivePayloadRef.current?.sourceSnapshotId
+        ?? "",
+    };
+    const validationError = validateAgentDualFocusScene(scene);
+    if (validationError) {
+      setFocusRuntime({
+        ...createIdleAgentDualFocusRuntime(preferredMode),
+        primaryId: current.entity.entityId,
+        membership: current.entity.membership,
+        resolutionError: validationError,
+      });
+      return;
+    }
+    const resolvedSession = {
+      ...nextSession,
+      backgroundMode: preferredMode,
+      phase,
+    };
+    setFocusSession(resolvedSession);
+    setFocusPresentation({
+      intent,
+      scene,
+      releasing: false,
+      productMode: "sidera-explicit",
+      side: nextSession.side,
+      sideraPhase: phase,
+    });
+    setFocusRuntime({
+      phase,
+      backgroundMode: preferredMode,
+      primaryId: current.entity.entityId,
+      membership: current.entity.membership,
+      progress: 0,
+      contextSide: nextSession.side,
+      targetBlend: phase === "retargeting" ? 1 : 0,
+      cameraBlend: 0,
+      backgroundDimBlend: phase === "retargeting" ? 1 : 0,
+      infoBlend: 0,
+    });
+  }, [preferredMode]);
+
+  const activateMessageFocus = useCallback(async (
+    message: SideraAssistantMessage,
+    selectedEntityId?: string,
+  ) => {
+    if (!isSideraMessageFocusReady(message)) return;
+    let resolution = answerResolutions[message.id];
+    if (!resolution || resolution.status !== "ready") {
+      setFocusRuntime({
+        phase: "resolving",
+        backgroundMode: preferredMode,
+        primaryId: selectedEntityId,
+        progress: 0,
+      });
+      resolution = await resolveMessageReferences(message);
+    }
+    if (resolution.status !== "ready" || resolution.entities.length === 0) {
+      setFocusRuntime({
+        ...createIdleAgentDualFocusRuntime(preferredMode),
+        primaryId: selectedEntityId,
+        resolutionError: resolution.error
+          ?? "本回答没有可在当前文献库中聚焦的实体。",
+      });
+      return;
+    }
+    const candidates = buildSideraCarouselWindow(
+      resolution.entities,
+      selectedEntityId,
+    );
+    const selected = selectedEntityId
+      ?? candidates[0]?.entity.entityId
+      ?? "";
+    const existingSide = focusSession?.messageId === message.id
+      ? focusSession.side
+      : undefined;
+    const side = existingSide ?? chooseSideraFallbackSide(message.id, selected);
+    presentSideraSession({
+      messageId: message.id,
+      candidates,
+      currentIndex: resolveSideraInitialIndex(candidates, selected),
+      side,
+      backgroundMode: preferredMode,
+      phase: focusSession ? "retargeting" : "acquiring",
+    }, focusSession ? "retargeting" : "acquiring");
+    setAllObjectsMessageId("");
+  }, [
+    answerResolutions,
+    focusSession,
+    preferredMode,
+    presentSideraSession,
+    resolveMessageReferences,
+  ]);
+
+  const retargetFocus = useCallback((nextIndex: number) => {
+    if (!focusSession) return;
+    const bounded = Math.max(
+      0,
+      Math.min(focusSession.candidates.length - 1, nextIndex),
+    );
+    if (bounded === focusSession.currentIndex) return;
+    presentSideraSession({
+      ...focusSession,
+      currentIndex: bounded,
+      phase: "retargeting",
+    }, "retargeting");
+  }, [focusSession, presentSideraSession]);
+
+  const releaseFocus = useCallback(() => {
+    window.clearTimeout(focusReleaseTimerRef.current);
+    focusRevisionRef.current += 1;
+    setFocusSession((current) => (
+      current ? { ...current, phase: "releasing" } : current
+    ));
+    setFocusPresentation((current) => (
+      current ? { ...current, releasing: true } : current
+    ));
+    setFocusRuntime((current) => ({
+      ...current,
+      phase: current.primaryId ? "releasing" : "idle",
+      progress: 0,
+      resolutionError: undefined,
+    }));
+    focusReleaseTimerRef.current = window.setTimeout(() => {
+      setFocusPresentation(null);
+      setFocusSession(null);
+      setFocusRuntime({
+        ...createIdleAgentDualFocusRuntime(preferredMode),
+        resolutionError: "SIDERA_FOCUS_RELEASE_TIMEOUT",
+      });
+    }, 10_000);
+  }, [preferredMode]);
+
+  const handleFocusRuntime = useCallback((
+    snapshot: AgentDualFocusRuntimeSnapshot,
+  ) => {
+    if (snapshot.backgroundMode !== preferredMode) return;
+    setFocusRuntime((current) => {
+      if (
+        current.primaryId
+        && snapshot.primaryId
+        && current.primaryId !== snapshot.primaryId
+      ) return current;
+      return {
+        ...snapshot,
+        backgroundMode: preferredMode,
+      };
+    });
+    setFocusSession((current) => {
+      if (
+        !current
+        || (
+          snapshot.primaryId
+          && current.candidates[current.currentIndex]?.entity.entityId
+            !== snapshot.primaryId
+        )
+      ) return current;
+      const phase = snapshot.phase === "hold"
+        ? "hold"
+        : snapshot.phase === "releasing"
+          ? "releasing"
+          : snapshot.phase === "retargeting"
+            ? "retargeting"
+            : snapshot.phase === "acquiring"
+              ? "acquiring"
+              : current.phase;
+      return current.phase === phase ? current : { ...current, phase };
+    });
+    if (
+      snapshot.phase === "idle"
+      && focusPresentation
+      && (
+        !snapshot.primaryId
+        || snapshot.primaryId === focusPresentation.scene.primary.entityId
+      )
+    ) {
+      window.clearTimeout(focusReleaseTimerRef.current);
+      setFocusPresentation(null);
+      setFocusSession(null);
+    }
+  }, [focusPresentation, preferredMode]);
+
+  useEffect(() => {
+    visibleAssistantMessages.forEach((message) => {
+      if (
+        !isSideraMessageFocusReady(message)
+        || answerResolutions[message.id]
+      ) return;
+      void resolveMessageReferences(message);
+    });
+  }, [
+    answerResolutions,
+    resolveMessageReferences,
+    visibleAssistantMessages,
+  ]);
+
+  const activeResolvedReference = focusSession
+    ?.candidates[focusSession.currentIndex];
+
+  useEffect(() => {
+    const entity = activeResolvedReference?.entity;
+    if (!entity || entity.kind !== "paper") {
+      setFocusPaperDetail(null);
+      setFocusPaperDetailStatus("idle");
+      return undefined;
+    }
+    let disposed = false;
+    setFocusPaperDetail(null);
+    setFocusPaperDetailStatus("loading");
+    void getPapersByIds(
+      settings.databaseDir,
+      activeProject.id,
+      [entity.entityId],
+    ).then((papers) => {
+      if (disposed) return;
+      const paper = papers[0] ?? null;
+      setFocusPaperDetail(paper);
+      setFocusPaperDetailStatus(paper ? "ready" : "missing");
+    }).catch(() => {
+      if (disposed) return;
+      setFocusPaperDetailStatus("error");
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    activeProject.id,
+    activeResolvedReference?.entity.entityId,
+    activeResolvedReference?.entity.kind,
+    settings.databaseDir,
+  ]);
+
+  useEffect(() => {
+    if (!focusSession || !activeResolvedReference) {
+      if (!restoredSideraSessionRef.current && storedSideraSession) return;
+      writeStoredSideraSession(sideraSessionStorageKey, null);
+      return;
+    }
+    writeStoredSideraSession(sideraSessionStorageKey, {
+      messageId: focusSession.messageId,
+      entityId: activeResolvedReference.entity.entityId,
+      side: focusSession.side,
+      backgroundMode: preferredMode,
+      dialogCollapsed,
+      devMessages: developmentFixturesEnabled ? devAssistantMessages : [],
+    });
+  }, [
+    activeResolvedReference,
+    developmentFixturesEnabled,
+    devAssistantMessages,
+    dialogCollapsed,
+    focusSession,
+    preferredMode,
+    sideraSessionStorageKey,
+    storedSideraSession,
+  ]);
+
+  useEffect(() => {
+    if (
+      restoredSideraSessionRef.current
+      || !storedSideraSession
+      || focusPresentation
+    ) return;
+    const message = visibleAssistantMessages.find(
+      (candidate) => candidate.id === storedSideraSession.messageId,
+    );
+    if (!message) {
+      restoredSideraSessionRef.current = true;
+      writeStoredSideraSession(sideraSessionStorageKey, null);
+      return;
+    }
+    const resolution = answerResolutions[message.id];
+    if (!resolution || resolution.status === "resolving") return;
+    restoredSideraSessionRef.current = true;
+    setDialogCollapsed(storedSideraSession.dialogCollapsed);
+    void activateMessageFocus(message, storedSideraSession.entityId);
+  }, [
+    activateMessageFocus,
+    answerResolutions,
+    focusPresentation,
+    sideraSessionStorageKey,
+    storedSideraSession,
+    visibleAssistantMessages,
+  ]);
+
+  const reportInitialReady = useCallback(() => {
+    if (initialReadyReportedRef.current) return;
+    initialReadyReportedRef.current = true;
+    onInitialReady?.();
+  }, [onInitialReady]);
+
   const revealRenderer = useCallback(() => {
     window.clearTimeout(revealTimerRef.current);
     revealTimerRef.current = window.setTimeout(() => {
       setMaskVisible(false);
+      reportInitialReady();
       window.setTimeout(() => setSwitching(false), 220);
     }, 24);
-  }, []);
+  }, [reportInitialReady]);
 
   const mountBackground = useCallback(async (
     mode: AgentBackgroundMode,
     useCoverDelay: boolean,
+    requestedImmersiveStyle: AgentImmersiveStyle = immersiveStyleRef.current,
   ) => {
     const token = ++switchTokenRef.current;
     setLoadError("");
@@ -386,6 +1098,7 @@ export function AgentDualBackgroundPage({
     if (useCoverDelay) await delay(180);
     if (token !== switchTokenRef.current) return;
     setMountedMode(null);
+    setMountedImmersiveStyle(null);
     await nextAnimationFrame();
     if (token !== switchTokenRef.current) return;
     try {
@@ -395,25 +1108,55 @@ export function AgentDualBackgroundPage({
         // Freeze the resume state for this renderer instance. The renderer
         // writes a newer checkpoint during cleanup; feeding that mutable ref
         // back as a live prop would retrigger the effect cleanup recursively.
-        mountedFlowCheckpointRef.current = flowCheckpointRef.current;
+        mountedFlowCheckpointRef.current = flowCheckpointRefs.current[
+          requestedImmersiveStyle
+        ];
       }
+      setMountedImmersiveStyle(
+        mode === "immersive" ? requestedImmersiveStyle : null,
+      );
       setMountedMode(mode);
     } catch (error) {
       if (token !== switchTokenRef.current) return;
-      setLoadError(error instanceof Error ? error.message : "背景载荷读取失败。");
+      const message = error instanceof Error ? error.message : "背景载荷读取失败。";
+      setLoadError(message);
       setSwitching(false);
       setMaskVisible(false);
+      onInitialError?.(message);
     }
-  }, [ensurePayload]);
+  }, [ensurePayload, onInitialError]);
 
   useEffect(() => {
+    if (forceStaticBackground) {
+      switchTokenRef.current += 1;
+      setMountedMode(null);
+      setLoadError("");
+      setSwitching(false);
+      setMaskVisible(false);
+      const readyTimer = window.setTimeout(reportInitialReady, 24);
+      return () => window.clearTimeout(readyTimer);
+    }
     immersivePayloadRef.current = null;
     theoryPayloadRef.current = null;
     setImmersivePayload(null);
     setTheoryPayload(null);
-    setImmersiveElapsedSeconds(readElapsedSeconds(elapsedStorageKey));
-    flowCheckpointRef.current = readFlowCheckpoint(flowCheckpointStorageKey, sessionSeed);
-    mountedFlowCheckpointRef.current = flowCheckpointRef.current;
+    setImmersiveElapsedByStyle({
+      "random-field": readElapsedSeconds(elapsedStorageKeys["random-field"]),
+      "star-river": readElapsedSeconds(elapsedStorageKeys["star-river"]),
+    });
+    flowCheckpointRefs.current = {
+      "random-field": readFlowCheckpoint(
+        flowCheckpointStorageKeys["random-field"],
+        sessionSeed,
+      ),
+      "star-river": readFlowCheckpoint(
+        flowCheckpointStorageKeys["star-river"],
+        sessionSeed,
+      ),
+    };
+    mountedFlowCheckpointRef.current = flowCheckpointRefs.current[
+      immersiveStyleRef.current
+    ];
     const forcedByReview = import.meta.env.DEV
       && new URLSearchParams(window.location.search).get("flowBackend") === "analytic";
     let sessionFallback = false;
@@ -426,67 +1169,267 @@ export function AgentDualBackgroundPage({
     setImmersiveMetrics(null);
     theoryPoseRef.current = readTheoryCameraPose(theoryPoseStorageKey);
     setExploreTheory(false);
-    setAdvancedOpen(false);
-    void mountBackground(preferredMode, false);
+    setTheoryReturnActive(false);
+    setTheoryReturnPhase("idle");
+    setTheoryNavigation({
+      level: "overview",
+      explorationState: "overview",
+      paperFocusState: "idle",
+      transitioning: false,
+    });
+    if (shellPresentation !== "suspended") {
+      void mountBackground(
+        shellPresentation === "workbench" ? "immersive" : preferredMode,
+        false,
+        shellPresentation === "workbench" ? "star-river" : immersiveStyleRef.current,
+      );
+    }
     return () => {
       switchTokenRef.current += 1;
       window.clearTimeout(revealTimerRef.current);
+      window.clearTimeout(focusReleaseTimerRef.current);
     };
     // `preferredMode` intentionally stays outside the dependency list: mode
     // changes are sequenced by `switchBackground` so two renderers never overlap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    elapsedStorageKey,
-    flowCheckpointStorageKey,
+    elapsedStorageKeys,
+    flowCheckpointStorageKeys,
     flowFallbackStorageKey,
     mountBackground,
+    forceStaticBackground,
     projectKey,
+    reportInitialReady,
     sessionSeed,
     theoryPoseStorageKey,
   ]);
 
+  const previousShellPresentationRef = useRef(shellPresentation);
   useEffect(() => {
-    if (!exploreTheory) return undefined;
+    if (previousShellPresentationRef.current === shellPresentation) return;
+    previousShellPresentationRef.current = shellPresentation;
+    if (forceStaticBackground) return;
+    setMoreOpen(false);
+    if (shellPresentation === "suspended") {
+      switchTokenRef.current += 1;
+      setMaskVisible(true);
+      setMountedMode(null);
+      setMountedImmersiveStyle(null);
+      return;
+    }
+    const targetMode = shellPresentation === "workbench" ? "immersive" : preferredMode;
+    const targetStyle = shellPresentation === "workbench"
+      ? "star-river"
+      : immersiveStyleRef.current;
+    if (
+      mountedMode === targetMode
+      && (
+        targetMode !== "immersive"
+        || mountedImmersiveStyle === targetStyle
+      )
+    ) {
+      setMaskVisible(false);
+      setSwitching(false);
+      return;
+    }
+    void mountBackground(
+      targetMode,
+      true,
+      targetStyle,
+    );
+  }, [
+    forceStaticBackground,
+    mountBackground,
+    mountedImmersiveStyle,
+    mountedMode,
+    preferredMode,
+    shellPresentation,
+  ]);
+
+  const applyTheoryDialogExploreAmount = useCallback((amount: number) => {
+    const page = pageRef.current;
+    if (!page) return;
+    const bounded = Math.max(0, Math.min(1, amount));
+    page.style.setProperty(
+      "--agent-return-dialog-top",
+      `calc(${50 + bounded * 50}% - ${bounded * 42}px)`,
+    );
+    page.style.setProperty(
+      "--agent-return-dialog-width",
+      `${500 - bounded * 60}px`,
+    );
+    page.style.setProperty(
+      "--agent-return-dialog-min-height",
+      `${182 * (1 - bounded)}px`,
+    );
+    page.style.setProperty(
+      "--agent-return-dialog-padding",
+      `${18 * (1 - bounded)}px`,
+    );
+    page.style.setProperty(
+      "--agent-return-dialog-radius",
+      `${18 - bounded * 6}px`,
+    );
+    page.dataset.theoryReturnDialogExploreAmount = bounded.toFixed(6);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingExploreAfterFocus || focusPresentation) return;
+    setPendingExploreAfterFocus(false);
+    applyTheoryDialogExploreAmount(1);
+    setExploreTheory(true);
+  }, [
+    applyTheoryDialogExploreAmount,
+    focusPresentation,
+    pendingExploreAfterFocus,
+  ]);
+
+  const beginTheoryExploreExit = useCallback(() => {
+    if (!exploreTheory || theoryReturnActive) return;
+    applyTheoryDialogExploreAmount(1);
+    setTheoryReturnPhase("return-preparing");
+    setTheoryReturnActive(true);
+    setExploreTheory(false);
+  }, [
+    applyTheoryDialogExploreAmount,
+    exploreTheory,
+    theoryReturnActive,
+  ]);
+
+  const requestTheoryNavigation = useCallback((
+    kind: AgentTheoryNavigationRequest["kind"],
+  ) => {
+    setTheoryNavigationRequest((current) => ({
+      kind,
+      nonce: current.nonce + 1,
+    }));
+  }, []);
+
+  const handleTheoryReturnProgress = useCallback((
+    snapshot: AgentTheoryReturnProgressSnapshot,
+  ) => {
+    if (snapshot.phase === "idle") {
+      applyTheoryDialogExploreAmount(0);
+      const page = pageRef.current;
+      if (page) {
+        page.dataset.theoryReturnCameraProgress = "0.000000";
+        page.dataset.theoryReturnProgressError = "0.000000";
+      }
+      setTheoryReturnPhase("idle");
+      setTheoryReturnActive(false);
+      return;
+    }
+    setTheoryReturnPhase(snapshot.phase);
+    setTheoryReturnActive(true);
+    const cameraProgress = snapshot.phase === "return-preparing"
+      ? 0
+      : snapshot.progress;
+    applyTheoryDialogExploreAmount(1 - cameraProgress);
+    const page = pageRef.current;
+    if (page) {
+      const dialogProgress = 1 - Number(
+        page.dataset.theoryReturnDialogExploreAmount ?? 1,
+      );
+      page.dataset.theoryReturnCameraProgress =
+        cameraProgress.toFixed(6);
+      page.dataset.theoryReturnProgressError = Math.abs(
+        cameraProgress - dialogProgress,
+      ).toFixed(6);
+    }
+  }, [applyTheoryDialogExploreAmount]);
+
+  useEffect(() => {
+    if (!exploreTheory && !focusPresentation && !navigationOpen) return undefined;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      setExploreTheory(false);
+      if (navigationOpen) {
+        onCloseNavigation?.();
+      } else if (focusPresentation) {
+        releaseFocus();
+      } else if (theoryNavigation.level === "paper") {
+        requestTheoryNavigation("return-system");
+      } else if (theoryNavigation.level === "system") {
+        requestTheoryNavigation("return-overview");
+      } else {
+        beginTheoryExploreExit();
+      }
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [exploreTheory]);
+  }, [
+    beginTheoryExploreExit,
+    exploreTheory,
+    focusPresentation,
+    navigationOpen,
+    onCloseNavigation,
+    releaseFocus,
+    requestTheoryNavigation,
+    theoryNavigation.level,
+  ]);
 
   const switchBackground = async (mode: AgentBackgroundMode) => {
     if (mode === preferredMode || switching) return;
     setExploreTheory(false);
+    setTheoryReturnActive(false);
+    setTheoryReturnPhase("idle");
+    setTheoryNavigation({
+      level: "overview",
+      explorationState: "overview",
+      paperFocusState: "idle",
+      transitioning: false,
+    });
     setMoreOpen(false);
     setPreferredMode(mode);
+    setFocusSession((current) => (
+      current ? { ...current, backgroundMode: mode, phase: "acquiring" } : current
+    ));
+    setFocusRuntime((current) => (
+      current.primaryId
+        ? {
+          ...current,
+          phase: "acquiring",
+          backgroundMode: mode,
+          progress: 0,
+        }
+        : createIdleAgentDualFocusRuntime(mode)
+    ));
     try {
       window.localStorage.setItem(MODE_STORAGE_KEY, mode);
     } catch {
       // The mode remains valid for the current session.
     }
+    if (forceStaticBackground) return;
     await mountBackground(mode, true);
   };
 
-  const openAdvancedWorkspace = () => {
-    switchTokenRef.current += 1;
+  const switchImmersiveStyle = async (style: AgentImmersiveStyle) => {
+    if (style === immersiveStyleRef.current || switching) return;
+    immersiveStyleRef.current = style;
     setMoreOpen(false);
-    setExploreTheory(false);
-    setMaskVisible(true);
-    setMountedMode(null);
-    setAdvancedOpen(true);
-  };
-
-  const closeAdvancedWorkspace = () => {
-    setAdvancedOpen(false);
-    void mountBackground(preferredMode, false);
+    setImmersiveStyle(style);
+    setFocusSession((current) => (
+      current ? { ...current, phase: "acquiring" } : current
+    ));
+    setFocusRuntime((current) => (
+      current.primaryId
+        ? { ...current, phase: "acquiring", progress: 0 }
+        : current
+    ));
+    try {
+      window.localStorage.setItem(IMMERSIVE_STYLE_STORAGE_KEY, style);
+    } catch {
+      // The in-memory selection remains valid for this session.
+    }
+    if (forceStaticBackground || preferredMode !== "immersive") return;
+    await mountBackground("immersive", true, style);
   };
 
   const submitPrompt = () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || conversationGenerating) return;
+    if (focusPresentation) releaseFocus();
     const event: AgentPromptSubmitEvent = {
       text,
       backgroundMode: preferredMode,
@@ -496,7 +1439,7 @@ export function AgentDualBackgroundPage({
     setDraft("");
     onPromptSubmit?.(event);
     if (preferredMode === "theory" && exploreTheory) {
-      setExploreTheory(false);
+      beginTheoryExploreExit();
     }
   };
 
@@ -506,47 +1449,195 @@ export function AgentDualBackgroundPage({
     submitPrompt();
   };
 
-  if (advancedOpen) {
-    return (
-      <section className="agent-dual-advanced">
-        <header className="agent-dual-advanced__header">
-          <button type="button" onClick={closeAdvancedWorkspace}>
-            <ArrowLeft size={16} />
-            返回 Agent 星空
-          </button>
-          <span>高级工作台</span>
-        </header>
-        <div className="agent-dual-advanced__body">{advancedWorkspace}</div>
-      </section>
+  const activeHotspotDetail = useMemo<Hotspot | null>(() => {
+    const entity = activeResolvedReference?.entity;
+    if (!entity) return null;
+    const hotspotId = entity.kind === "hotspot"
+      ? entity.entityId
+      : entity.hotspotId;
+    if (!hotspotId) return null;
+    return hotspots.find((hotspot) => hotspot.id === hotspotId)
+      ?? theoryPayload?.hotspotRecords?.find((hotspot) => (
+      hotspot.id === hotspotId
+    )) ?? null;
+  }, [activeResolvedReference, hotspots, theoryPayload]);
+
+  const focusedMessage = focusSession
+    ? visibleAssistantMessages.find((message) => (
+      message.id === focusSession.messageId
+    ))
+    : undefined;
+  const allObjectsResolution = allObjectsMessageId
+    ? answerResolutions[allObjectsMessageId]
+    : undefined;
+
+  const appendDevAnswerFixture = useCallback((
+    status: SideraAssistantMessage["status"],
+    overflow = false,
+  ) => {
+    const evidenceIds = parseFocusEntityIds(focusEvidenceInput);
+    const fallbackPaperIds = immersivePayload?.papers
+      .slice(0, overflow ? 10 : 5)
+      .map((paper) => paper.id) ?? [];
+    const hotspotIds = new Set(
+      immersivePayload?.hotspots.map((hotspot) => hotspot.id) ?? [],
     );
-  }
+    const requested = [
+      focusEntityId.trim(),
+      ...evidenceIds,
+      ...(overflow ? fallbackPaperIds : []),
+    ].filter(Boolean);
+    const seen = new Set<string>();
+    const entityRefs = requested
+      .filter((entityId) => {
+        if (seen.has(entityId)) return false;
+        seen.add(entityId);
+        return true;
+      })
+      .map<SideraAnswerEntityReference>((entityId, index) => ({
+        kind: index === 0
+          ? focusEntityKind
+          : hotspotIds.has(entityId)
+            ? "hotspot"
+            : "paper",
+        entityId,
+        citationIndex: index + 1,
+        mentionOrder: index,
+        role: index === 0 ? "discussed" : "cited",
+        relationSummary: index === 0
+          ? "这是本回答重点讨论的研究对象。"
+          : "该对象为本回答中的直接证据。",
+      }));
+    if (!entityRefs.length) return;
+    const sequence = devMessageSequenceRef.current + 1;
+    devMessageSequenceRef.current = sequence;
+    const message: SideraAssistantMessage = {
+      id: `sidera-dev-${Date.now()}-${sequence}`,
+      status,
+      markdown: status === "streaming"
+        ? "正在依据本地文献证据组织回答。流式阶段不会操控背景……"
+        : "基于当前本地文献库，以下对象构成本回答的核心证据。回答完成后，用户可以主动打开证据舞台逐项查看。",
+      entityRefs,
+    };
+    setDevAssistantMessages((current) => [...current, message].slice(-8));
+  }, [
+    focusEntityId,
+    focusEntityKind,
+    focusEvidenceInput,
+    immersivePayload,
+  ]);
+
+  const requestTheoryExplore = useCallback(() => {
+    if (focusPresentation) {
+      setPendingExploreAfterFocus(true);
+      releaseFocus();
+      return;
+    }
+    applyTheoryDialogExploreAmount(1);
+    setExploreTheory(true);
+  }, [
+    applyTheoryDialogExploreAmount,
+    focusPresentation,
+    releaseFocus,
+  ]);
+
+  const openFocusedDetail = useCallback(() => {
+    const entity = activeResolvedReference?.entity;
+    if (!entity) return;
+    if (entity.kind === "paper") {
+      onOpenPaperDetail?.(
+        entity.entityId,
+        focusPaperDetail?.title ?? entity.title,
+      );
+      return;
+    }
+    onOpenHotspotDetail?.(entity.entityId);
+  }, [
+    activeResolvedReference,
+    focusPaperDetail?.title,
+    onOpenHotspotDetail,
+    onOpenPaperDetail,
+  ]);
+
+  const dialogExploreVisible = exploreTheory || theoryReturnActive;
 
   return (
     <section
-      className={`agent-dual-page ${exploreTheory ? "agent-dual-page--explore" : ""}`}
+      ref={pageRef}
+      className={[
+        "agent-dual-page",
+        `agent-dual-page--shell-${shellPresentation}`,
+        exploreTheory ? "agent-dual-page--explore" : "",
+        theoryReturnActive ? "agent-dual-page--returning" : "",
+        focusPresentation ? "agent-dual-page--focus-active" : "",
+      ].filter(Boolean).join(" ")}
       data-background-mode={preferredMode}
       data-mounted-mode={mountedMode ?? "none"}
+      data-immersive-style={immersiveStyle}
+      data-mounted-immersive-style={mountedImmersiveStyle ?? "none"}
+      data-shell-presentation={shellPresentation}
+      data-immersive-layout-version={agentImmersiveLayoutVersion(immersiveStyle)}
       data-renderer-count={mountedMode ? 1 : 0}
       data-immersive-flow-backend={immersiveMetrics?.backend ?? "pending"}
       data-immersive-flow-degradation={immersiveMetrics?.degradationReason ?? ""}
+      data-theory-return-phase={theoryReturnPhase}
+      data-focus-phase={focusRuntime.phase}
+      data-focus-primary={focusRuntime.primaryId ?? ""}
+      data-focus-mode={focusPresentation ? "sidera-explicit" : ""}
+      data-focus-membership={focusRuntime.membership ?? ""}
+      data-focus-progress={focusRuntime.progress.toFixed(4)}
+      data-focus-route-phase={focusRuntime.routePhase ?? ""}
+      data-focus-target-blend={(focusRuntime.targetBlend ?? 0).toFixed(4)}
+      data-focus-camera-blend={(focusRuntime.cameraBlend ?? 0).toFixed(4)}
+      data-focus-background-dim={(
+        focusRuntime.backgroundDimBlend ?? 0
+      ).toFixed(4)}
+      data-focus-info-blend={(focusRuntime.infoBlend ?? 0).toFixed(4)}
+      data-sidera-session-message={focusSession?.messageId ?? ""}
+      data-sidera-session-index={focusSession?.currentIndex ?? -1}
+      data-sidera-session-count={focusSession?.candidates.length ?? 0}
+      data-sidera-focus-side={focusSession?.side ?? ""}
+      data-sidera-dialog-collapsed={dialogCollapsed ? "true" : "false"}
+      style={{
+        "--sidera-focus-dim": String(
+          focusRuntime.backgroundDimBlend ?? 0,
+        ),
+        "--sidera-focus-x": focusSession?.side === "left" ? "22%" : "78%",
+      } as CSSProperties}
     >
       <div className="agent-dual-page__background" aria-hidden="true">
+        {forceStaticBackground ? (
+          <div className="agent-dual-page__static-background" />
+        ) : null}
         {mountedMode === "immersive" && immersivePayload ? (
           <AgentImmersiveStarfieldCanvas
             payload={immersivePayload}
-            elapsedSeconds={immersiveElapsedSeconds}
+            style={mountedImmersiveStyle ?? immersiveStyle}
+            elapsedSeconds={immersiveElapsedByStyle[
+              mountedImmersiveStyle ?? immersiveStyle
+            ]}
             initialCheckpoint={mountedFlowCheckpointRef.current}
             forceAnalyticFallback={forceAnalyticFallback}
             reducedMotion={window.matchMedia("(prefers-reduced-motion: reduce)").matches}
-            onElapsedSecondsChange={saveElapsed}
-            onCheckpoint={saveFlowCheckpoint}
+            motionScale={shellPresentation === "workbench" ? 0.2 : 1}
+            onElapsedSecondsChange={(value) => saveElapsed(
+              mountedImmersiveStyle ?? immersiveStyle,
+              value,
+            )}
+            onCheckpoint={(checkpoint) => saveFlowCheckpoint(
+              mountedImmersiveStyle ?? immersiveStyle,
+              checkpoint,
+            )}
             onMetrics={setImmersiveMetrics}
+            focus={focusPresentation}
+            onFocusRuntime={handleFocusRuntime}
             onBackendFallback={lockAnalyticFallback}
             onReady={revealRenderer}
             onFatalError={(message) => {
               setLoadError(message);
               setSwitching(false);
               setMaskVisible(false);
+              onInitialError?.(message);
             }}
           />
         ) : null}
@@ -556,7 +1647,16 @@ export function AgentDualBackgroundPage({
             interactionMode={exploreTheory ? "explore" : "ambient"}
             initialCameraPose={theoryPoseRef.current}
             resetToBestNonce={resetTheoryNonce}
+            navigationRequest={theoryNavigationRequest}
+            focus={focusPresentation}
+            onFocusRuntime={handleFocusRuntime}
             onCameraPoseChange={(pose) => {
+              if (
+                focusPresentation
+                || theoryNavigation.level !== "overview"
+              ) {
+                return;
+              }
               theoryPoseRef.current = pose;
               try {
                 window.sessionStorage.setItem(
@@ -567,15 +1667,27 @@ export function AgentDualBackgroundPage({
                 // Camera persistence is session-only best effort.
               }
             }}
+            onNavigationStateChange={setTheoryNavigation}
+            onReturnProgress={handleTheoryReturnProgress}
             onReady={revealRenderer}
             onRuntimeError={(message) => {
+              if (message.includes("外围视野未达到")) {
+                theoryPoseRef.current = undefined;
+                try {
+                  window.sessionStorage.removeItem(theoryPoseStorageKey);
+                } catch {
+                  // A stale near-field pose is also ignored in memory.
+                }
+              }
               setLoadError(message);
               setSwitching(false);
               setMaskVisible(false);
+              onInitialError?.(message);
             }}
           />
         ) : null}
         <div className="agent-dual-page__vignette" />
+        <div className="agent-dual-page__focus-dim" />
       </div>
 
       <div
@@ -596,14 +1708,66 @@ export function AgentDualBackgroundPage({
           <span>{preferredMode === "immersive" ? "理论" : "沉浸"}</span>
         </button>
         {preferredMode === "theory" ? (
+          exploreTheory && theoryNavigation.level !== "overview" ? (
+            <button
+              type="button"
+              title={theoryNavigation.level === "paper"
+                ? theoryNavigation.paperFocusState === "entering"
+                  ? "取消论文靠近"
+                  : "返回热点星系"
+                : "返回理论全图"}
+              disabled={switching || theoryNavigation.transitioning}
+              onClick={() => {
+                requestTheoryNavigation(
+                  theoryNavigation.level === "paper"
+                    ? "return-system"
+                    : "return-overview",
+                );
+              }}
+            >
+              <ArrowLeft size={15} />
+              <span>
+                {theoryNavigation.level === "paper"
+                  ? theoryNavigation.paperFocusState === "entering"
+                    ? "取消靠近"
+                    : "返回星系"
+                  : "返回全图"}
+              </span>
+            </button>
+          ) : null
+        ) : null}
+        {preferredMode === "theory" ? (
           <button
             type="button"
-            title={exploreTheory ? "退出探索布局" : "探索理论星图"}
+            title={
+              exploreTheory
+                ? "退出探索布局"
+                : theoryReturnActive
+                  ? "返回探索布局"
+                  : "探索理论星图"
+            }
             disabled={switching}
-            onClick={() => setExploreTheory((value) => !value)}
+            onClick={() => {
+              if (exploreTheory) {
+                beginTheoryExploreExit();
+              } else if (theoryReturnActive) {
+                applyTheoryDialogExploreAmount(1);
+                setTheoryReturnPhase("idle");
+                setTheoryReturnActive(false);
+                setExploreTheory(true);
+              } else {
+                requestTheoryExplore();
+              }
+            }}
           >
             {exploreTheory ? <X size={15} /> : <Maximize2 size={15} />}
-            <span>{exploreTheory ? "退出探索" : "探索"}</span>
+            <span>
+              {exploreTheory
+                ? "退出探索"
+                : theoryReturnActive
+                  ? "返回探索"
+                  : "探索"}
+            </span>
           </button>
         ) : null}
         <div className="agent-dual-page__more">
@@ -617,10 +1781,55 @@ export function AgentDualBackgroundPage({
           </button>
           {moreOpen ? (
             <div className="agent-dual-page__menu">
-              <button type="button" onClick={openAdvancedWorkspace}>
+              {preferredMode === "immersive" ? (
+                <div
+                  className="agent-dual-page__immersive-style"
+                  role="group"
+                  aria-label="沉浸样式"
+                >
+                  <span>沉浸样式</span>
+                  <div>
+                    <button
+                      type="button"
+                      className={immersiveStyle === "star-river" ? "is-active" : ""}
+                      aria-pressed={immersiveStyle === "star-river"}
+                      onClick={() => void switchImmersiveStyle("star-river")}
+                    >
+                      流动星河
+                    </button>
+                    <button
+                      type="button"
+                      className={immersiveStyle === "random-field" ? "is-active" : ""}
+                      aria-pressed={immersiveStyle === "random-field"}
+                      onClick={() => void switchImmersiveStyle("random-field")}
+                    >
+                      随机星海
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreOpen(false);
+                  onOpenRunCenter?.();
+                }}
+              >
                 <MessageSquareText size={15} />
-                高级工作台
+                Agent 运行中心
               </button>
+              {developmentFixturesEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    setFocusPanelOpen((value) => !value);
+                  }}
+                >
+                  <Crosshair size={15} />
+                  聚焦调试
+                </button>
+              ) : null}
               {preferredMode === "theory" && exploreTheory ? (
                 <button
                   type="button"
@@ -648,57 +1857,517 @@ export function AgentDualBackgroundPage({
         </div>
       </div>
 
-      <main className="agent-dual-dialog" aria-label="Research Agent 输入区">
-        {!exploreTheory ? (
+      {developmentFixturesEnabled && focusPanelOpen ? (
+        <aside className="agent-dual-focus-panel" aria-label="Sidera 证据聚焦调试">
+          <header>
+            <strong>Sidera fixtures</strong>
+            <button
+              type="button"
+              title="关闭聚焦调试"
+              onClick={() => setFocusPanelOpen(false)}
+            >
+              <X size={14} />
+            </button>
+          </header>
+          <div className="agent-dual-focus-panel__presets">
+            <button
+              type="button"
+              disabled={!focusPaperPresets.sampled}
+              onClick={() => {
+                setFocusEntityKind("paper");
+                if (focusPaperPresets.sampled) {
+                  setFocusEntityId(focusPaperPresets.sampled);
+                }
+              }}
+            >
+              sampled
+            </button>
+            <button
+              type="button"
+              disabled={!focusPaperPresets.unsampled}
+              onClick={() => {
+                setFocusEntityKind("paper");
+                if (focusPaperPresets.unsampled) {
+                  setFocusEntityId(focusPaperPresets.unsampled);
+                }
+              }}
+            >
+              unsampled
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFocusEntityKind("paper");
+                setFocusEntityId("fixture:active-only:paper-001");
+              }}
+            >
+              active-only
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFocusEntityKind("paper");
+                setFocusEntityId("fixture:missing:paper-does-not-exist");
+              }}
+            >
+              missing
+            </button>
+            {focusHotspotPresets.map(({ label, hotspot }) => (
+              <button
+                key={label}
+                type="button"
+                title={hotspot.id}
+                onClick={() => {
+                  setFocusEntityKind("hotspot");
+                  setFocusEntityId(hotspot.id);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label>
+            <span>实体</span>
+            <select
+              value={focusEntityKind}
+              onChange={(event) => setFocusEntityKind(
+                event.target.value as AgentGalaxyFocusIntent["kind"],
+              )}
+            >
+              <option value="paper">paper</option>
+              <option value="hotspot">hotspot</option>
+            </select>
+          </label>
+          <input
+            value={focusEntityId}
+            aria-label="聚焦实体 ID"
+            onChange={(event) => setFocusEntityId(event.target.value)}
+          />
+          <input
+            value={focusEvidenceInput}
+            aria-label="证据实体 ID"
+            placeholder="其他结构化实体 ID，以空格或逗号分隔"
+            onChange={(event) => setFocusEvidenceInput(event.target.value)}
+          />
+          <div className="agent-dual-focus-panel__actions">
+            <button
+              type="button"
+              onClick={() => appendDevAnswerFixture("complete")}
+            >
+              完整回答
+            </button>
+            <button
+              type="button"
+              onClick={() => appendDevAnswerFixture("streaming")}
+            >
+              流式回答
+            </button>
+            <button type="button" onClick={() => appendDevAnswerFixture("complete", true)}>
+              溢出回答
+            </button>
+          </div>
+          <div className="agent-dual-focus-panel__actions">
+            <button
+              type="button"
+              disabled={!devAssistantMessages.some((message) => message.status === "streaming")}
+              onClick={() => setDevAssistantMessages((current) => current.map((message) => (
+                message.status === "streaming"
+                  ? { ...message, status: "complete" }
+                  : message
+              )))}
+            >
+              完成流式
+            </button>
+            <button type="button" disabled={!focusPresentation} onClick={releaseFocus}>
+              释放舞台
+            </button>
+          </div>
+          <output>
+            {[
+              `phase=${focusRuntime.phase}`,
+              `mode=${focusPresentation ? "explicit" : "idle"}`,
+              `membership=${focusRuntime.membership ?? "pending"}`,
+              `hotspot=${focusPresentation?.scene.primary.hotspotId ?? "-"}`,
+              `vertex=${focusRuntime.targetVertexIndex ?? "-"}`,
+              `slot=${focusRuntime.dynamicSlot ?? "-"}`,
+              `side=${focusRuntime.contextSide ?? "-"}`,
+              `camera=${focusRuntime.cameraState ?? "-"}`,
+              `nav=${theoryNavigation.level}/${theoryNavigation.explorationState}/${theoryNavigation.paperFocusState}`,
+              `progress=${focusRuntime.progress.toFixed(3)}`,
+              focusRuntime.resolutionError
+                ? `error=${focusRuntime.resolutionError}`
+                : "",
+            ].filter(Boolean).join(" · ")}
+          </output>
+        </aside>
+      ) : null}
+
+      <main
+        className={[
+          "agent-dual-dialog",
+          dialogCollapsed ? "agent-dual-dialog--collapsed" : "",
+        ].filter(Boolean).join(" ")}
+        aria-label="Sidera 科研 Agent 输入区"
+      >
+        {!dialogExploreVisible && !dialogCollapsed ? (
           <>
             <header className="agent-dual-dialog__header">
               <span className="agent-dual-dialog__signal" />
               <div>
-                <strong>Research Agent</strong>
+                <strong>Sidera</strong>
                 <small>
-                  {preferredMode === "immersive" ? "Immersive field" : "Theory field"}
+                  科研 Agent · {preferredMode === "immersive" ? "沉浸星海" : "理论星图"}
                 </small>
               </div>
+              <button
+                type="button"
+                className="agent-dual-dialog__collapse"
+                title="收起对话"
+                onClick={() => setDialogCollapsed(true)}
+              >
+                <Minimize2 size={14} />
+              </button>
             </header>
             <div className="agent-dual-dialog__history" aria-live="polite">
-              {submittedPrompts.length ? submittedPrompts.slice(-3).map((item) => (
+              {submittedPrompts.slice(-3).map((item) => (
                 <p key={`${item.submittedAtMs}-${item.text}`}>
                   <span>你</span>
                   {item.text}
                 </p>
-              )) : (
+              ))}
+              {!submittedPrompts.length && !visibleAssistantMessages.length ? (
                 <p className="agent-dual-dialog__empty">
                   在本地文献空间中提出研究问题。
                 </p>
-              )}
+              ) : null}
+              {visibleAssistantMessages.map((message) => {
+                const resolution = answerResolutions[message.id];
+                const references = normalizeSideraReferences(message.entityRefs);
+                const isActive = focusSession?.messageId === message.id;
+                const activeCount = isActive ? focusSession.candidates.length : 0;
+                return (
+                  <article
+                    key={message.id}
+                    className={[
+                      "sidera-answer",
+                      isActive ? "is-focused" : "",
+                    ].filter(Boolean).join(" ")}
+                    data-message-status={message.status}
+                    data-focus-ready={
+                      resolution?.status === "ready"
+                      && resolution.entities.length > 0
+                        ? "true"
+                        : "false"
+                    }
+                  >
+                    <header>
+                      <span>Sidera</span>
+                      <small>
+                        {message.status === "streaming"
+                          ? "回答中"
+                          : message.status === "cancelled"
+                            ? "已停止"
+                          : message.status === "failed"
+                            ? "回答失败"
+                            : resolution?.status === "resolving"
+                              ? "正在核验引用"
+                              : "回答完成"}
+                      </small>
+                    </header>
+                    <div className="sidera-answer__markdown">{message.markdown}</div>
+                    {references.length ? (
+                      <div className="sidera-answer__citations" aria-label="结构化引用">
+                        {references.map((reference) => {
+                          const missing = resolution?.missing.some((candidate) => (
+                            candidate.entityId === reference.entityId
+                            && candidate.kind === reference.kind
+                          ));
+                          const resolved = resolution?.entities.some(({ entity }) => (
+                            entity.entityId === reference.entityId
+                            && entity.kind === reference.kind
+                          ));
+                          return (
+                            <button
+                              key={`${reference.kind}:${reference.entityId}`}
+                              type="button"
+                              title={missing ? "本地库未找到" : reference.relationSummary}
+                              disabled={
+                                message.status !== "complete"
+                                || resolution?.status !== "ready"
+                                || !resolved
+                              }
+                              onClick={() => void activateMessageFocus(
+                                message,
+                                reference.entityId,
+                              )}
+                            >
+                              <span>[{reference.citationIndex ?? reference.mentionOrder + 1}]</span>
+                              {missing
+                                ? "本地库未找到"
+                                : `${referenceLabel(reference)}证据`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    {message.status === "complete" && references.length > 0 ? (
+                      <div className="sidera-answer__focus-controls">
+                        {isActive && activeCount === 1 ? (
+                          <button
+                            type="button"
+                            className="is-primary"
+                            onClick={releaseFocus}
+                          >
+                            <X size={13} />
+                            关闭
+                          </button>
+                        ) : isActive && activeCount > 1 ? (
+                          <div className="sidera-answer__carousel">
+                            {focusSession.currentIndex < activeCount - 1 ? (
+                              <button
+                                type="button"
+                                className="is-primary"
+                                title="下一颗"
+                                onClick={() => retargetFocus(focusSession.currentIndex + 1)}
+                              >
+                                <ChevronRight size={14} />
+                                下一颗
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              title="关闭证据舞台"
+                              onClick={releaseFocus}
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="is-primary"
+                            disabled={
+                              resolution?.status !== "ready"
+                              || resolution.entities.length === 0
+                            }
+                            onClick={() => void activateMessageFocus(message)}
+                          >
+                            <Crosshair size={13} />
+                            {resolution?.status === "resolving"
+                              ? "正在核验…"
+                              : references[0]?.kind === "hotspot"
+                                ? "聚焦该热点"
+                                : "聚焦该论文"}
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                    {resolution?.status === "failed" ? (
+                      <small className="sidera-answer__error">
+                        引用解析失败：{resolution.error}
+                      </small>
+                    ) : null}
+                  </article>
+                );
+              })}
             </div>
           </>
         ) : null}
         <div className="agent-dual-dialog__composer">
+          {dialogCollapsed && !dialogExploreVisible ? (
+            <button
+              type="button"
+              className="agent-dual-dialog__restore"
+              title="展开对话"
+              onClick={() => setDialogCollapsed(false)}
+            >
+              <Eye size={14} />
+            </button>
+          ) : null}
           <textarea
             value={draft}
-            rows={exploreTheory ? 1 : 2}
+            rows={dialogExploreVisible ? 1 : 2}
             aria-label="输入研究问题"
-            placeholder={exploreTheory ? "在理论星图中输入问题…" : "输入研究问题，Shift + Enter 换行"}
+            placeholder={dialogExploreVisible ? "在理论星图中输入问题…" : "输入研究问题，Shift + Enter 换行"}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleInputKeyDown}
           />
           <button
             type="button"
-            title="提交"
-            disabled={!draft.trim()}
-            onClick={submitPrompt}
+            title={conversationGenerating ? "停止生成" : "提交"}
+            disabled={!conversationGenerating && !draft.trim()}
+            onClick={conversationGenerating ? onStopGeneration : submitPrompt}
           >
-            <Send size={15} />
+            {conversationGenerating ? <Square size={14} /> : <Send size={15} />}
           </button>
         </div>
-        {!exploreTheory ? (
+        {!dialogExploreVisible && !dialogCollapsed ? (
           <footer>
-            <span>本版仅记录提交；科研 Agent 回答后端尚未接入。</span>
-            <kbd>Enter</kbd>
+            <span className={conversationError ? "is-error" : ""}>
+              {conversationError || "Pi 基础会话 · 暂未连接本地论文、文件或网页工具"}
+            </span>
+            {conversationError && onOpenSettings ? (
+              <button type="button" onClick={onOpenSettings}>打开设置</button>
+            ) : (
+              <kbd>{conversationGenerating ? "生成中" : "Enter"}</kbd>
+            )}
           </footer>
         ) : null}
       </main>
+
+      {focusSession && activeResolvedReference ? (
+        <aside
+          className={[
+            "sidera-evidence-card",
+            focusSession.side === "left"
+              ? "sidera-evidence-card--right"
+              : "sidera-evidence-card--left",
+          ].join(" ")}
+          aria-label="Sidera 核心证据信息"
+          data-entity-kind={activeResolvedReference.entity.kind}
+          data-entity-id={activeResolvedReference.entity.entityId}
+          style={{
+            "--sidera-info-blend": String(
+              focusRuntime.phase === "hold"
+                ? 1
+                : focusRuntime.infoBlend ?? 0,
+            ),
+            pointerEvents: (
+              focusRuntime.phase === "hold"
+              || (focusRuntime.infoBlend ?? 0) > 0.05
+            ) ? "auto" : "none",
+          } as CSSProperties}
+        >
+          <header>
+            <span>
+              {activeResolvedReference.entity.kind === "paper"
+                ? <BookOpen size={15} />
+                : <Atom size={15} />}
+              {activeResolvedReference.entity.kind === "paper" ? "论文证据" : "研究热点"}
+            </span>
+            <small>{membershipLabel(activeResolvedReference.entity.membership)}</small>
+          </header>
+          <h2>
+            {activeResolvedReference.entity.kind === "paper"
+              ? focusPaperDetail?.title
+                ?? activeResolvedReference.entity.title
+                ?? activeResolvedReference.entity.entityId
+              : activeHotspotDetail?.title
+                ?? activeResolvedReference.entity.title
+                ?? activeResolvedReference.entity.entityId}
+          </h2>
+          {activeResolvedReference.entity.kind === "paper" ? (
+            <>
+              <p className="sidera-evidence-card__meta">
+                {[
+                  focusPaperDetail?.authors,
+                  focusPaperDetail?.year ?? activeResolvedReference.entity.year,
+                  focusPaperDetail?.source,
+                ].filter(Boolean).join(" · ") || "文献信息读取中"}
+              </p>
+              <p>
+                {focusPaperDetailStatus === "loading"
+                  ? "正在从本地论文库读取完整信息…"
+                  : compactText(
+                    focusPaperDetail?.abstract,
+                    260,
+                  ) || "当前论文暂无可用摘要。"}
+              </p>
+              <dl>
+                <div>
+                  <dt>所属热点</dt>
+                  <dd>{activeHotspotDetail?.title ?? activeResolvedReference.entity.hotspotId ?? "未分类"}</dd>
+                </div>
+              </dl>
+            </>
+          ) : (
+            <>
+              <p className="sidera-evidence-card__meta">
+                {[
+                  activeHotspotDetail?.field ?? activeResolvedReference.entity.field,
+                  activeHotspotDetail ? `${activeHotspotDetail.paperCount} 篇论文` : undefined,
+                  activeHotspotDetail?.trend,
+                ].filter(Boolean).join(" · ")}
+              </p>
+              <p>{compactText(activeHotspotDetail?.summary, 240) || "当前热点暂无摘要。"}</p>
+              {activeHotspotDetail?.keywords.length ? (
+                <div className="sidera-evidence-card__keywords">
+                  {activeHotspotDetail.keywords.slice(0, 6).map((keyword) => (
+                    <span key={keyword}>{keyword}</span>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          )}
+          <blockquote>
+            {activeResolvedReference.reference.relationSummary
+              || focusedMessage?.markdown
+              || "该对象与当前回答直接相关。"}
+          </blockquote>
+          <div className="sidera-evidence-card__actions">
+            <button
+              type="button"
+              disabled={
+                activeResolvedReference.entity.kind === "paper"
+                  ? !onOpenPaperDetail
+                  : !onOpenHotspotDetail
+              }
+              onClick={openFocusedDetail}
+            >
+              <ExternalLink size={13} />
+              打开完整详情
+            </button>
+            {preferredMode === "immersive" ? (
+              <button type="button" onClick={() => void switchBackground("theory")}>
+                <Orbit size={13} />
+                查看语义位置
+              </button>
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
+
+      {allObjectsMessageId && allObjectsResolution?.status === "ready" ? (
+        <div className="sidera-object-browser" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="sidera-object-browser__scrim"
+            aria-label="关闭全部对象"
+            onClick={() => setAllObjectsMessageId("")}
+          />
+          <section>
+            <header>
+              <div>
+                <strong>本回答涉及的对象</strong>
+                <small>{allObjectsResolution.entities.length} 个本地实体</small>
+              </div>
+              <button type="button" onClick={() => setAllObjectsMessageId("")}>
+                <X size={15} />
+              </button>
+            </header>
+            <div>
+              {allObjectsResolution.entities.map(({ entity, reference }) => (
+                <button
+                  key={`${entity.kind}:${entity.entityId}`}
+                  type="button"
+                  onClick={() => {
+                    const message = visibleAssistantMessages.find((candidate) => (
+                      candidate.id === allObjectsMessageId
+                    ));
+                    if (message) {
+                      void activateMessageFocus(message, entity.entityId);
+                    }
+                  }}
+                >
+                  <span>{referenceLabel(reference)}</span>
+                  <strong>{entity.title ?? entity.entityId}</strong>
+                  <small>{reference.relationSummary}</small>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {loadError ? (
         <div className="agent-dual-page__error" role="alert">

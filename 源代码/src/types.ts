@@ -5,6 +5,7 @@ export type TrendStatus = "Surging" | "Stable" | "Declining" | "Unknown";
 export type ActiveView =
   | "dashboard"
   | "agent"
+  | "agent-runs"
   | "search"
   | "galaxy"
   | "hotspots"

@@ -1,0 +1,119 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+export type SideraPiSessionInfo = {
+  sessionId: string;
+  provider: string;
+  model: string;
+  packageVersion: string;
+};
+
+export type SideraPiRuntimeStatus = {
+  phase: "idle" | "ready" | "generating" | "error";
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  activeMessageId?: string;
+  revision: number;
+  processAlive: boolean;
+  outputBytes: number;
+  stderrBytes: number;
+  lastErrorCode?: string;
+};
+
+export type PiUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
+type SideraPiEventBase = {
+  sequence: number;
+  revision: number;
+};
+
+export type SideraPiEvent = SideraPiEventBase & (
+  | { type: "session-ready"; sessionId: string; provider: string; model: string }
+  | { type: "turn-start"; sessionId: string; messageId: string }
+  | { type: "assistant-delta"; sessionId: string; messageId: string; delta: string }
+  | { type: "turn-complete"; sessionId: string; messageId: string; usage?: PiUsage }
+  | { type: "turn-cancelled"; sessionId: string; messageId: string }
+  | { type: "runtime-error"; sessionId?: string; code: string; message: string }
+);
+
+export type SideraPiStartSessionInput = {
+  projectId: string;
+  provider: "deepseek" | "openai-compatible";
+  baseUrl: string;
+  model: string;
+  useEnvKey: boolean;
+};
+
+function requireDesktop() {
+  if (!isTauri()) {
+    throw new Error("Pi 会话仅可在 Sidera 桌面版中使用。");
+  }
+}
+
+export async function startSideraPiSession(input: SideraPiStartSessionInput) {
+  requireDesktop();
+  return invoke<SideraPiSessionInfo>("sidera_pi_start_session", { input });
+}
+
+export async function submitSideraPiPrompt(input: {
+  sessionId: string;
+  messageId: string;
+  prompt: string;
+}) {
+  requireDesktop();
+  await invoke("sidera_pi_submit_prompt", { input });
+}
+
+export async function abortSideraPiTurn(input: {
+  sessionId: string;
+  messageId: string;
+}) {
+  requireDesktop();
+  await invoke("sidera_pi_abort_turn", { input });
+}
+
+export async function getSideraPiStatus() {
+  requireDesktop();
+  return invoke<SideraPiRuntimeStatus>("sidera_pi_get_status");
+}
+
+export async function stopSideraPiSession() {
+  if (!isTauri()) return;
+  await invoke("sidera_pi_stop_session");
+}
+
+export async function listenSideraPiEvents(
+  handler: (event: SideraPiEvent) => void,
+): Promise<UnlistenFn> {
+  requireDesktop();
+  return listen<SideraPiEvent>("sidera-pi-event", ({ payload }) => handler(payload));
+}
+
+const safePiErrorMessages: Record<string, string> = {
+  SIDERA_PI_CREDENTIAL_REQUIRED: "尚未配置模型凭据，请先在设置中保存 API Key。",
+  SIDERA_PI_MODEL_REQUIRED: "尚未配置模型 ID，请先打开设置。",
+  SIDERA_PI_ENDPOINT_INVALID: "模型服务地址无效，请检查设置中的 Base URL。",
+  SIDERA_PI_PROVIDER_UNSUPPORTED: "当前模型 Provider 暂不受 Pi 会话支持。",
+  SIDERA_PI_PACKAGE_NOT_FOUND: "未找到固定版本的 Pi 运行依赖。",
+  SIDERA_PI_PACKAGE_VERSION_MISMATCH: "Pi 运行依赖版本与 Sidera 锁定版本不一致。",
+  SIDERA_PI_PROCESS_START_FAILED: "Pi 运行进程启动失败，请确认 Node.js 可用。",
+  SIDERA_PI_PROCESS_EXITED: "Pi 进程意外退出；问题没有被自动重放。",
+  SIDERA_PI_PROVIDER_ERROR: "模型服务未能完成本轮回答。",
+  SIDERA_PI_RPC_COMMAND_FAILED: "Pi 未能接受本轮请求。",
+  SIDERA_PI_OUTPUT_LIMIT_EXCEEDED: "本轮输出超过安全上限，生成已停止。",
+  SIDERA_PI_TOOL_EVENT_BLOCKED: "Pi 尝试调用本阶段禁用的工具，生成已停止。",
+};
+
+export function describeSideraPiError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const code = Object.keys(safePiErrorMessages).find((candidate) => raw.includes(candidate));
+  if (code) return safePiErrorMessages[code];
+  if (/network|fetch|connect|timeout|ECONN|HTTP/i.test(raw)) {
+    return "模型服务连接失败，请检查网络、Base URL 和模型状态。";
+  }
+  return raw.trim() || "Pi 会话发生未知错误。";
+}

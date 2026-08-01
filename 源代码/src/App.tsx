@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -8,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Activity,
   AlertTriangle,
@@ -16,7 +18,6 @@ import {
   Atom,
   BookOpen,
   Bot,
-  BrainCircuit,
   Check,
   CheckCircle2,
   CheckSquare,
@@ -34,8 +35,6 @@ import {
   Home,
   Loader2,
   LocateFixed,
-  Maximize2,
-  Minimize2,
   MoreHorizontal,
   Network,
   Orbit,
@@ -64,11 +63,32 @@ import {
   type GalaxyPaperDetailCacheState,
   type GalaxyPerformanceSnapshot,
   type GalaxyReviewCameraPreset,
+  type GalaxyCameraPose,
   type GalaxySystemViewMode,
 } from "./components/App17GalaxyCanvas";
 import { AgentWorkspace } from "./components/AgentWorkspace";
-import { AgentDualBackgroundPage } from "./components/AgentDualBackgroundPage";
+import {
+  AgentDualBackgroundPage,
+  type AgentPromptSubmitEvent,
+  type SideraAssistantMessage,
+} from "./components/AgentDualBackgroundPage";
+import { SideraSplash, type SideraBootPhase } from "./components/SideraSplash";
+import { SideraTitleBar } from "./components/SideraTitleBar";
 import { readAgentVisualReviewScenario } from "./lib/agentVisualReview";
+import type {
+  SideraNavigationLayout,
+  SideraPipelineSpatialState,
+  SideraShellScene,
+} from "./lib/sideraShell";
+import {
+  abortSideraPiTurn,
+  describeSideraPiError,
+  listenSideraPiEvents,
+  startSideraPiSession,
+  stopSideraPiSession,
+  submitSideraPiPrompt,
+  type SideraPiSessionInfo,
+} from "./lib/sideraPi";
 
 const threeConsole = (THREE as unknown as {
   setConsoleFunction?: (handler: ((type: string, message: string, ...args: unknown[]) => void) | null) => void;
@@ -295,6 +315,11 @@ type SearchFocusIntent = {
   timestamp: number;
 };
 
+type HotspotFocusIntent = {
+  hotspotId: string;
+  timestamp: number;
+};
+
 type LiteratureWorkspaceTab = "library" | "ingest" | "analysis";
 
 type PipelineStepId = "prepare" | "clean" | "cluster" | "result";
@@ -367,7 +392,8 @@ export default function App() {
   const galaxyVisualReview = isGalaxyVisualReviewMode();
   const agentVisualReviewScenario = useMemo(readAgentVisualReviewScenario, []);
   const galaxyVisualReviewIntent = useMemo(readGalaxyVisualReviewIntent, []);
-  const [activeView, setActiveView] = useState<ActiveView>(() => galaxyVisualReview ? "galaxy" : agentVisualReviewScenario ? "agent" : "dashboard");
+  const bypassSideraBoot = galaxyVisualReview || Boolean(agentVisualReviewScenario);
+  const [activeView, setActiveView] = useState<ActiveView>(() => galaxyVisualReview ? "galaxy" : "agent");
   const [galaxyVisited, setGalaxyVisited] = useState(galaxyVisualReview);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -385,13 +411,46 @@ export default function App() {
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
   const [allTaskLogs, setAllTaskLogs] = useState<TaskLog[]>([]);
   const [settings, setSettings] = useState<AiSettings | null>(null);
+  const [piAssistantMessages, setPiAssistantMessages] = useState<SideraAssistantMessage[]>([]);
+  const [piGenerating, setPiGenerating] = useState(false);
+  const [piConversationError, setPiConversationError] = useState("");
   const [searchFocusIntent, setSearchFocusIntent] = useState<SearchFocusIntent | null>(null);
+  const [hotspotFocusIntent, setHotspotFocusIntent] =
+    useState<HotspotFocusIntent | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const [agentNavigationOpen, setAgentNavigationOpen] = useState(false);
+  const [edgeNavigationPhase, setEdgeNavigationPhase] = useState<"idle" | "arming" | "open">("idle");
+  const [edgeNavigationOpenedBy, setEdgeNavigationOpenedBy] = useState<"edge" | "keyboard" | null>(null);
+  const [titleBarToolsHost, setTitleBarToolsHost] = useState<HTMLDivElement | null>(null);
+  const [sideraBootPhase, setSideraBootPhase] = useState<SideraBootPhase>(
+    bypassSideraBoot ? "ready" : "booting-data",
+  );
+  const [sideraSplashMounted, setSideraSplashMounted] = useState(!bypassSideraBoot);
+  const [sideraSplashExiting, setSideraSplashExiting] = useState(false);
+  const [sideraBootStatusVisible, setSideraBootStatusVisible] = useState(false);
+  const [sideraBootError, setSideraBootError] = useState("");
+  const [sideraStaticBackground, setSideraStaticBackground] = useState(false);
+  const [sideraStaticFallbackAllowed, setSideraStaticFallbackAllowed] = useState(false);
+  const [sideraBootRevision, setSideraBootRevision] = useState(0);
+  const [agentMountRevision, setAgentMountRevision] = useState(0);
+  const [pipelineSpatialState, setPipelineSpatialState] = useState<SideraPipelineSpatialState>({
+    active: false,
+    progress: 0,
+    paused: false,
+  });
+  const sideraBootStartedAtRef = useRef(performance.now());
+  const sideraSplashMountedRef = useRef(!bypassSideraBoot);
+  const edgeNavigationTimerRef = useRef<number | null>(null);
+  const edgeNavigationCloseTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const galaxySessionsRef = useRef(new Map<string, GalaxySessionState>());
   const galaxyRequestsRef = useRef(new Map<string, Promise<void>>());
   const refreshRequestSequenceRef = useRef(0);
+  const piSessionRef = useRef<SideraPiSessionInfo | null>(null);
+  const piActiveTurnRef = useRef<{ sessionId: string; messageId: string; revision: number } | null>(null);
+  const piLastEventSequenceRef = useRef(0);
+  const piConfigKeyRef = useRef("");
   const [, refreshGalaxySessions] = useState(0);
 
   function updateGalaxySession(key: string, next: GalaxySessionState) {
@@ -551,6 +610,12 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     async function boot() {
+      if (!bypassSideraBoot) {
+        setSideraBootPhase("booting-data");
+        setSideraBootError("");
+        setSideraStaticFallbackAllowed(false);
+      }
+      setLoading(true);
       try {
         await seedResearchDataIfEmpty();
         await reconcileInterruptedAiTaskLogs();
@@ -583,6 +648,7 @@ export default function App() {
               setSettings(nextSettings);
               setLibrarySetupState(nextSetupState);
               setLibrarySetupRequired(true);
+              if (!bypassSideraBoot) setSideraBootPhase("ready");
             }
             return;
           }
@@ -594,9 +660,18 @@ export default function App() {
             });
           }
         }
-        if (mounted) await refreshAll();
+        if (mounted) {
+          await refreshAll();
+          if (!bypassSideraBoot) setSideraBootPhase("mounting-agent");
+        }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "桌面端初始化失败。");
+        if (!mounted) return;
+        const message = error instanceof Error ? error.message : "桌面端初始化失败。";
+        setNotice(message);
+        if (!bypassSideraBoot) {
+          setSideraBootError(message);
+          setSideraBootPhase("failed");
+        }
       } finally {
         if (mounted) setLoading(false);
       }
@@ -605,7 +680,38 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [bypassSideraBoot, sideraBootRevision]);
+
+  useEffect(() => {
+    sideraSplashMountedRef.current = sideraSplashMounted;
+  }, [sideraSplashMounted]);
+
+  useEffect(() => {
+    if (!sideraSplashMounted || sideraBootPhase === "ready" || sideraBootPhase === "failed") {
+      setSideraBootStatusVisible(false);
+      return undefined;
+    }
+    const elapsed = performance.now() - sideraBootStartedAtRef.current;
+    const timer = window.setTimeout(
+      () => setSideraBootStatusVisible(true),
+      Math.max(0, 2000 - elapsed),
+    );
+    return () => window.clearTimeout(timer);
+  }, [sideraBootPhase, sideraSplashMounted]);
+
+  useEffect(() => {
+    if (!sideraSplashMounted || sideraBootPhase !== "ready") return undefined;
+    const elapsed = performance.now() - sideraBootStartedAtRef.current;
+    let unmountTimer = 0;
+    const exitTimer = window.setTimeout(() => {
+      setSideraSplashExiting(true);
+      unmountTimer = window.setTimeout(() => setSideraSplashMounted(false), 420);
+    }, Math.max(0, 1000 - elapsed));
+    return () => {
+      window.clearTimeout(exitTimer);
+      window.clearTimeout(unmountTimer);
+    };
+  }, [sideraBootPhase, sideraSplashMounted]);
 
   useEffect(() => {
     if (!workspaceRef.current) return;
@@ -617,101 +723,530 @@ export default function App() {
     if (activeView === "galaxy") setGalaxyVisited(true);
   }, [activeView]);
 
+  useEffect(() => {
+    if (!isDesktopRuntime()) return undefined;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenSideraPiEvents((event) => {
+      if (disposed || event.sequence <= piLastEventSequenceRef.current) return;
+      piLastEventSequenceRef.current = event.sequence;
+
+      if (event.type === "session-ready") {
+        piSessionRef.current = {
+          sessionId: event.sessionId,
+          provider: event.provider,
+          model: event.model,
+          packageVersion: "0.82.1",
+        };
+        setPiConversationError("");
+        return;
+      }
+
+      const currentSessionId = piSessionRef.current?.sessionId;
+      if (event.sessionId && currentSessionId && event.sessionId !== currentSessionId) return;
+
+      if (event.type === "turn-start") {
+        piActiveTurnRef.current = {
+          sessionId: event.sessionId,
+          messageId: event.messageId,
+          revision: event.revision,
+        };
+        setPiGenerating(true);
+        return;
+      }
+
+      if (event.type === "assistant-delta") {
+        const active = piActiveTurnRef.current;
+        if (!active || active.messageId !== event.messageId || event.revision < active.revision) return;
+        setPiAssistantMessages((messages) => messages.map((message) => (
+          message.id === event.messageId
+            ? { ...message, status: "streaming", markdown: message.markdown + event.delta }
+            : message
+        )));
+        return;
+      }
+
+      if (event.type === "turn-complete" || event.type === "turn-cancelled") {
+        const active = piActiveTurnRef.current;
+        if (!active || active.messageId !== event.messageId || event.revision < active.revision) return;
+        const status = event.type === "turn-cancelled" ? "cancelled" : "complete";
+        setPiAssistantMessages((messages) => messages.map((message) => (
+          message.id === event.messageId ? { ...message, status } : message
+        )));
+        piActiveTurnRef.current = null;
+        setPiGenerating(false);
+        return;
+      }
+
+      if (event.type === "runtime-error") {
+        const message = describeSideraPiError(new Error(`${event.code}:${event.message}`));
+        const active = piActiveTurnRef.current;
+        if (active) {
+          setPiAssistantMessages((messages) => messages.map((candidate) => (
+            candidate.id === active.messageId
+              ? {
+                  ...candidate,
+                  status: "failed",
+                  markdown: candidate.markdown || "本轮回答未能完成。",
+                }
+              : candidate
+          )));
+        }
+        piActiveTurnRef.current = null;
+        setPiGenerating(false);
+        setPiConversationError(message);
+      }
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    }).catch((error) => {
+      if (!disposed) setPiConversationError(describeSideraPiError(error));
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const piConfigKey = settings && activeProject
+    ? [
+        activeProject.id,
+        settings.provider,
+        settings.baseUrl.trim(),
+        settings.model.trim(),
+        settings.useEnvKey ? "env" : "keyring",
+      ].join("\u0000")
+    : "";
+
+  useEffect(() => {
+    if (!piConfigKey) return;
+    const previous = piConfigKeyRef.current;
+    piConfigKeyRef.current = piConfigKey;
+    if (!previous || previous === piConfigKey || !piSessionRef.current) return;
+    const active = piActiveTurnRef.current;
+    if (active) {
+      setPiAssistantMessages((messages) => messages.map((message) => (
+        message.id === active.messageId ? { ...message, status: "cancelled" } : message
+      )));
+    }
+    piActiveTurnRef.current = null;
+    piSessionRef.current = null;
+    setPiGenerating(false);
+    setPiConversationError("模型或项目设置已变化，下一条问题将开始新的 Pi 会话。");
+    void stopSideraPiSession().catch(() => undefined);
+  }, [piConfigKey]);
+
+  useEffect(() => {
+    if (activeView === "agent") return;
+    const active = piActiveTurnRef.current;
+    if (!active) return;
+    void abortSideraPiTurn({
+      sessionId: active.sessionId,
+      messageId: active.messageId,
+    }).catch((error) => setPiConversationError(describeSideraPiError(error)));
+  }, [activeView]);
+
+  const submitSideraPrompt = useCallback(async (event: AgentPromptSubmitEvent) => {
+    const messageId = globalThis.crypto?.randomUUID?.()
+      ?? `sidera-pi-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPiAssistantMessages((messages) => [
+      ...messages,
+      { id: messageId, status: "streaming", markdown: "", entityRefs: [] },
+    ]);
+    setPiConversationError("");
+    if (!settings || !activeProject) {
+      setPiAssistantMessages((messages) => messages.map((message) => (
+        message.id === messageId
+          ? { ...message, status: "failed", markdown: "本轮回答未能开始。" }
+          : message
+      )));
+      setPiConversationError("当前项目或模型设置尚未就绪，请先打开设置完成配置。");
+      return;
+    }
+    if (piGenerating) {
+      setPiAssistantMessages((messages) => messages.map((message) => (
+        message.id === messageId
+          ? { ...message, status: "failed", markdown: "上一轮回答仍在结束中。" }
+          : message
+      )));
+      setPiConversationError("上一轮回答仍在结束中，请稍后再试。");
+      return;
+    }
+    // `conversationGenerating` is the visible submission gate. Terminal RPC
+    // events and invoke responses use separate Tauri channels, so reconcile a
+    // stale ref here and let the Rust singleton remain the authoritative guard
+    // against a genuinely concurrent turn.
+    piActiveTurnRef.current = null;
+    setPiGenerating(true);
+    try {
+      const session = await startSideraPiSession({
+        projectId: activeProject.id,
+        provider: settings.provider,
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+        useEnvKey: settings.useEnvKey,
+      });
+      piSessionRef.current = session;
+      piActiveTurnRef.current = {
+        sessionId: session.sessionId,
+        messageId,
+        revision: 0,
+      };
+      await submitSideraPiPrompt({
+        sessionId: session.sessionId,
+        messageId,
+        prompt: event.text,
+      });
+    } catch (error) {
+      piActiveTurnRef.current = null;
+      setPiGenerating(false);
+      setPiAssistantMessages((messages) => messages.map((message) => (
+        message.id === messageId
+          ? { ...message, status: "failed", markdown: "本轮回答未能开始。" }
+          : message
+      )));
+      setPiConversationError(describeSideraPiError(error));
+    }
+  }, [activeProject, piGenerating, settings]);
+
+  const stopSideraGeneration = useCallback(() => {
+    const active = piActiveTurnRef.current;
+    if (!active) {
+      setPiGenerating(false);
+      return;
+    }
+    void abortSideraPiTurn({
+      sessionId: active.sessionId,
+      messageId: active.messageId,
+    }).catch((error) => setPiConversationError(describeSideraPiError(error)));
+  }, []);
+
+  const cancelEdgeNavigationArm = useCallback(() => {
+    if (edgeNavigationTimerRef.current !== null) {
+      window.clearTimeout(edgeNavigationTimerRef.current);
+      edgeNavigationTimerRef.current = null;
+    }
+    setEdgeNavigationPhase((current) => current === "open" ? current : "idle");
+  }, []);
+
+  const openAgentNavigation = useCallback((openedBy: "edge" | "keyboard") => {
+    if (edgeNavigationTimerRef.current !== null) {
+      window.clearTimeout(edgeNavigationTimerRef.current);
+      edgeNavigationTimerRef.current = null;
+    }
+    if (edgeNavigationCloseTimerRef.current !== null) {
+      window.clearTimeout(edgeNavigationCloseTimerRef.current);
+      edgeNavigationCloseTimerRef.current = null;
+    }
+    setAgentNavigationOpen(true);
+    setEdgeNavigationPhase("open");
+    setEdgeNavigationOpenedBy(openedBy);
+  }, []);
+
+  const closeAgentNavigation = useCallback(() => {
+    if (edgeNavigationTimerRef.current !== null) {
+      window.clearTimeout(edgeNavigationTimerRef.current);
+      edgeNavigationTimerRef.current = null;
+    }
+    if (edgeNavigationCloseTimerRef.current !== null) {
+      window.clearTimeout(edgeNavigationCloseTimerRef.current);
+      edgeNavigationCloseTimerRef.current = null;
+    }
+    setAgentNavigationOpen(false);
+    setEdgeNavigationPhase("idle");
+    setEdgeNavigationOpenedBy(null);
+  }, []);
+
+  const cancelNavigationAutoClose = useCallback(() => {
+    if (edgeNavigationCloseTimerRef.current === null) return;
+    window.clearTimeout(edgeNavigationCloseTimerRef.current);
+    edgeNavigationCloseTimerRef.current = null;
+  }, []);
+
+  const scheduleNavigationAutoClose = useCallback(() => {
+    cancelNavigationAutoClose();
+    edgeNavigationCloseTimerRef.current = window.setTimeout(() => {
+      edgeNavigationCloseTimerRef.current = null;
+      closeAgentNavigation();
+    }, 220);
+  }, [cancelNavigationAutoClose, closeAgentNavigation]);
+
+  const armEdgeNavigation = useCallback(() => {
+    if (agentNavigationOpen || edgeNavigationTimerRef.current !== null) return;
+    setEdgeNavigationPhase("arming");
+    edgeNavigationTimerRef.current = window.setTimeout(() => {
+      edgeNavigationTimerRef.current = null;
+      openAgentNavigation("edge");
+    }, 150);
+  }, [agentNavigationOpen, openAgentNavigation]);
+
+  useEffect(() => {
+    const handleGlobalNavigationKey = (event: KeyboardEvent) => {
+      if (event.altKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (agentNavigationOpen) closeAgentNavigation();
+        else openAgentNavigation("keyboard");
+        return;
+      }
+      if (event.key !== "Escape" || !agentNavigationOpen) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeAgentNavigation();
+    };
+    window.addEventListener("keydown", handleGlobalNavigationKey, true);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalNavigationKey, true);
+      if (edgeNavigationTimerRef.current !== null) window.clearTimeout(edgeNavigationTimerRef.current);
+      if (edgeNavigationCloseTimerRef.current !== null) window.clearTimeout(edgeNavigationCloseTimerRef.current);
+    };
+  }, [agentNavigationOpen, closeAgentNavigation, openAgentNavigation]);
+
+  const handleAgentInitialReady = useCallback(() => {
+    if (bypassSideraBoot) return;
+    setSideraBootPhase((current) => current === "failed" ? current : "ready");
+  }, [bypassSideraBoot]);
+
+  const handleAgentInitialError = useCallback((message: string) => {
+    if (!sideraSplashMountedRef.current || bypassSideraBoot) return;
+    setSideraBootError(message);
+    setSideraStaticFallbackAllowed(true);
+    setSideraBootPhase("failed");
+  }, [bypassSideraBoot]);
+
+  const retrySideraBoot = () => {
+    sideraBootStartedAtRef.current = performance.now();
+    setSideraSplashMounted(true);
+    setSideraSplashExiting(false);
+    setSideraBootStatusVisible(false);
+    setSideraBootError("");
+    setSideraStaticBackground(false);
+    setSideraStaticFallbackAllowed(false);
+    setSideraBootPhase("booting-data");
+    setAgentMountRevision((value) => value + 1);
+    setSideraBootRevision((value) => value + 1);
+  };
+
+  const openSettingsFromSplash = async () => {
+    try {
+      if (!settings) setSettings(await getAiSettings());
+      if (!activeProject) setActiveProject(await getActiveProject());
+      setActiveView("settings");
+      setSideraBootPhase("ready");
+    } catch (error) {
+      setSideraBootError(error instanceof Error ? error.message : "无法打开设置。");
+      setSideraBootPhase("failed");
+    }
+  };
+
+  const sideraSplash = sideraSplashMounted ? (
+    <SideraSplash
+      phase={sideraBootPhase}
+      exiting={sideraSplashExiting}
+      showStatus={sideraBootStatusVisible}
+      error={sideraBootError}
+      allowStaticFallback={sideraStaticFallbackAllowed}
+      onRetry={retrySideraBoot}
+      onOpenSettings={() => void openSettingsFromSplash()}
+      onUseStaticBackground={() => {
+        setSideraStaticBackground(true);
+        setSideraBootError("");
+        setSideraBootPhase("mounting-agent");
+      }}
+      onOpenSource={() => void openExternalUrl("https://ctext.org/wiki.pl?chapter=795512&if=en")}
+    />
+  ) : null;
+
   if (librarySetupRequired && settings && librarySetupState) {
     return (
-      <LibrarySetupView
-        state={librarySetupState}
-        onComplete={async (result) => {
-          await saveAiSettings({
-            ...settings,
-            databaseDir: result.databaseDir,
-            dataDir: result.databaseDir,
-            librarySetupCompleted: true,
-            librarySetupMode: result.mode,
-          });
-          setLoading(true);
-          try {
-            await refreshAll();
-            setLibrarySetupRequired(false);
-            setLibrarySetupState(null);
-            setNotice(result.summary);
-          } finally {
-            setLoading(false);
-          }
-        }}
-      />
+      <>
+        <SideraTitleBar variant="transparent" />
+        <div className="sidera-library-setup-frame">
+          <LibrarySetupView
+            state={librarySetupState}
+            onComplete={async (result) => {
+              await saveAiSettings({
+                ...settings,
+                databaseDir: result.databaseDir,
+                dataDir: result.databaseDir,
+                librarySetupCompleted: true,
+                librarySetupMode: result.mode,
+              });
+              setLoading(true);
+              try {
+                await refreshAll();
+                setLibrarySetupRequired(false);
+                setLibrarySetupState(null);
+                setNotice(result.summary);
+                setSideraBootPhase("mounting-agent");
+              } finally {
+                setLoading(false);
+              }
+            }}
+          />
+        </div>
+        {sideraSplash}
+      </>
     );
   }
 
+  const renderSidebarContents = () => (
+    <>
+      <div className="sidera-navigation-drawer__header">
+        <span>导航</span>
+        <button
+          type="button"
+          className="agent-navigation-drawer__close"
+          title="关闭导航"
+          aria-label="关闭导航"
+          onClick={closeAgentNavigation}
+        >
+          <X size={15} />
+        </button>
+      </div>
+
+      <ProjectSwitcher
+        projects={projects}
+        activeProject={activeProject}
+        onSwitch={switchProject}
+        onCreate={createNewProject}
+        onRename={renameActiveProject}
+        onDelete={deleteActiveProject}
+      />
+
+      <nav className="mt-5 space-y-1.5">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const active = item.id === activeView || (item.id === "agent" && activeView === "agent-runs");
+          return (
+            <button
+              key={item.id}
+              className={`nav-row ${active ? "nav-row-active" : ""}`}
+              onClick={() => {
+                setActiveView(item.id);
+                closeAgentNavigation();
+              }}
+            >
+              <Icon size={17} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm">{item.label}</span>
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="mt-auto rounded-[14px] border border-white/[0.07] bg-white/[0.025] p-3 text-xs text-ink/55">
+        <div className="mb-2 flex items-center gap-2 text-ink/75">
+          <Database size={14} />
+          本地数据层
+        </div>
+        <div>SQLite 承载论文主库与 Agent 运行，IndexedDB 保留界面设置和兼容数据。</div>
+        <div className="mt-2 text-ink/35">v{__APP_VERSION__} · {libraryStatus ? formatBytes(libraryStatus.sizeBytes) : "loading"}</div>
+      </div>
+    </>
+  );
+
+  const shellScene: SideraShellScene = activeView === "agent"
+    ? "agent"
+    : activeView === "galaxy"
+      ? "research-galaxy"
+      : activeView === "pipeline" && pipelineSpatialState.active
+        ? "pipeline-formation"
+        : "workbench";
+  const usesWorkbenchBackground = shellScene === "workbench" || shellScene === "pipeline-formation";
+  const navigationLayout: SideraNavigationLayout = shellScene === "workbench"
+    ? "workbench-reserve"
+    : "spatial-overlay";
+
   return (
-    <main className="app-shell">
-      <aside className="sidebar-surface">
-        <div className="brand-block">
-          <div className="brand-mark">
-            <BrainCircuit size={22} />
+    <main
+      className={`app-shell app-shell--${shellScene}`}
+      data-shell-scene={shellScene}
+      data-navigation-open={agentNavigationOpen ? "true" : "false"}
+      data-navigation-layout={navigationLayout}
+      data-navigation-opened-by={edgeNavigationOpenedBy ?? "none"}
+    >
+      <SideraTitleBar variant="transparent" toolsHostRef={setTitleBarToolsHost} />
+      <div
+        className="sidera-edge-navigation-hotzone"
+        data-phase={edgeNavigationPhase}
+        onPointerEnter={armEdgeNavigation}
+        onPointerLeave={cancelEdgeNavigationArm}
+        aria-hidden="true"
+      />
+      {agentNavigationOpen ? (
+        <>
+          <button
+            type="button"
+            className="agent-navigation-scrim"
+            aria-label="关闭导航抽屉"
+            onClick={closeAgentNavigation}
+          />
+          <aside
+            className="sidebar-surface agent-navigation-drawer"
+            onPointerEnter={cancelNavigationAutoClose}
+            onPointerLeave={scheduleNavigationAutoClose}
+          >
+            {renderSidebarContents()}
+          </aside>
+        </>
+      ) : null}
+
+      <section
+        ref={workspaceRef}
+        className={`workspace workspace--${shellScene} ${usesWorkbenchBackground ? "workspace--workbench" : ""}`}
+      >
+        {settings && activeProject && (
+          <div
+            className={`sidera-shell-background-layer ${activeView === "agent" ? "sidera-shell-background-layer--agent" : "sidera-shell-background-layer--workbench"}`}
+            aria-hidden={activeView !== "agent"}
+          >
+            <AgentDualBackgroundPage
+              key={`agent-shell-${agentMountRevision}`}
+              settings={settings}
+              activeProject={activeProject}
+              hotspots={hotspots}
+              shellPresentation={activeView === "agent" ? "agent" : usesWorkbenchBackground ? "workbench" : "suspended"}
+              navigationOpen={agentNavigationOpen}
+              onCloseNavigation={closeAgentNavigation}
+              onPromptSubmit={(event) => void submitSideraPrompt(event)}
+              assistantMessages={piAssistantMessages}
+              conversationGenerating={piGenerating}
+              conversationError={piConversationError}
+              onStopGeneration={stopSideraGeneration}
+              onOpenSettings={() => setActiveView("settings")}
+              onInitialReady={handleAgentInitialReady}
+              onInitialError={handleAgentInitialError}
+              forceStaticBackground={sideraStaticBackground}
+              onOpenPaperDetail={(paperId, title) => {
+                setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
+                setActiveView("search");
+              }}
+              onOpenHotspotDetail={(hotspotId) => {
+                setHotspotFocusIntent({ hotspotId, timestamp: Date.now() });
+                setActiveView("hotspots");
+              }}
+              onOpenRunCenter={() => setActiveView("agent-runs")}
+            />
           </div>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-ink">科研热点分析桌面端</div>
-          </div>
-        </div>
-
-        <ProjectSwitcher
-          projects={projects}
-          activeProject={activeProject}
-          onSwitch={switchProject}
-          onCreate={createNewProject}
-          onRename={renameActiveProject}
-          onDelete={deleteActiveProject}
-        />
-
-        <nav className="mt-5 space-y-1.5">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const active = item.id === activeView;
-            return (
-              <button key={item.id} className={`nav-row ${active ? "nav-row-active" : ""}`} onClick={() => setActiveView(item.id)}>
-                <Icon size={17} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm">{item.label}</span>
-                </span>
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="mt-auto rounded-[14px] border border-white/[0.07] bg-white/[0.025] p-3 text-xs text-ink/55">
-          <div className="mb-2 flex items-center gap-2 text-ink/75">
-            <Database size={14} />
-            本地数据层
-          </div>
-          <div>SQLite 承载论文主库与 Agent 运行，IndexedDB 保留界面设置和兼容数据。</div>
-          <div className="mt-2 text-ink/35">v{__APP_VERSION__} · {libraryStatus ? formatBytes(libraryStatus.sizeBytes) : "loading"}</div>
-        </div>
-      </aside>
-
-      <section ref={workspaceRef} className="workspace">
+        )}
         {activeView === "dashboard" && (
           <DashboardView dashboard={dashboard} papers={papers} hotspots={hotspots} reports={reports} jobs={jobs} taskLogs={taskLogs} settings={settings} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} loading={loading} onNavigate={setActiveView} />
         )}
-        {activeView === "agent" && settings && activeProject && (
-          <AgentDualBackgroundPage
+        {activeView === "agent-runs" && settings && activeProject && (
+          <AgentWorkspace
             settings={settings}
             activeProject={activeProject}
-            advancedWorkspace={(
-              <AgentWorkspace
-                settings={settings}
-                activeProject={activeProject}
-                libraryStatus={libraryStatus}
-                v20Snapshot={v20Snapshot}
-                visualReviewScenario={agentVisualReviewScenario}
-                onNavigate={setActiveView}
-                onOpenPaper={(paperId, title) => {
-                  setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
-                  setActiveView("search");
-                }}
-                onNotice={setNotice}
-              />
-            )}
+            libraryStatus={libraryStatus}
+            v20Snapshot={v20Snapshot}
+            visualReviewScenario={agentVisualReviewScenario}
+            onNavigate={setActiveView}
+            onOpenPaper={(paperId, title) => {
+              setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
+              setActiveView("search");
+            }}
+            onNotice={setNotice}
           />
         )}
         {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
@@ -720,6 +1255,8 @@ export default function App() {
             <GalaxyView
               key={galaxySessionCacheKey(settings.databaseDir, activeProject.id)}
               active={activeView === "galaxy"}
+              navigationOpen={agentNavigationOpen}
+              titleBarToolsHost={titleBarToolsHost}
               hotspots={hotspots}
               papers={papers}
               settings={settings}
@@ -744,16 +1281,16 @@ export default function App() {
             />
           </div>
         )}
-        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} focusIntent={hotspotFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} onSpatialStateChange={setPipelineSpatialState} />}
         {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
         {activeView === "about" && <AboutView settings={settings} libraryStatus={libraryStatus} hotspots={hotspots} reports={reports} />}
         {activeView === "settings" && settings && <SettingsView settings={settings} onSave={saveSettings} onRefresh={refreshAll} onNotice={setNotice} />}
       </section>
 
-      {loading && (
+      {loading && !sideraSplashMounted && (
         <div className="startup-overlay">
           <div className="panel-card flex min-w-[320px] items-center gap-3">
             <Loader2 className="animate-spin text-cyan" size={20} />
@@ -770,6 +1307,7 @@ export default function App() {
           {notice}
         </div>
       )}
+      {sideraSplash}
     </main>
   );
 
@@ -920,9 +1458,9 @@ function LibrarySetupView({
     <main className="library-setup-shell">
       <section className="library-setup-workspace" aria-labelledby="library-setup-title">
         <header className="library-setup-header">
-          <div className="brand-mark"><BrainCircuit size={24} /></div>
+          <div className="brand-mark"><Sparkles size={22} /></div>
           <div>
-            <div className="text-xs font-semibold uppercase text-cyan/80">Research Hotspots Desktop</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan/80">Sidera</div>
             <h1 id="library-setup-title">配置本地论文库</h1>
             <p>论文数据存放在您选择的目录中。升级或卸载应用不会删除该目录。</p>
           </div>
@@ -2892,14 +3430,6 @@ function galaxyPaperPanelClass(state: GalaxyPaperPanelState) {
   return "galaxy-paper-reading-panel-hidden";
 }
 
-function galaxyPaperOverlayClass(state: GalaxyPaperPanelState) {
-  if (state === "staged") return "galaxy-paper-reading-overlay-staged";
-  if (state === "entering") return "galaxy-paper-reading-overlay-entering";
-  if (state === "visible") return "galaxy-paper-reading-overlay-visible";
-  if (state === "exiting") return "galaxy-paper-reading-overlay-exiting";
-  return "galaxy-paper-reading-overlay-hidden";
-}
-
 function galaxyPaperInspectorClass(state: GalaxyPaperPanelState) {
   if (state === "staged") return "galaxy-inspector-paper-reading-staged";
   if (state === "entering") return "galaxy-inspector-paper-reading-entering";
@@ -3005,8 +3535,18 @@ function GalaxyPaperReadingPanel({
   );
 }
 
+type GalaxyToolbarPopover = "closed" | "field-filter" | "filters" | "more";
+
+type GalaxyContextRailState =
+  | { mode: "closed" }
+  | { mode: "hotspot"; hotspotId: string }
+  | { mode: "paper-summary"; hotspotId: string; paperId: string }
+  | { mode: "paper-reading"; hotspotId: string; paperId: string };
+
 function GalaxyView({
   active,
+  navigationOpen,
+  titleBarToolsHost,
   hotspots,
   papers,
   settings,
@@ -3024,6 +3564,8 @@ function GalaxyView({
   onOpenPaper,
 }: {
   active: boolean;
+  navigationOpen: boolean;
+  titleBarToolsHost: HTMLDivElement | null;
   hotspots: Hotspot[];
   papers: Paper[];
   settings: AiSettings;
@@ -3057,6 +3599,8 @@ function GalaxyView({
   const [galaxyPaperFocusState, setGalaxyPaperFocusState] = useState<GalaxyPaperFocusState>("idle");
   const [galaxyPaperInspectionMode, setGalaxyPaperInspectionMode] = useState<GalaxyPaperInspectionMode>("none");
   const [galaxyPaperPanelState, setGalaxyPaperPanelState] = useState<GalaxyPaperPanelState>("hidden");
+  const [galaxyContextRailState, setGalaxyContextRailState] = useState<GalaxyContextRailState>({ mode: "closed" });
+  const [galaxyToolbarPopover, setGalaxyToolbarPopover] = useState<GalaxyToolbarPopover>("closed");
   const [galaxyFocusedPaperId, setGalaxyFocusedPaperId] = useState("");
   const [selectedGalaxyPaperId, setSelectedGalaxyPaperId] = useState("");
   const [selectedOrdinaryGalaxyPaper, setSelectedOrdinaryGalaxyPaper] = useState<Paper | null>(null);
@@ -3067,23 +3611,19 @@ function GalaxyView({
   const [hotspotEvidenceStatus, setHotspotEvidenceStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [galaxyEvidencePerformance, setGalaxyEvidencePerformance] = useState<GalaxyEvidencePerformance>({ cacheState: "idle", queryMs: 0, pendingQueries: 0 });
   const [galaxyFullscreen, setGalaxyFullscreen] = useState(false);
-  // The star map is the page in the immersive layout; the classic card layout
-  // stays available for anyone who wants the dashboard framing back.
   const [galaxyLayoutClassic, setGalaxyLayoutClassic] = useState(() => {
-    try {
-      return window.localStorage.getItem(GALAXY_LAYOUT_STORAGE_KEY) === "classic";
-    } catch {
-      return false;
-    }
+    if (!import.meta.env.DEV) return false;
+    return new URLSearchParams(window.location.search).get("galaxyLayout") === "classic";
   });
-  const [galaxyBloomAvailable, setGalaxyBloomAvailable] = useState(true);
-  const [galaxyBloomUnavailableReason, setGalaxyBloomUnavailableReason] = useState("");
+  const [galaxyCameraPose, setGalaxyCameraPose] = useState<GalaxyCameraPose | undefined>();
   const [cameraCommand, setCameraCommand] = useState<GalaxyCameraCommand>({ kind: "reset", target: [0, 0, 0], distance: 78, nonce: 0 });
   const [galaxyDiagnosticsOpen, setGalaxyDiagnosticsOpen] = useState(false);
   const [galaxyDiagnosticsResetNonce, setGalaxyDiagnosticsResetNonce] = useState(0);
   const [galaxyPerformance, setGalaxyPerformance] = useState<GalaxyPerformanceSnapshot | null>(null);
   const [galaxyDiagnosticsCopyStatus, setGalaxyDiagnosticsCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
   const app17Payload = app17Session.payload;
+  const galaxyProductSpatialPresentation = !visualReview && !galaxyLayoutClassic;
+  const galaxyPresentationFullscreen = galaxyProductSpatialPresentation || galaxyFullscreen;
   const app17Loading = app17Session.loading;
   const app17Error = app17Session.error;
   const app17Notice = app17Session.notice;
@@ -3094,6 +3634,7 @@ function GalaxyView({
   const galaxyPaperDetailRequestSequenceRef = useRef(0);
   const visualReviewAutomationRef = useRef({ key: "", hotspotSelected: false, systemRequested: false, paperSelected: false, paperRequested: false });
   const galaxyInspectorScrollRef = useRef<HTMLDivElement>(null);
+  const galaxyToolbarRef = useRef<HTMLDivElement>(null);
   const cachedSnapshotIds = useMemo(() => Array.from(new Set(hotspots.map((hotspot) => hotspot.snapshotId).filter(Boolean))), [hotspots]);
   const cachedSnapshotId = v20Snapshot?.snapshotId ?? (cachedSnapshotIds.length === 1 ? cachedSnapshotIds[0] : undefined);
   const v20SnapshotConsistent = visualReview || !app17Payload?.ready || Boolean(
@@ -3174,9 +3715,8 @@ function GalaxyView({
   const activeSelectedId = selectionActive ? selected?.id ?? "" : "";
   // In the immersive layout the inspector is a floating panel: it slides in for
   // a live selection or a paper being read, and stays out of the way otherwise.
-  const galaxyInspectorOpen = (selectionActive && Boolean(selected))
-    || galaxyExplorationState !== "overview"
-    || (galaxyPaperPanelState !== "hidden" && galaxyPaperFocusState !== "idle");
+  const galaxyContextRailMode = galaxyContextRailState.mode;
+  const galaxyInspectorOpen = galaxyContextRailMode !== "closed";
   const visibleRelatedIds = useMemo(() => (selectionActive ? relatedLinkIds : new Set<string>()), [relatedLinkIds, selectionActive]);
   const visibleRelatedIdList = useMemo(() => Array.from(visibleRelatedIds), [visibleRelatedIds]);
   const galaxyLabelIds = useMemo(() => {
@@ -3253,11 +3793,6 @@ function GalaxyView({
     )),
     [app17FilteredPayload, selectedGalaxyPaperId],
   );
-  const selectedGalaxyPaperStatusText = selectedGalaxyPaper
-    ? `${selectedGalaxyPaper.title} · ${selectedGalaxyPaper.source} · ${selectedGalaxyPaper.year ?? "未知年份"}`
-    : selectedGalaxyPaperId
-      ? `${selectedRepresentativeGalaxyPaper ? "代表论文" : "普通论文"} · ${selectedGalaxyPaperCoordinate?.year ?? "未知年份"}`
-      : "";
   const selectedGalaxyPaperVisual = useMemo(
     () => selectedGalaxyPaperId
       ? {
@@ -3401,6 +3936,12 @@ function GalaxyView({
     if (galaxyExplorationState !== "overview") return;
     setSelectedId(hotspotId);
     setSelectionActive(true);
+    setGalaxyContextRailState({ mode: "hotspot", hotspotId });
+  }
+
+  function closeGalaxyContextRail() {
+    setGalaxyContextRailState({ mode: "closed" });
+    if (galaxyExplorationState === "overview") setSelectionActive(false);
   }
 
   function handleGalaxyDiagnosticsOpenChange(open: boolean) {
@@ -3516,10 +4057,15 @@ function GalaxyView({
     visualReviewTargetHotspot,
   ]);
 
+  // Camera fitting is an explicit user action. Filtering and display/theory
+  // layer swaps must not enqueue a second camera writer or replay the initial fit.
+
   useEffect(() => {
-    if (nodes.length === 0) return;
-    setCameraCommand((current) => ({ kind: "fit", target: galaxyBounds.center, distance: galaxyBounds.distance, nonce: current.nonce + 1 }));
-  }, [filteredHotspots.length, galaxyBounds.center, galaxyBounds.distance, layoutMode, nodes.length, visualMode]);
+    if (!active) {
+      setGalaxyContextRailState({ mode: "closed" });
+      setGalaxyToolbarPopover("closed");
+    }
+  }, [active]);
 
   useEffect(() => {
     evidenceRequestSequenceRef.current += 1;
@@ -3603,8 +4149,89 @@ function GalaxyView({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [galaxyFullscreen]);
 
+  useEffect(() => {
+    if (navigationOpen) setGalaxyToolbarPopover("closed");
+  }, [navigationOpen]);
+
+  useEffect(() => {
+    if (galaxyToolbarPopover === "closed") return undefined;
+    const closePopover = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setGalaxyToolbarPopover("closed");
+    };
+    window.addEventListener("keydown", closePopover, true);
+    return () => window.removeEventListener("keydown", closePopover, true);
+  }, [galaxyToolbarPopover]);
+
   return (
-    <div className={galaxyLayoutClassic ? "page-grid galaxy-layout-classic" : "galaxy-layout-immersive"}>
+    <div
+      className={galaxyLayoutClassic ? "page-grid galaxy-layout-classic" : "galaxy-layout-immersive"}
+      data-navigation-open={navigationOpen ? "true" : "false"}
+      data-context-rail={galaxyContextRailMode}
+    >
+      {active && galaxyProductSpatialPresentation && titleBarToolsHost ? createPortal(
+        <div ref={galaxyToolbarRef} className="galaxy-titlebar-tools" data-popover={galaxyToolbarPopover}>
+          <GalaxyModeSwitch
+            mode={visualMode}
+            disabled={galaxyExplorationState !== "overview"}
+            onChange={setVisualMode}
+          />
+          <button
+            type="button"
+            className="galaxy-titlebar-tool"
+            aria-expanded={galaxyToolbarPopover === "filters"}
+            onClick={() => setGalaxyToolbarPopover((current) => current === "filters" ? "closed" : "filters")}
+          >
+            <Search size={13} />
+            <span>{field === "all" ? "全部学科" : field}</span>
+            <strong>{visibleGalaxyHotspotCount}/{filteredHotspots.length}</strong>
+          </button>
+          <button type="button" className="galaxy-titlebar-tool" onClick={() => commandCamera("fit")}>适配全图</button>
+          {galaxyExplorationState === "overview" && selectedNode ? (
+            <button type="button" className="galaxy-titlebar-tool" onClick={() => { setSelectionActive(true); commandCamera("enter-system"); }}>进入热点</button>
+          ) : galaxyExplorationState === "system" ? (
+            galaxyPaperFocusState === "focused" ? (
+              <button type="button" className="galaxy-titlebar-tool" onClick={() => commandCamera("return-system-center")}>返回系统</button>
+            ) : (
+              <button type="button" className="galaxy-titlebar-tool" onClick={() => commandCamera("exit-system")}>返回全图</button>
+            )
+          ) : galaxyExplorationState !== "overview" ? (
+            <button type="button" className="galaxy-titlebar-tool" onClick={() => commandCamera("exit-system")}>取消过渡</button>
+          ) : null}
+          <button
+            type="button"
+            className="galaxy-titlebar-tool galaxy-titlebar-tool--icon"
+            aria-label="更多星图工具"
+            title="更多星图工具"
+            aria-expanded={galaxyToolbarPopover === "more"}
+            onClick={() => setGalaxyToolbarPopover((current) => current === "more" ? "closed" : "more")}
+          >
+            <MoreHorizontal size={15} />
+          </button>
+          {galaxyToolbarPopover === "more" ? (
+            <div className="galaxy-titlebar-popover galaxy-titlebar-popover--more">
+              <button type="button" onClick={() => void onRefreshApp17()} disabled={app17Loading}><RefreshCw size={14} />刷新星图数据</button>
+              <button type="button" onClick={() => commandCamera("reset")}>重置视角</button>
+              <button type="button" onClick={() => commandCamera("top")}>俯视图</button>
+              <button type="button" onClick={() => setGalaxyToolbarPopover("filters")}>高级筛选与诊断</button>
+              <div className="galaxy-titlebar-popover__divider" />
+              <small>{visualMode === "nebula" ? "展示星图" : "理论星图"} · 粒子密度=论文数 · 核心亮度=置信度</small>
+              <small>快照 {app17Payload?.snapshotId || "未载入"} · SQLite {libraryStatus ? formatBytes(libraryStatus.sizeBytes) : "loading"}</small>
+            </div>
+          ) : null}
+        </div>,
+        titleBarToolsHost,
+      ) : null}
+      {!galaxyLayoutClassic && galaxyToolbarPopover !== "closed" ? (
+        <button
+          type="button"
+          className="galaxy-toolbar-popover-scrim"
+          aria-label="关闭星图工具弹层"
+          onClick={() => setGalaxyToolbarPopover("closed")}
+        />
+      ) : null}
       {galaxyLayoutClassic && (
         <header className="page-header">
           <div>
@@ -3620,7 +4247,12 @@ function GalaxyView({
           </div>
         </header>
       )}
-      <section className={galaxyLayoutClassic ? "panel-card" : "galaxy-filter-bar"}>
+      <section
+        className={galaxyLayoutClassic ? "panel-card" : "galaxy-filter-bar galaxy-titlebar-filter-popover"}
+        data-open={galaxyLayoutClassic || galaxyToolbarPopover === "filters" ? "true" : "false"}
+        aria-hidden={!galaxyLayoutClassic && galaxyToolbarPopover !== "filters"}
+      >
+        <div className="galaxy-filter-expanded-content">
         {!galaxyLayoutClassic && (
           <div className="galaxy-filter-bar-title">
             <span className="eyebrow">Research Galaxy</span>
@@ -3649,7 +4281,10 @@ function GalaxyView({
             </button>
           </div>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <details className="galaxy-filter-popover">
+          <summary>筛选与诊断</summary>
+          <div className="galaxy-filter-popover-content">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           {app17Available ? (
             <span className="quiet-chip">V20 SQLite 快照：{(app17FilteredPayload?.paperCount ?? app17Payload?.paperCount ?? 0).toLocaleString()} 论文星 / {(app17FilteredPayload?.hotspotCount ?? app17Payload?.hotspotCount ?? 0).toLocaleString()} 热点</span>
           ) : (
@@ -3800,11 +4435,14 @@ function GalaxyView({
             <div className="py-2 text-xs text-ink/45">正在采集性能样本…</div>
           )}
         </FoldSection>
+          </div>
+        </details>
+        </div>
       </section>
       <section className={`galaxy-workspace-grid grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px] ${galaxyPaperInspectionMode === "centered" ? "galaxy-workspace-paper-centered" : ""}`}>
         <div className={`galaxy-panel galaxy-panel-3d ${galaxyFullscreen ? "galaxy-panel-fullscreen" : ""} ${visualReviewCapture ? "galaxy-panel-review-capture" : ""} ${galaxyPaperPanelState !== "hidden" && galaxyPaperPanelState !== "staged" && galaxyPaperInspectionMode !== "centered" ? "galaxy-panel-paper-docked" : galaxyPaperInspectionMode === "centered" ? "galaxy-panel-paper-centered" : ""}`}>
           <div className={`galaxy-stage galaxy-stage-3d galaxy-stage-reference galaxy-stage-${visualMode}`}>
-            {app17FilteredPayload?.ready ? (
+            {active && app17FilteredPayload?.ready ? (
               <App17GalaxyCanvas
                 active={active}
                 payload={app17FilteredPayload}
@@ -3812,6 +4450,9 @@ function GalaxyView({
                 selectedId={activeSelectedId}
                 visualMode={visualMode}
                 reviewCameraPreset={visualReviewIntent?.preset}
+                initialCameraPose={galaxyCameraPose}
+                onCameraPoseChange={setGalaxyCameraPose}
+                viewportOffsetRatio={galaxyInspectorOpen ? 0.08 : 0}
                 command={cameraCommand}
                 representativePapers={representativeGalaxyPapers}
                 selectedPaperId={selectedGalaxyPaperId}
@@ -3819,14 +4460,13 @@ function GalaxyView({
                 paperDetailQueryMs={galaxyPaperDetailPerformance.queryMs}
                 paperDetailCacheState={galaxyPaperDetailPerformance.cacheState}
                 diagnosticsResetNonce={galaxyDiagnosticsResetNonce}
-                fullscreen={galaxyFullscreen}
-                onBloomAvailabilityChange={(available, reason) => {
-                  setGalaxyBloomAvailable(available);
-                  setGalaxyBloomUnavailableReason(reason || "");
-                }}
+                fullscreen={galaxyPresentationFullscreen}
                 onPerformanceSnapshot={active && galaxyDiagnosticsOpen ? setGalaxyPerformance : undefined}
                 onSelect={selectGalaxyHotspot}
-                onSelectPaper={setSelectedGalaxyPaperId}
+                onSelectPaper={(paperId) => {
+                  setSelectedGalaxyPaperId(paperId);
+                  if (selected) setGalaxyContextRailState({ mode: "paper-summary", hotspotId: selected.id, paperId });
+                }}
                 onExplorationStateChange={(state) => {
                   setGalaxyExplorationState(state);
                   if (state === "overview") {
@@ -3836,6 +4476,9 @@ function GalaxyView({
                     setGalaxyPaperInspectionMode("none");
                     setGalaxyPaperPanelState("hidden");
                     setGalaxyFocusedPaperId("");
+                    setGalaxyContextRailState(selectionActive && selected
+                      ? { mode: "hotspot", hotspotId: selected.id }
+                      : { mode: "closed" });
                   }
                 }}
                 onSystemViewModeChange={setGalaxySystemViewMode}
@@ -3845,12 +4488,28 @@ function GalaxyView({
                   if (state === "idle") {
                     setGalaxyPaperInspectionMode("none");
                     setGalaxyPaperPanelState("hidden");
+                    setGalaxyContextRailState(selected
+                      ? { mode: "hotspot", hotspotId: selected.id }
+                      : { mode: "closed" });
                   }
                 }}
-                onPaperInspectionModeChange={setGalaxyPaperInspectionMode}
-                onPaperPanelStateChange={setGalaxyPaperPanelState}
+                onPaperInspectionModeChange={(mode) => {
+                  setGalaxyPaperInspectionMode(mode);
+                  if (mode === "centered" && selected && selectedGalaxyPaperId) {
+                    setGalaxyContextRailState({ mode: "paper-summary", hotspotId: selected.id, paperId: selectedGalaxyPaperId });
+                  } else if (mode === "docked" && selected && selectedGalaxyPaperId) {
+                    setGalaxyContextRailState({ mode: "paper-reading", hotspotId: selected.id, paperId: selectedGalaxyPaperId });
+                  }
+                }}
+                onPaperPanelStateChange={(state) => {
+                  setGalaxyPaperPanelState(state);
+                  if (state !== "hidden" && galaxyPaperInspectionMode !== "centered" && selected && selectedGalaxyPaperId) {
+                    setGalaxyContextRailState({ mode: "paper-reading", hotspotId: selected.id, paperId: selectedGalaxyPaperId });
+                  }
+                }}
                 onClearSelection={() => {
                   setSelectionActive(false);
+                  setGalaxyContextRailState({ mode: "closed" });
                 }}
               />
             ) : (
@@ -3863,37 +4522,24 @@ function GalaxyView({
                 </div>
               </div>
             )}
-            <div className="galaxy-hud">
+            {galaxyLayoutClassic ? <div className="galaxy-hud">
               <GalaxyModeSwitch
                 mode={visualMode}
                 disabled={galaxyExplorationState !== "overview"}
                 onChange={(nextMode) => {
                   setVisualMode(nextMode);
-                  setLayoutMode((currentLayout) => {
-                    if (nextMode === "galaxy" && currentLayout === "semantic") return "spiral";
-                    if (nextMode === "nebula" && currentLayout === "spiral") return "semantic";
-                    return currentLayout;
-                  });
                 }}
               />
               {galaxyExplorationState === "overview" ? (
                 <>
-                  <button className="secondary-action h-8 px-3" onClick={() => commandCamera("reset")}>重置视角</button>
-                  <button className="secondary-action h-8 px-3" onClick={() => commandCamera("fit")}>适配全图</button>
-                  <button className="secondary-action h-8 px-3" onClick={() => commandCamera("top")}>俯视图</button>
+                  <button className="secondary-action galaxy-view-tool galaxy-view-tool--secondary h-8 px-3" onClick={() => commandCamera("reset")}>重置视角</button>
+                  <button className="secondary-action galaxy-view-tool h-8 px-3" onClick={() => commandCamera("fit")}>适配全图</button>
+                  <button className="secondary-action galaxy-view-tool galaxy-view-tool--secondary h-8 px-3" onClick={() => commandCamera("top")}>俯视图</button>
                   {selectedNode && <button className="secondary-action galaxy-focus-action h-8 px-3" onClick={() => { setSelectionActive(true); commandCamera("enter-system"); }}>进入热点星系</button>}
                 </>
               ) : galaxyExplorationState === "system" ? (
                 <>
                   <span className="galaxy-system-mode-label">热点星系</span>
-                  <span className="galaxy-bloom-status" title={galaxyBloomAvailable ? "仅增强主星紧凑核心与十篇代表论文" : galaxyBloomUnavailableReason || "当前环境不支持局部辉光"}>
-                    {galaxyBloomAvailable ? "局部辉光已启用" : "基础渲染模式"}
-                  </span>
-                  {galaxyFullscreen && selectedGalaxyPaperId && (
-                    <span className="galaxy-paper-selection-status" title={selectedGalaxyPaperStatusText}>
-                      {selectedGalaxyPaperStatusText}
-                    </span>
-                  )}
                   {galaxyPaperFocusState === "entering" ? (
                     <button className="secondary-action h-8 px-3" onClick={() => commandCamera("return-system-center")}>取消靠近</button>
                   ) : galaxyPaperFocusState === "exiting" ? (
@@ -3905,13 +4551,13 @@ function GalaxyView({
                       </button>
                       <button className="secondary-action h-8 px-3" onClick={() => commandCamera("return-system-center")}>返回系统中心</button>
                     </>
-                  ) : galaxyFullscreen && selectedGalaxyPaperId ? (
+                  ) : galaxyPresentationFullscreen && selectedGalaxyPaperId ? (
                     <button className="secondary-action h-8 gap-1.5 px-3" onClick={() => commandCamera("focus-paper")}><LocateFixed size={14} />靠近论文</button>
                   ) : null}
                   {galaxyPaperFocusState === "focused" && selectedGalaxyPaperId !== galaxyFocusedPaperId && (
                     <button className="secondary-action h-8 px-3" onClick={() => commandCamera("return-system-center")}>返回系统中心</button>
                   )}
-                  <button className="secondary-action h-8 px-3" onClick={() => commandCamera("reset-system")}>重置系统视角</button>
+                  <button className="secondary-action galaxy-view-tool--secondary h-8 px-3" onClick={() => commandCamera("reset-system")}>重置系统视角</button>
                   <button className="secondary-action h-8 px-3" onClick={() => commandCamera("exit-system")}>返回全图</button>
                 </>
               ) : (
@@ -3924,35 +4570,32 @@ function GalaxyView({
                   </button>
                 </>
               )}
-              <button
-                className="secondary-action h-8 gap-1.5 px-3"
-                data-galaxy-fullscreen-toggle
-                onClick={() => setGalaxyFullscreen((value) => !value)}
-                disabled={galaxyPaperFocusState === "entering" || galaxyPaperFocusState === "exiting"}
-                aria-pressed={galaxyFullscreen}
-                title={galaxyFullscreen ? "退出星图全屏" : "星图全屏"}
-              >
-                {galaxyFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                {galaxyFullscreen ? "退出全屏" : "全屏"}
-              </button>
-              <button
-                className="secondary-action h-8 px-3"
-                onClick={() => setGalaxyLayoutClassic((value) => {
-                  const next = !value;
-                  try {
-                    window.localStorage.setItem(GALAXY_LAYOUT_STORAGE_KEY, next ? "classic" : "immersive");
-                  } catch {
-                    // A blocked storage quota should not stop the layout switch.
-                  }
-                  return next;
-                })}
-                aria-pressed={galaxyLayoutClassic}
-                title={galaxyLayoutClassic ? "切换到沉浸布局：星图铺满窗口" : "切换到经典布局：星图回到卡片内"}
-              >
-                {galaxyLayoutClassic ? "沉浸布局" : "经典布局"}
-              </button>
-            </div>
-            <div className="galaxy-legend">
+              {import.meta.env.DEV && (visualReview || galaxyLayoutClassic) ? (
+                <button
+                  className="secondary-action h-8 px-3"
+                  data-galaxy-fullscreen-toggle
+                  onClick={() => setGalaxyFullscreen((value) => !value)}
+                  disabled={galaxyPaperFocusState === "entering" || galaxyPaperFocusState === "exiting"}
+                  aria-pressed={galaxyFullscreen}
+                  title={galaxyFullscreen ? "退出星图全屏" : "星图全屏"}
+                >
+                  {galaxyFullscreen ? "退出全屏" : "全屏"}
+                </button>
+              ) : null}
+              {import.meta.env.DEV && visualReview ? (
+                <button
+                  className="secondary-action h-8 px-3"
+                  onClick={() => setGalaxyLayoutClassic((value) => !value)}
+                  aria-pressed={galaxyLayoutClassic}
+                  title={galaxyLayoutClassic ? "切换到沉浸布局：星图铺满窗口" : "开发回归：切换到经典布局"}
+                >
+                  {galaxyLayoutClassic ? "沉浸布局" : "经典布局"}
+                </button>
+              ) : null}
+            </div> : null}
+            {galaxyLayoutClassic ? <div className="galaxy-legend" data-collapsed={navigationOpen ? "true" : "false"}>
+              {navigationOpen ? <button type="button" className="galaxy-legend-collapsed">图例</button> : null}
+              <div className="galaxy-legend-content">
               {galaxyExplorationState === "overview" ? (
                 <>
                   <span>{visualMode === "nebula" ? "展示星图" : "理论星图"}</span>
@@ -3973,8 +4616,9 @@ function GalaxyView({
                   <span title="日冕、磁场弧线和 Bloom 仅用于增强空间与能量层次，不表示额外科研数据">辉光=视觉增强</span>
                 </>
               )}
-            </div>
-            <div className="galaxy-evidence-card" tabIndex={0} aria-label={selected ? `当前证据链：${selected.title}` : "星图筛选摘要"}>
+              </div>
+            </div> : null}
+            {galaxyLayoutClassic && <div className="galaxy-evidence-card" tabIndex={0} aria-label={selected ? `当前证据链：${selected.title}` : "星图筛选摘要"}>
               {selected ? (
                 <>
                   <div className="galaxy-evidence-summary">
@@ -4016,40 +4660,18 @@ function GalaxyView({
                   </div>
                 </>
               )}
-            </div>
-            {galaxyFullscreen
-              && galaxyPaperPanelState !== "hidden"
-              && galaxyPaperInspectionMode !== "centered"
-              && galaxyPaperFocusState !== "idle"
-              && selectedGalaxyPaperId && (
-                <div className={`galaxy-paper-reading-overlay ${galaxyPaperOverlayClass(galaxyPaperPanelState)}`}>
-                  <GalaxyPaperReadingPanel
-                    paper={selectedGalaxyPaper}
-                    paperId={selectedGalaxyPaperId}
-                    fallbackYear={selectedGalaxyPaperCoordinate?.year}
-                    representative={Boolean(selectedRepresentativeGalaxyPaper)}
-                    status={galaxyPaperDetailStatus}
-                    error={galaxyPaperDetailError}
-                    inspectionMode={galaxyPaperInspectionMode}
-                    panelState={galaxyPaperPanelState}
-                    onToggleInspection={() => commandCamera("toggle-paper-inspection")}
-                    onReturn={() => commandCamera("return-system-center")}
-                    onOpenPaper={onOpenPaper}
-                    fullscreen
-                  />
-                </div>
-              )}
+            </div>}
           </div>
         </div>
         <aside
-          className={`panel-card galaxy-inspector ${galaxyPaperPanelState !== "hidden" && galaxyPaperInspectionMode !== "centered" && galaxyPaperFocusState !== "idle" ? `galaxy-inspector-paper-reading ${galaxyPaperInspectorClass(galaxyPaperPanelState)}` : ""}`}
+          className={`panel-card galaxy-inspector ${galaxyContextRailMode === "paper-reading" ? `galaxy-inspector-paper-reading ${galaxyPaperInspectorClass(galaxyPaperPanelState)}` : ""}`}
           data-open={galaxyInspectorOpen}
+          data-mode={galaxyContextRailMode}
         >
-          {!galaxyFullscreen
-          && galaxyPaperPanelState !== "hidden"
-          && galaxyPaperInspectionMode !== "centered"
-          && galaxyPaperFocusState !== "idle"
-          && selectedGalaxyPaperId ? (
+          {galaxyInspectorOpen && (
+            <button type="button" className="galaxy-context-rail-close" onClick={closeGalaxyContextRail} aria-label="关闭详情"><X size={16} /></button>
+          )}
+          {galaxyContextRailMode === "paper-reading" && selectedGalaxyPaperId ? (
             <GalaxyPaperReadingPanel
               paper={selectedGalaxyPaper}
               paperId={selectedGalaxyPaperId}
@@ -4636,6 +5258,7 @@ function HotspotLibrary({
   hotspots,
   settings,
   activeProject,
+  focusIntent,
   onNavigate,
   onRefresh,
   onNotice,
@@ -4643,6 +5266,7 @@ function HotspotLibrary({
   hotspots: Hotspot[];
   settings: AiSettings;
   activeProject: Project;
+  focusIntent?: HotspotFocusIntent | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
   onNotice: (value: string) => void;
@@ -4700,6 +5324,17 @@ function HotspotLibrary({
     : hotspotEvidenceStatus === "ready" && reportPapers.length > 0
       ? `将使用 ${reportPapers.length} 篇真实代表论文生成 AI ${reportMode === "deep" ? "深版" : "简版"}报告。`
       : "当前热点没有可验证的代表论文，AI 报告已禁用。";
+
+  useEffect(() => {
+    const hotspotId = focusIntent?.hotspotId;
+    if (!hotspotId || !hotspots.some((hotspot) => hotspot.id === hotspotId)) {
+      return;
+    }
+    setHotspotQuery("");
+    setHotspotField("all");
+    setHotspotTrend("all");
+    setSelectedId(hotspotId);
+  }, [focusIntent?.hotspotId, focusIntent?.timestamp, hotspots]);
 
   useEffect(() => {
     setDraft(selected ? { ...selected, keywords: [...selected.keywords] } : null);
@@ -5680,6 +6315,7 @@ function PipelineView({
   onNavigate,
   onRefresh,
   onNotice,
+  onSpatialStateChange,
 }: {
   jobs: PipelineJob[];
   taskLogs: TaskLog[];
@@ -5693,6 +6329,7 @@ function PipelineView({
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
   onNotice: (value: string) => void;
+  onSpatialStateChange?: (state: SideraPipelineSpatialState) => void;
 }) {
   const [busyStage, setBusyStage] = useState<string>("");
   const [semanticModeling, setSemanticModeling] = useState<SemanticModelingStatus | null>(null);
@@ -5792,6 +6429,29 @@ function PipelineView({
         return Math.round(ratio * 90);
       })()
     : currentJob?.progress ?? 0;
+
+  useEffect(() => {
+    const active = clusterState === "running" || busyStage === "cluster";
+    onSpatialStateChange?.({
+      active,
+      runId: clusterJob?.id,
+      stage: semanticModeling?.stage ?? (active ? "cluster" : undefined),
+      progress: active ? semanticProgress : clusterState === "done" ? 100 : 0,
+      paused: Boolean(semanticModeling?.paused),
+    });
+  }, [
+    busyStage,
+    clusterJob?.id,
+    clusterState,
+    onSpatialStateChange,
+    semanticModeling?.paused,
+    semanticModeling?.stage,
+    semanticProgress,
+  ]);
+
+  useEffect(() => () => {
+    onSpatialStateChange?.({ active: false, progress: 0, paused: false });
+  }, [onSpatialStateChange]);
 
   async function controlSemanticTask(action: "pause" | "resume" | "cancel") {
     try {

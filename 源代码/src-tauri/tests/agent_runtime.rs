@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, Transaction};
 use research_hotspots_core::SnapshotWriteInput;
+use rusqlite::{Connection, Transaction};
 
 #[path = "../src/agent_model_gateway.rs"]
 mod agent_model_gateway;

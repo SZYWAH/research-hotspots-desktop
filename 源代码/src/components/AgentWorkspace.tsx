@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   Bot,
   Check,
   CheckCircle2,
@@ -11,6 +12,8 @@ import {
   FileCheck2,
   FileText,
   Gauge,
+  History,
+  Inbox,
   ListChecks,
   Loader2,
   MessageSquare,
@@ -63,7 +66,7 @@ import {
   summarizeEventPayload,
 } from "../lib/agentUiModel";
 import { createAgentVisualReviewClient } from "../lib/agentVisualReview";
-import { chooseExportDirectory, choosePaperImportFile, openExternalUrl } from "../lib/desktop";
+import { openExternalUrl } from "../lib/desktop";
 
 const ACTOR_ID = "desktop-user";
 const RUN_PAGE_SIZE = 50;
@@ -80,7 +83,6 @@ type AgentWorkspaceProps = {
 };
 
 type NewRunDraft = {
-  kind: AgentRunKind;
   objective: string;
   mode: AgentAutomationMode;
   budget: AgentBudget;
@@ -89,16 +91,13 @@ type NewRunDraft = {
   writerMatchesPlanner: boolean;
   plannerSecret: string;
   writerSecret: string;
-  sourcePath: string;
-  mysqlHost: string;
-  mysqlPort: number;
-  mysqlUser: string;
-  mysqlDatabase: string;
-  exportDirectory: string;
-  reportArtifactId: string;
-  exportMarkdown: boolean;
-  exportHtml: boolean;
 };
+
+type AgentRunCenterSection = "inbox" | "history";
+type AgentRunHistoryStatus = "all" | "completed" | "failed" | "cancelled";
+
+const TERMINAL_RUN_STATUSES = new Set<AgentRunStatus>(["completed", "cancelled", "failed"]);
+const RECENT_RUN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function defaultProfile(settings: AiSettings): AgentModelProfile {
   return {
@@ -113,7 +112,6 @@ function defaultProfile(settings: AiSettings): AgentModelProfile {
 function createDraft(settings: AiSettings): NewRunDraft {
   const profile = defaultProfile(settings);
   return {
-    kind: "research_report",
     objective: "",
     mode: "supervised",
     budget: { ...DEFAULT_AGENT_BUDGET },
@@ -122,8 +120,6 @@ function createDraft(settings: AiSettings): NewRunDraft {
     writerMatchesPlanner: true,
     plannerSecret: "",
     writerSecret: "",
-    sourcePath: "", mysqlHost: "127.0.0.1", mysqlPort: 3306, mysqlUser: "root", mysqlDatabase: "research_hotspots",
-    exportDirectory: "", reportArtifactId: "", exportMarkdown: true, exportHtml: true,
   };
 }
 
@@ -135,6 +131,24 @@ const RUN_KIND_LABELS: Record<AgentRunKind, { label: string; description: string
   v20_modeling: { label: "V20 热点建模", description: "按当前库修订生成统一快照", objective: "重建并原子激活 V20 热点快照" },
   report_export: { label: "正式导出", description: "导出已审计报告为 Markdown/HTML", objective: "安全导出已完成的 Agent 报告" },
 };
+
+function professionalViewForRunKind(kind: AgentRunKind): ActiveView | null {
+  if (kind === "paper_file_import" || kind === "paper_mysql_import" || kind === "library_clean") return "search";
+  if (kind === "v20_modeling") return "pipeline";
+  if (kind === "report_export") return "reports";
+  return null;
+}
+
+function nextRunActionLabel(run: AgentRunRecord) {
+  if (run.status.startsWith("awaiting_")) return "完成右侧待办";
+  if (run.status === "paused") return "恢复执行或取消";
+  if (run.status === "draft") return "开始规划";
+  if (run.status === "ready") return "继续执行";
+  if (run.status === "failed") return run.runKind === "research_report" ? "复制目标并重试" : "前往专业页面处理";
+  if (run.status === "completed") return "复核成果与证据";
+  if (run.status === "cancelled") return "只读查看审计记录";
+  return "等待当前阶段完成";
+}
 
 function fmtTime(value?: number) {
   if (!value) return "—";
@@ -193,7 +207,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
   const [hasMoreRuns, setHasMoreRuns] = useState(false);
   const [runLimit, setRunLimit] = useState(RUN_PAGE_SIZE);
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "terminal">("all");
+  const [centerSection, setCenterSection] = useState<AgentRunCenterSection>("inbox");
+  const [historyStatus, setHistoryStatus] = useState<AgentRunHistoryStatus>("all");
+  const [historyKind, setHistoryKind] = useState<"all" | AgentRunKind>("all");
+  const [runQuery, setRunQuery] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [overview, setOverview] = useState<AgentRunOverview | null>(null);
   const [events, setEvents] = useState<AgentEventRecord[]>([]);
@@ -291,7 +308,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       const saved = preserveSelection ? sessionStorage.getItem(`agent-run:${context.projectId}`) : null;
       const preferred = visible.find((run) => run.id === currentRunRef.current)?.id
         ?? visible.find((run) => run.id === saved)?.id
-        ?? visible.find((run) => !["completed", "cancelled", "failed"].includes(run.status))?.id
+        ?? visible.find((run) => run.status.startsWith("awaiting_"))?.id
+        ?? visible.find((run) => !TERMINAL_RUN_STATUSES.has(run.status))?.id
+        ?? visible.find((run) => run.status === "failed" && Date.now() - run.updatedAtMs <= RECENT_RUN_WINDOW_MS)?.id
         ?? visible[0]?.id
         ?? "";
       setSelectedRunId((current) => visible.some((run) => run.id === current) ? current : preferred);
@@ -508,11 +527,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   }, [contextKey, applySnapshot, loadRuns]);
 
   async function createRun() {
-    if ((draft.kind === "research_report" && !snapshotReady) || busy || createRunInFlightRef.current) return;
+    if (!snapshotReady || busy || createRunInFlightRef.current) return;
     createRunInFlightRef.current = true;
     setBusy("create");
     setError("");
-    let pendingGrantId = "";
     try {
       const plannerCredential = await client.configureCredential({
         projectId: context.projectId,
@@ -530,24 +548,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         client.saveModelProfile(context, "planner", draft.planner),
         client.saveModelProfile(context, "writer", writerProfile),
       ]);
-      let taskInput: Record<string, unknown> = {};
-      if (draft.kind === "paper_file_import") {
-        if (!draft.sourcePath) throw new Error("AGENT_IMPORT_FILE_REQUIRED");
-        const grant = await client.createResourceGrant(context, { grantKind: "import_file", locator: draft.sourcePath });
-        pendingGrantId = grant.id; taskInput = { resourceGrantId: grant.id };
-      } else if (draft.kind === "paper_mysql_import") {
-        const metadata = { sourceKind: "mysql", profile: { host: draft.mysqlHost, port: draft.mysqlPort, user: draft.mysqlUser, database: draft.mysqlDatabase }, totalRows: 0, validRows: 0, invalidRows: 0, duplicateRows: 0 };
-        const grant = await client.createResourceGrant(context, { grantKind: "mysql_profile", locator: `${draft.mysqlHost}:${draft.mysqlPort}/${draft.mysqlDatabase}`, metadata });
-        pendingGrantId = grant.id; taskInput = { resourceGrantId: grant.id };
-      } else if (draft.kind === "report_export") {
-        if (!draft.exportDirectory || !draft.reportArtifactId || (!draft.exportMarkdown && !draft.exportHtml)) throw new Error("AGENT_EXPORT_INPUT_REQUIRED");
-        const grant = await client.createResourceGrant(context, { grantKind: "export_directory", locator: draft.exportDirectory });
-        pendingGrantId = grant.id; taskInput = { resourceGrantId: grant.id, reportArtifactId: draft.reportArtifactId, formats: [draft.exportMarkdown ? "md" : "", draft.exportHtml ? "html" : ""].filter(Boolean) };
-      }
       const id = `agent-${crypto.randomUUID()}`;
-      const objective = draft.objective.trim() || RUN_KIND_LABELS[draft.kind].objective;
-      await client.createRun(context, { id, automationMode: draft.mode, objective, budget: draft.budget, runKind: draft.kind, taskInput });
-      pendingGrantId = "";
+      const objective = draft.objective.trim() || RUN_KIND_LABELS.research_report.objective;
+      await client.createRun(context, { id, automationMode: draft.mode, objective, budget: draft.budget, runKind: "research_report", taskInput: {} });
       setSelectedRunId(id);
       currentRunRef.current = id;
       const snapshot = await client.planRun(context, id, planner, writer);
@@ -558,7 +561,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       props.onNotice(draft.mode === "advisor" ? "顾问计划已生成。" : "研究计划已生成，等待审批。"
       );
     } catch (value) {
-      if (pendingGrantId) void client.revokeResourceGrant(context, pendingGrantId).catch(() => undefined);
       const normalized = normalizeAgentError(value);
       if (normalized.code === "AGENT_ACTIVE_RUN_EXISTS" && normalized.runId) {
         setNewRunOpen(false);
@@ -588,27 +590,81 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     }
   }
 
-  const filteredRuns = runs.filter((run) => statusFilter === "all" || (statusFilter === "terminal" ? ["completed", "cancelled", "failed"].includes(run.status) : !["completed", "cancelled", "failed"].includes(run.status)));
+  const runCenterData = useMemo(() => {
+    const now = Date.now();
+    const awaiting = runs.filter((run) => run.status.startsWith("awaiting_"));
+    const active = runs.filter((run) => !TERMINAL_RUN_STATUSES.has(run.status) && !run.status.startsWith("awaiting_"));
+    const recentFailed = runs
+      .filter((run) => run.status === "failed" && now - run.updatedAtMs <= RECENT_RUN_WINDOW_MS)
+      .sort((left, right) => right.updatedAtMs - left.updatedAtMs)
+      .slice(0, 3);
+    const inboxIds = new Set<string>();
+    const inbox = [...awaiting, ...active, ...recentFailed].filter((run) => {
+      if (inboxIds.has(run.id)) return false;
+      inboxIds.add(run.id);
+      return true;
+    });
+    const normalizedQuery = runQuery.trim().toLocaleLowerCase("zh-CN");
+    const history = runs.filter((run) => {
+      if (!TERMINAL_RUN_STATUSES.has(run.status)) return false;
+      if (historyStatus !== "all" && run.status !== historyStatus) return false;
+      if (historyKind !== "all" && run.runKind !== historyKind) return false;
+      if (!normalizedQuery) return true;
+      return `${run.objective} ${RUN_KIND_LABELS[run.runKind]?.label ?? run.runKind} ${run.lastErrorCode ?? ""}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+    });
+    return {
+      awaiting,
+      active,
+      recentFailed,
+      recentCompleted: runs.filter((run) => run.status === "completed" && now - (run.completedAtMs ?? run.updatedAtMs) <= RECENT_RUN_WINDOW_MS),
+      inbox,
+      history,
+    };
+  }, [historyKind, historyStatus, runQuery, runs]);
+  const visibleRuns = centerSection === "inbox" ? runCenterData.inbox : runCenterData.history;
   const selectedArtifact = selectedArtifactId ? artifactCache[selectedArtifactId] : undefined;
   const pending = overview ? pendingKind(overview) : "none";
   const confirmationBusy = Boolean(controlBusy) || (Boolean(busy) && reasonDialog?.kind !== "cancel");
 
+  useEffect(() => {
+    if (pending !== "none") setInspectorOpen(true);
+  }, [pending, selectedRunId]);
+
+  const openResearchDraftFromRun = (run: AgentRunRecord) => {
+    setDraft({ ...createDraft(props.settings), objective: run.objective });
+    setNewRunOpen(true);
+  };
+
+  const switchCenterSection = (section: AgentRunCenterSection) => {
+    setCenterSection(section);
+    const nextRuns = section === "inbox" ? runCenterData.inbox : runCenterData.history;
+    if (nextRuns.length && !nextRuns.some((run) => run.id === selectedRunId)) selectRun(nextRuns[0].id);
+  };
+
   return (
-    <div className="agent-page">
+    <div className="agent-page agent-run-center-page">
       <header className="agent-page-header">
         <div>
-          <div className="eyebrow"><Bot size={14} /> 监督式研究执行器</div>
-          <h1>研究 Agent</h1>
-          <p>基于当前 SQLite 论文库与 V20 快照执行可审批、可恢复、可审计的研究任务。</p>
+          <div className="eyebrow"><Bot size={14} /> 受监督研究运行</div>
+          <h1>Agent 运行中心</h1>
+          <p>优先处理审批、用户判断与活动任务；完整历史和技术审计按需展开。</p>
         </div>
         <div className="agent-header-actions">
-          <button className="secondary-action agent-rail-toggle h-10 px-3" onClick={() => setRailOpen((value) => !value)}><ListChecks size={16} />运行</button>
+          <button className="secondary-action h-10 px-3" onClick={() => props.onNavigate("agent")}><ArrowLeft size={16} />返回 Sidera</button>
+          <button className="secondary-action agent-rail-toggle h-10 px-3" onClick={() => setRailOpen((value) => !value)}><ListChecks size={16} />队列</button>
           <SnapshotBadge ready={snapshotReady} snapshot={effectiveSnapshot} />
           <button className="primary-action h-10 gap-2 px-4" onClick={() => { setDraft(createDraft(props.settings)); setNewRunOpen(true); }} disabled={runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))}>
             <Plus size={16} /> 新建研究任务
           </button>
         </div>
       </header>
+
+      <section className="agent-run-center-summary" aria-label="运行摘要">
+        <button type="button" onClick={() => switchCenterSection("inbox")}><span>待审批</span><strong>{runCenterData.awaiting.length}</strong><small>计划、动作、回答或成果</small></button>
+        <button type="button" onClick={() => switchCenterSection("inbox")}><span>运行中</span><strong>{runCenterData.active.length}</strong><small>规划、执行、评估或暂停</small></button>
+        <button type="button" onClick={() => switchCenterSection("inbox")}><span>失败待检查</span><strong>{runCenterData.recentFailed.length}</strong><small>最近 7 天，最多显示 3 项</small></button>
+        <button type="button" onClick={() => switchCenterSection("history")}><span>最近完成</span><strong>{runCenterData.recentCompleted.length}</strong><small>最近 7 天完成的运行</small></button>
+      </section>
 
       {!snapshotReady && (
         <div className="agent-blocker-banner">
@@ -625,15 +681,25 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         <aside className={`agent-run-rail ${railOpen ? "agent-run-rail-open" : ""}`}>
           <button className="agent-rail-close" onClick={() => setRailOpen(false)} aria-label="关闭运行列表"><X size={15} /></button>
           <div className="agent-rail-header">
-            <div><span>运行记录</span><small>{runs.length}</small></div>
+            <div><span>{centerSection === "inbox" ? "待办队列" : "运行历史"}</span><small>{visibleRuns.length}</small></div>
             <button className="agent-icon-button" onClick={() => void loadRuns()} aria-label="刷新运行列表"><RefreshCw size={15} /></button>
           </div>
-          <div className="agent-filter-row" role="group" aria-label="运行状态筛选">
-            {(["all", "active", "terminal"] as const).map((filter) => <button key={filter} className={statusFilter === filter ? "active" : ""} onClick={() => setStatusFilter(filter)}>{filter === "all" ? "全部" : filter === "active" ? "进行中" : "已结束"}</button>)}
+          <div className="agent-center-sections" role="tablist" aria-label="运行中心分区">
+            <button role="tab" aria-selected={centerSection === "inbox"} className={centerSection === "inbox" ? "active" : ""} onClick={() => switchCenterSection("inbox")}><Inbox size={14} />待办</button>
+            <button role="tab" aria-selected={centerSection === "history"} className={centerSection === "history" ? "active" : ""} onClick={() => switchCenterSection("history")}><History size={14} />历史</button>
           </div>
+          {centerSection === "history" ? (
+            <div className="agent-history-filters">
+              <label><Search size={13} /><input value={runQuery} onChange={(event) => setRunQuery(event.target.value)} placeholder="搜索目标、类型或错误" /></label>
+              <div>
+                <select aria-label="历史运行状态" value={historyStatus} onChange={(event) => setHistoryStatus(event.target.value as AgentRunHistoryStatus)}><option value="all">全部状态</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select>
+                <select aria-label="历史任务类型" value={historyKind} onChange={(event) => setHistoryKind(event.target.value as "all" | AgentRunKind)}><option value="all">全部类型</option>{(Object.keys(RUN_KIND_LABELS) as AgentRunKind[]).map((kind) => <option key={kind} value={kind}>{RUN_KIND_LABELS[kind].label}</option>)}</select>
+              </div>
+            </div>
+          ) : null}
           <div className="agent-run-list">
-            {filteredRuns.map((run) => <RunListItem key={run.id} run={run} active={run.id === selectedRunId} onSelect={() => { selectRun(run.id); setRailOpen(false); }} />)}
-            {filteredRuns.length === 0 && <div className="agent-empty-rail"><Bot size={22} /><span>暂无研究运行</span><small>创建目标后，计划和审计记录会出现在这里。</small></div>}
+            {visibleRuns.map((run) => <RunListItem key={run.id} run={run} active={run.id === selectedRunId} onSelect={() => { selectRun(run.id); setRailOpen(false); }} />)}
+            {visibleRuns.length === 0 && <div className="agent-empty-rail"><Bot size={22} /><span>{centerSection === "inbox" ? "当前没有待办" : "没有匹配的历史运行"}</span><small>{centerSection === "inbox" ? "新任务、审批和近期失败会优先出现在这里。" : "调整状态、类型或关键词筛选。"}</small></div>}
           </div>
           {hasMoreRuns && <button className="agent-load-more" onClick={() => setRunLimit((current) => current + RUN_PAGE_SIZE)}>继续加载</button>}
         </aside>
@@ -642,6 +708,17 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           {!overview ? <AgentEmptyState busy={busy === "loading"} onCreate={() => setNewRunOpen(true)} disabled={runs.some((run) => !["completed", "cancelled", "failed"].includes(run.status))} /> : (
             <>
               <RunHeader overview={overview} busy={busy} controlBusy={controlBusy} onPlan={() => void runCommand("plan", overview.run.id, () => resumeDraftPlanning(overview, client, context))} onContinue={() => void runCommand("execute", overview.run.id, () => client.executeRun(context, overview.run.id))} onPause={() => void runControlCommand("pause", overview.run.id, () => client.controlRun(context, overview.run.id, "pause"))} onResume={() => void runCommand("resume", overview.run.id, () => client.controlRun(context, overview.run.id, "resume"), true)} onCancel={() => { setReason(""); setReasonDialog({ kind: "cancel", title: "取消当前运行" }); }} onToggleInspector={() => setInspectorOpen((value) => !value)} />
+              <RunOverviewStrip overview={overview} pending={pending} />
+              {overview.run.status === "failed" ? (
+                <FailedRunRecovery
+                  run={overview.run}
+                  onCopyResearch={() => openResearchDraftFromRun(overview.run)}
+                  onOpenProfessional={() => {
+                    const destination = professionalViewForRunKind(overview.run.runKind);
+                    if (destination) props.onNavigate(destination);
+                  }}
+                />
+              ) : null}
               <nav className="agent-tabs" aria-label="Agent 运行内容">
                 <button className={activeTab === "plan" ? "active" : ""} onClick={() => setActiveTab("plan")}><ListChecks size={15} />计划</button>
                 <button className={activeTab === "timeline" ? "active" : ""} onClick={() => setActiveTab("timeline")}><Activity size={15} />过程 <span>{events.length}</span></button>
@@ -663,7 +740,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       </div>
 
       <AgentModal open={newRunOpen} title="新建研究任务" onClose={() => !busy && setNewRunOpen(false)} wide>
-        <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} reportArtifacts={(overview?.artifacts ?? []).filter((artifact) => artifact.artifactKind === "report_draft").map((artifact) => ({ ...artifact, reviewStatus: overview ? effectiveArtifactReviewStatus(overview, artifact) : artifact.reviewStatus }))} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
+        <NewRunForm draft={draft} setDraft={setDraft} snapshotReady={snapshotReady} snapshot={effectiveSnapshot} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} modelTest={modelTest} busy={busy} onTest={testProfile} onSubmit={() => void createRun()} onOpenPipeline={() => props.onNavigate("pipeline")} />
       </AgentModal>
 
       <AgentModal open={Boolean(reasonDialog)} title={reasonDialog?.title || "确认操作"} onClose={() => !confirmationBusy && setReasonDialog(null)}>
@@ -727,6 +804,18 @@ function RunHeader({ overview, busy, controlBusy, onPlan, onContinue, onPause, o
   return <header className="agent-run-header"><div className="agent-run-heading"><div className={`agent-status-chip tone-${meta.tone}`}><Icon size={14} className={AGENT_ACTIVE_POLL_STATUSES.has(overview.run.status) ? "animate-spin" : ""} />{meta.label}</div><small>{RUN_KIND_LABELS[overview.run.runKind]?.label ?? overview.run.runKind}</small><h2>{overview.run.objective}</h2><p>{committing ? "正在安全提交：事务完成前暂停与取消暂不可用。" : meta.description}</p>{overview.currentOperation && <div className="agent-operation-inline"><span>{committing ? "正在安全提交" : overview.currentOperation.phase}</span><strong>{overview.currentOperation.processedCount.toLocaleString()}/{overview.currentOperation.totalCount?.toLocaleString() ?? "?"}</strong><progress value={overview.currentOperation.processedCount} max={overview.currentOperation.totalCount || 1} /></div>}</div><div className="agent-run-controls"><button className="secondary-action agent-inspector-toggle h-9 px-3" onClick={onToggleInspector}><Gauge size={15} />治理</button>{overview.run.status === "draft" && <button className="primary-action h-9 px-3" onClick={onPlan} disabled={working}><Sparkles size={15} />开始规划</button>}{overview.run.status === "ready" && <button className="primary-action h-9 px-3" onClick={onContinue} disabled={working}><Play size={15} />继续执行</button>}{["running", "evaluating"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onPause} disabled={controlWorking || committing}><Pause size={15} />暂停</button>}{overview.run.status === "paused" && <button className="primary-action h-9 px-3" onClick={onResume} disabled={working}><RotateCcw size={15} />恢复执行</button>}{!["completed", "cancelled", "failed", "cancelling"].includes(overview.run.status) && <button className="secondary-action h-9 px-3" onClick={onCancel} disabled={controlWorking || committing}><Square size={14} />取消</button>}</div></header>;
 }
 
+function RunOverviewStrip({ overview, pending }: { overview: AgentRunOverview; pending: ReturnType<typeof pendingKind> }) {
+  const blocker = pending !== "none"
+    ? pending === "plan" ? "计划等待审批" : pending === "action" ? "动作等待审批" : pending === "question" ? "等待用户回答" : pending === "artifact_review" ? "成果等待复核" : "运行等待处理"
+    : overview.run.lastErrorCode ?? "无阻塞";
+  return <section className="agent-run-overview-strip" aria-label="当前运行概况"><div><span>任务类型</span><strong>{RUN_KIND_LABELS[overview.run.runKind]?.label ?? overview.run.runKind}</strong></div><div><span>当前阶段</span><strong>{overview.currentOperation?.phase ?? AGENT_STATUS_META[overview.run.status].label}</strong></div><div><span>阻塞原因</span><strong>{blocker}</strong></div><div><span>下一步</span><strong>{nextRunActionLabel(overview.run)}</strong></div></section>;
+}
+
+function FailedRunRecovery({ run, onCopyResearch, onOpenProfessional }: { run: AgentRunRecord; onCopyResearch: () => void; onOpenProfessional: () => void }) {
+  const research = run.runKind === "research_report";
+  return <section className="agent-failed-recovery"><div><AlertTriangle size={16} /><span><strong>失败步骤需要检查</strong><small>{run.lastErrorCode ?? "运行未返回可识别错误码"}</small></span></div><button className="secondary-action h-9 px-3" onClick={research ? onCopyResearch : onOpenProfessional}>{research ? "复制目标并新建任务" : `前往${RUN_KIND_LABELS[run.runKind].label}专业页面`}</button></section>;
+}
+
 function PlanView({ overview }: { overview: AgentRunOverview }) {
   if (!overview.plan) return <div className="agent-content-empty"><ListChecks size={24} /><span>尚未生成计划</span></div>;
   return <div className="agent-plan-view"><section className="agent-plan-summary"><div><span>计划版本</span><strong>v{overview.plan.version}</strong></div><div><span>假设</span><strong>{overview.plan.assumptions.length}</strong></div><div><span>成功标准</span><strong>{overview.plan.successCriteria.length}</strong></div><div><span>步骤</span><strong>{overview.plan.steps.length}</strong></div></section><section className="agent-plan-context"><div><h3>运行假设</h3>{overview.plan.assumptions.map((value) => <p key={value}><Check size={13} />{value}</p>)}</div><div><h3>确定性成功标准</h3>{overview.plan.successCriteria.map((criterion) => <p key={criterion.id}><ShieldCheck size={13} />{criterion.description}</p>)}</div></section><div className="agent-step-list">{overview.steps.map((step) => <div key={step.stepId} className={`agent-step-row status-${step.status}`}><div className="agent-step-ordinal">{String(step.ordinal + 1).padStart(2, "0")}</div><div className="agent-step-body"><div><strong>{step.title}</strong><span className={`agent-risk risk-${step.risk}`}>{step.risk === "read" ? "只读" : step.risk === "write" ? "写入" : "高风险"}</span></div><code>{step.toolName}@{step.toolVersion}</code>{step.lastErrorCode && <small>{step.lastErrorCode}{step.recoveryCount ? ` · 恢复 ${step.recoveryCount} 次` : ""}</small>}</div><div className="agent-step-state">{step.status === "succeeded" ? <CheckCircle2 size={16} /> : step.status === "running" ? <Loader2 className="animate-spin" size={16} /> : step.status === "failed" ? <XCircle size={16} /> : <Circle size={15} />}<span>{step.status}</span></div></div>)}</div></div>;
@@ -781,28 +870,24 @@ function Inspector({ overview, pending, answer, setAnswer, busy, onApprovePlan, 
   }
   if (pending === "artifact_review" && review) return <div className="agent-inspector-content"><InspectorTitle icon={<FileCheck2 size={17} />} title="高风险报告待复核" subtitle={`内容哈希 ${shortHash(review.contentSha256)}`} /><div className="agent-inspector-note warning">模型不能自行宣布高风险报告完成。批准只绑定当前最新报告内容；报告变化后需重新复核。</div><div className="agent-inspector-actions"><button className="primary-action h-10" onClick={onApproveArtifact} disabled={busy}><Check size={15} />人工批准</button><button className="secondary-action h-10" onClick={onRejectArtifact} disabled={busy}><X size={15} />拒绝报告</button></div></div>;
   if (pending === "blocker") return <div className="agent-inspector-content"><InspectorTitle icon={<AlertTriangle size={17} />} title="运行等待处理" subtitle={overview.run.lastErrorCode ?? "需要用户决定"} /><div className="agent-inspector-note warning">运行不会静默继续。检查快照、预算或报告审计后，选择恢复、取消或在当前快照上创建新任务。</div>{overview.run.lastErrorCode?.includes("SNAPSHOT") && <button className="secondary-action h-10 w-full" onClick={onOpenPipeline}>检查热点建模</button>}<BudgetPanel overview={overview} /></div>;
-  return <div className="agent-inspector-content"><InspectorTitle icon={<Gauge size={17} />} title="运行治理" subtitle="SQLite 权威状态" /><BudgetPanel overview={overview} /><dl className="agent-inspector-details"><div><dt>库修订</dt><dd>{overview.libraryRevision ?? "—"}</dd></div><div><dt>快照</dt><dd><code>{shortHash(overview.run.snapshotId)}</code></dd></div><div><dt>Token</dt><dd>{overview.modelUsage?.totalTokens.toLocaleString() ?? "0"}</dd></div><div><dt>模型耗时</dt><dd>{overview.modelUsage ? `${(overview.modelUsage.elapsedMs / 1000).toFixed(1)}s` : "—"}</dd></div><div><dt>估算费用</dt><dd>{overview.modelUsage?.estimatedCostMicrousd == null ? "未配置单价" : `$${(overview.modelUsage.estimatedCostMicrousd / 1_000_000).toFixed(4)}`}</dd></div><div><dt>计划</dt><dd>v{overview.run.currentPlanVersion ?? "—"}</dd></div><div><dt>租约</dt><dd>{overview.currentLease ? `generation ${overview.currentLease.generation}` : "未持有"}</dd></div><div><dt>更新</dt><dd>{fmtTime(overview.run.updatedAtMs)}</dd></div></dl></div>;
+  return <div className="agent-inspector-content"><InspectorTitle icon={<Gauge size={17} />} title="运行治理" subtitle="当前没有需要立即处理的审批" /><div className="agent-inspector-note">技术状态保持只读显示；需要审批、回答或成果复核时，此抽屉会自动打开。</div><details className="agent-technical-details"><summary>技术详情</summary><BudgetPanel overview={overview} /><dl className="agent-inspector-details"><div><dt>库修订</dt><dd>{overview.libraryRevision ?? "—"}</dd></div><div><dt>快照</dt><dd><code>{shortHash(overview.run.snapshotId)}</code></dd></div><div><dt>Token</dt><dd>{overview.modelUsage?.totalTokens.toLocaleString() ?? "0"}</dd></div><div><dt>模型耗时</dt><dd>{overview.modelUsage ? `${(overview.modelUsage.elapsedMs / 1000).toFixed(1)}s` : "—"}</dd></div><div><dt>估算费用</dt><dd>{overview.modelUsage?.estimatedCostMicrousd == null ? "未配置单价" : `$${(overview.modelUsage.estimatedCostMicrousd / 1_000_000).toFixed(4)}`}</dd></div><div><dt>计划</dt><dd>v{overview.run.currentPlanVersion ?? "—"}</dd></div><div><dt>租约</dt><dd>{overview.currentLease ? `generation ${overview.currentLease.generation}` : "未持有"}</dd></div><div><dt>更新</dt><dd>{fmtTime(overview.run.updatedAtMs)}</dd></div></dl></details></div>;
 }
 
 function InspectorTitle({ icon, title, subtitle }: { icon: ReactNode; title: string; subtitle: string }) { return <header className="agent-inspector-title"><span>{icon}</span><div><h3>{title}</h3><p>{subtitle}</p></div></header>; }
 function InspectorEmpty() { return <div className="agent-inspector-empty"><Gauge size={24} /><strong>运行检查器</strong><span>选择运行后，这里会显示审批、问题、预算和成果复核。</span></div>; }
 function BudgetPanel({ overview }: { overview: AgentRunOverview }) { const pairs = [["步骤", overview.run.budgetUsage.executedSteps, overview.run.budget.maxSteps], ["工具", overview.run.budgetUsage.toolCalls, overview.run.budget.maxToolCalls], ["Planner", overview.run.budgetUsage.plannerRounds, overview.run.budget.maxPlannerRounds], ["修订", overview.run.budgetUsage.reportRewrites, overview.run.budget.maxReportRewrites]] as const; return <div className="agent-budget-panel">{pairs.map(([label, used, limit]) => <div key={label}><div><span>{label}</span><strong>{used}/{limit}</strong></div><div className="agent-budget-track"><span style={{ width: `${Math.min(100, limit ? used / limit * 100 : 0)}%` }} /></div></div>)}</div>; }
 
-function NewRunForm({ draft, setDraft, snapshotReady, snapshot, reportArtifacts, advancedOpen, setAdvancedOpen, modelTest, busy, onTest, onSubmit, onOpenPipeline }: { draft: NewRunDraft; setDraft: (value: NewRunDraft) => void; snapshotReady: boolean; snapshot: { snapshotId?: string; paperCount: number; hotspotCount: number; membershipCount: number } | null | undefined; reportArtifacts: AgentArtifactMetadata[]; advancedOpen: boolean; setAdvancedOpen: (value: boolean) => void; modelTest: string; busy: string; onTest: (role: "planner" | "writer") => void; onSubmit: () => void; onOpenPipeline: () => void }) {
+function NewRunForm({ draft, setDraft, snapshotReady, snapshot, advancedOpen, setAdvancedOpen, modelTest, busy, onTest, onSubmit, onOpenPipeline }: { draft: NewRunDraft; setDraft: (value: NewRunDraft) => void; snapshotReady: boolean; snapshot: { snapshotId?: string; paperCount: number; hotspotCount: number; membershipCount: number } | null | undefined; advancedOpen: boolean; setAdvancedOpen: (value: boolean) => void; modelTest: string; busy: string; onTest: (role: "planner" | "writer") => void; onSubmit: () => void; onOpenPipeline: () => void }) {
   const updateBudget = (key: keyof AgentBudget, value: number) => setDraft({ ...draft, budget: { ...draft.budget, [key]: value } });
-  const taskBlocked = draft.kind === "research_report" && !snapshotReady;
-  const inputReady = draft.kind === "paper_file_import" ? Boolean(draft.sourcePath) : draft.kind === "report_export" ? Boolean(draft.exportDirectory && draft.reportArtifactId && (draft.exportMarkdown || draft.exportHtml)) : true;
+  const taskBlocked = !snapshotReady;
   return <div className="agent-new-run-form">
-    <section><span className="field-label">任务类型</span><div className="agent-task-kind-grid">{(Object.keys(RUN_KIND_LABELS) as AgentRunKind[]).map((kind) => <button key={kind} className={draft.kind === kind ? "active" : ""} onClick={() => setDraft({ ...draft, kind })}><strong>{RUN_KIND_LABELS[kind].label}</strong><span>{RUN_KIND_LABELS[kind].description}</span></button>)}</div></section>
-    <label className="field-label">任务目标<textarea autoFocus className="field-control min-h-[96px] p-3" maxLength={4096} value={draft.objective} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} placeholder={RUN_KIND_LABELS[draft.kind].objective} /></label>
-    {draft.kind === "paper_file_import" && <div className="agent-resource-picker"><div><strong>授权论文文件</strong><span>{draft.sourcePath || "尚未选择文件"}</span></div><button className="secondary-action h-9 px-3" onClick={() => void choosePaperImportFile().then((sourcePath) => sourcePath && setDraft({ ...draft, sourcePath }))}>选择文件</button></div>}
-    {draft.kind === "paper_mysql_import" && <div className="agent-model-fields"><label className="field-label">主机<input className="field-control h-10 px-3" value={draft.mysqlHost} onChange={(event) => setDraft({ ...draft, mysqlHost: event.target.value })} /></label><label className="field-label">端口<input className="field-control h-10 px-3" type="number" value={draft.mysqlPort} onChange={(event) => setDraft({ ...draft, mysqlPort: Number(event.target.value) || 3306 })} /></label><label className="field-label">用户<input className="field-control h-10 px-3" value={draft.mysqlUser} onChange={(event) => setDraft({ ...draft, mysqlUser: event.target.value })} /></label><label className="field-label">数据库<input className="field-control h-10 px-3" value={draft.mysqlDatabase} onChange={(event) => setDraft({ ...draft, mysqlDatabase: event.target.value })} /></label><small>密码只从当前项目的 Windows 凭据管理器读取，不写入任务输入。</small></div>}
-    {draft.kind === "report_export" && <div className="agent-export-fields"><label className="field-label">报告成果<select className="field-control h-10 px-3" value={draft.reportArtifactId} onChange={(event) => setDraft({ ...draft, reportArtifactId: event.target.value })}><option value="">选择当前运行中的报告</option>{reportArtifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.id.slice(0, 24)} · {artifact.reviewStatus ?? "未标记"}</option>)}</select></label><div className="agent-resource-picker"><div><strong>导出目录</strong><span>{draft.exportDirectory || "尚未选择目录"}</span></div><button className="secondary-action h-9 px-3" onClick={() => void chooseExportDirectory("选择 Agent 报告导出目录").then((exportDirectory) => exportDirectory && setDraft({ ...draft, exportDirectory }))}>选择目录</button></div><div className="agent-model-options"><label><input type="checkbox" checked={draft.exportMarkdown} onChange={(event) => setDraft({ ...draft, exportMarkdown: event.target.checked })} />Markdown</label><label><input type="checkbox" checked={draft.exportHtml} onChange={(event) => setDraft({ ...draft, exportHtml: event.target.checked })} />HTML</label></div></div>}
+    <section className="agent-new-run-kind"><span>任务类型</span><strong>研究报告</strong><small>运行中心只创建基于真实本地证据的可审计研究报告；导入、清洗、建模和导出继续在对应专业页面完成。</small></section>
+    <label className="field-label">任务目标<textarea autoFocus className="field-control min-h-[96px] p-3" maxLength={4096} value={draft.objective} onChange={(event) => setDraft({ ...draft, objective: event.target.value })} placeholder={RUN_KIND_LABELS.research_report.objective} /></label>
     <div className="agent-mode-grid"><button className={draft.mode === "supervised" ? "active" : ""} onClick={() => setDraft({ ...draft, mode: "supervised" })}><ShieldCheck size={18} /><strong>监督模式</strong><span>高风险动作逐次审批后执行。</span></button><button className={draft.mode === "advisor" ? "active" : ""} onClick={() => setDraft({ ...draft, mode: "advisor" })}><Bot size={18} /><strong>顾问模式</strong><span>只生成计划，不调用工具。</span></button></div>
-    {draft.kind === "research_report" && <div className={`agent-new-snapshot ${snapshotReady ? "ready" : "blocked"}`}><Database size={17} /><div><strong>{snapshotReady ? "报告将绑定当前活动快照" : "研究报告需要有效 V20 快照"}</strong><span>{snapshotReady && snapshot ? `${snapshot.paperCount.toLocaleString()} 篇论文 · ${snapshot.hotspotCount} 热点 · ${snapshot.membershipCount.toLocaleString()} 条归属` : "不会自动建模。"}</span></div>{!snapshotReady && <button onClick={onOpenPipeline}>前往建模</button>}</div>}
+    <div className={`agent-new-snapshot ${snapshotReady ? "ready" : "blocked"}`}><Database size={17} /><div><strong>{snapshotReady ? "报告将绑定当前活动快照" : "研究报告需要有效 V20 快照"}</strong><span>{snapshotReady && snapshot ? `${snapshot.paperCount.toLocaleString()} 篇论文 · ${snapshot.hotspotCount} 热点 · ${snapshot.membershipCount.toLocaleString()} 条归属` : "不会自动建模。"}</span></div>{!snapshotReady && <button onClick={onOpenPipeline}>前往建模</button>}</div>
     <button className="agent-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)} aria-expanded={advancedOpen}><span><ChevronDown size={15} className={advancedOpen ? "rotate-180" : ""} />高级模型、预算与成本</span><small>{profileLabel(draft.planner)}</small></button>
     {advancedOpen && <div className="agent-advanced-panel"><ModelProfileEditor title="Planner" profile={draft.planner} secret={draft.plannerSecret} onChange={(planner) => setDraft({ ...draft, planner, writer: draft.writerMatchesPlanner ? { ...planner } : draft.writer })} onSecret={(plannerSecret) => setDraft({ ...draft, plannerSecret })} onTest={() => onTest("planner")} /><label className="agent-same-model"><input type="checkbox" checked={draft.writerMatchesPlanner} onChange={(event) => setDraft({ ...draft, writerMatchesPlanner: event.target.checked, writer: event.target.checked ? { ...draft.planner } : draft.writer })} />Writer 使用相同模型配置</label>{!draft.writerMatchesPlanner && <ModelProfileEditor title="Writer" profile={draft.writer} secret={draft.writerSecret} onChange={(writer) => setDraft({ ...draft, writer })} onSecret={(writerSecret) => setDraft({ ...draft, writerSecret })} onTest={() => onTest("writer")} />}{modelTest && <div className="agent-model-test-result">{modelTest}</div>}<div className="agent-budget-editor"><BudgetInput label="最大步骤" value={draft.budget.maxSteps} maximum={20} onChange={(value) => updateBudget("maxSteps", value)} /><BudgetInput label="工具调用" value={draft.budget.maxToolCalls} maximum={24} onChange={(value) => updateBudget("maxToolCalls", value)} /><BudgetInput label="规划回合" value={draft.budget.maxPlannerRounds} maximum={24} onChange={(value) => updateBudget("maxPlannerRounds", value)} /><BudgetInput label="报告修订" value={draft.budget.maxReportRewrites} maximum={1} onChange={(value) => updateBudget("maxReportRewrites", value)} /></div></div>}
-    <div className="agent-new-run-footer"><div><ShieldCheck size={15} /><span>业务修改和文件导出均为高风险动作，必须单独批准。</span></div><button className="primary-action h-11 px-5" onClick={onSubmit} disabled={taskBlocked || !inputReady || Boolean(busy)}>{busy === "create" ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}{draft.mode === "advisor" ? "生成顾问计划" : "生成监督计划"}</button></div>
+    <div className="agent-new-run-footer"><div><ShieldCheck size={15} /><span>计划、写动作和高风险成果继续由现有 Agent Runtime 审批门控制。</span></div><button className="primary-action h-11 px-5" onClick={onSubmit} disabled={taskBlocked || Boolean(busy)}>{busy === "create" ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}{draft.mode === "advisor" ? "生成顾问计划" : "生成监督计划"}</button></div>
   </div>;
 }
 

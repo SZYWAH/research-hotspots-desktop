@@ -61,14 +61,20 @@ fn run() -> Result<(), String> {
     let database_path = resolve_database_path(&args)?;
     let export = export_star_map_from_database_path(database_path, args.project_id.clone())?;
     let strict_gate = build_gate(&args, &export);
-    let report = ExportStarMapReport { export, strict_gate };
+    let report = ExportStarMapReport {
+        export,
+        strict_gate,
+    };
     let json = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
 
     if let Some(output) = args.output.as_ref() {
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Cannot create output dir {}: {error}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Cannot create output dir {}: {error}", parent.display())
+            })?;
         }
-        fs::write(output, format!("{json}\n")).map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
+        fs::write(output, format!("{json}\n"))
+            .map_err(|error| format!("Cannot write {}: {error}", output.display()))?;
     }
 
     println!(
@@ -119,11 +125,13 @@ fn parse_args() -> Result<Args, String> {
                 index += 1;
             }
             "--database-dir" => {
-                args.database_dir = Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
+                args.database_dir =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-dir")?));
                 index += 2;
             }
             "--database-path" => {
-                args.database_path = Some(PathBuf::from(value_after(&raw, index, "--database-path")?));
+                args.database_path =
+                    Some(PathBuf::from(value_after(&raw, index, "--database-path")?));
                 index += 2;
             }
             "--project-id" => {
@@ -135,27 +143,45 @@ fn parse_args() -> Result<Args, String> {
                 index += 2;
             }
             "--min-hotspots" => {
-                args.min_hotspots = parse_positive_i64(&value_after(&raw, index, "--min-hotspots")?, "--min-hotspots")?;
+                args.min_hotspots = parse_positive_i64(
+                    &value_after(&raw, index, "--min-hotspots")?,
+                    "--min-hotspots",
+                )?;
                 index += 2;
             }
             "--min-evidence-ids" => {
-                args.min_evidence_ids = parse_positive_usize(&value_after(&raw, index, "--min-evidence-ids")?, "--min-evidence-ids")?;
+                args.min_evidence_ids = parse_positive_usize(
+                    &value_after(&raw, index, "--min-evidence-ids")?,
+                    "--min-evidence-ids",
+                )?;
                 index += 2;
             }
             "--min-links" => {
-                args.min_links = parse_non_negative_usize(&value_after(&raw, index, "--min-links")?, "--min-links")?;
+                args.min_links = parse_non_negative_usize(
+                    &value_after(&raw, index, "--min-links")?,
+                    "--min-links",
+                )?;
                 index += 2;
             }
             "--min-evidence-coverage" => {
-                args.min_evidence_coverage = parse_rate(&value_after(&raw, index, "--min-evidence-coverage")?, "--min-evidence-coverage")?;
+                args.min_evidence_coverage = parse_rate(
+                    &value_after(&raw, index, "--min-evidence-coverage")?,
+                    "--min-evidence-coverage",
+                )?;
                 index += 2;
             }
             "--min-evolution-coverage" => {
-                args.min_evolution_coverage = parse_rate(&value_after(&raw, index, "--min-evolution-coverage")?, "--min-evolution-coverage")?;
+                args.min_evolution_coverage = parse_rate(
+                    &value_after(&raw, index, "--min-evolution-coverage")?,
+                    "--min-evolution-coverage",
+                )?;
                 index += 2;
             }
             "--min-source-distribution-coverage" => {
-                args.min_source_distribution_coverage = parse_rate(&value_after(&raw, index, "--min-source-distribution-coverage")?, "--min-source-distribution-coverage")?;
+                args.min_source_distribution_coverage = parse_rate(
+                    &value_after(&raw, index, "--min-source-distribution-coverage")?,
+                    "--min-source-distribution-coverage",
+                )?;
                 index += 2;
             }
             "--reject-sample-signals" => {
@@ -170,7 +196,9 @@ fn parse_args() -> Result<Args, String> {
                 args.require_source_distribution = true;
                 index += 1;
             }
-            value if value.starts_with("--") => return Err(format!("Unsupported argument: {value}")),
+            value if value.starts_with("--") => {
+                return Err(format!("Unsupported argument: {value}"))
+            }
             value => {
                 if args.database_path.is_none() && args.database_dir.is_none() {
                     args.database_path = Some(PathBuf::from(value));
@@ -225,7 +253,10 @@ fn build_gate(args: &Args, export: &StarMapExportResult) -> StrictGate {
         GateCheck {
             name: "coordinateSpread".to_string(),
             expected: "non-zero x/y spread".to_string(),
-            actual: format!("x={}, y={}, z={}", export.coordinate_spread.x, export.coordinate_spread.y, export.coordinate_spread.z),
+            actual: format!(
+                "x={}, y={}, z={}",
+                export.coordinate_spread.x, export.coordinate_spread.y, export.coordinate_spread.z
+            ),
             passed: export.coordinate_spread.x > 0.0 || export.coordinate_spread.y > 0.0,
         },
         GateCheck {
@@ -243,8 +274,12 @@ fn build_gate(args: &Args, export: &StarMapExportResult) -> StrictGate {
         GateCheck {
             name: "sourceDistributionCoverage".to_string(),
             expected: format!(">= {:.2}", args.min_source_distribution_coverage),
-            actual: format!("{:.4}", export.evidence_profile.source_distribution_coverage),
-            passed: export.evidence_profile.source_distribution_coverage >= args.min_source_distribution_coverage,
+            actual: format!(
+                "{:.4}",
+                export.evidence_profile.source_distribution_coverage
+            ),
+            passed: export.evidence_profile.source_distribution_coverage
+                >= args.min_source_distribution_coverage,
         },
     ];
     if args.reject_sample_signals {
@@ -258,24 +293,37 @@ fn build_gate(args: &Args, export: &StarMapExportResult) -> StrictGate {
     if args.require_evolution {
         checks.push(GateCheck {
             name: "requireEvolution".to_string(),
-            expected: format!("{} hotspots with evolution", args.min_hotspots.min(export.hotspot_count)),
+            expected: format!(
+                "{} hotspots with evolution",
+                args.min_hotspots.min(export.hotspot_count)
+            ),
             actual: export.hotspots_with_evolution.to_string(),
-            passed: export.hotspots_with_evolution as i64 >= args.min_hotspots.min(export.hotspot_count),
+            passed: export.hotspots_with_evolution as i64
+                >= args.min_hotspots.min(export.hotspot_count),
         });
     }
     if args.require_source_distribution {
         checks.push(GateCheck {
             name: "requireSourceDistribution".to_string(),
-            expected: format!("{} hotspots with source distribution", args.min_hotspots.min(export.hotspot_count)),
+            expected: format!(
+                "{} hotspots with source distribution",
+                args.min_hotspots.min(export.hotspot_count)
+            ),
             actual: export.hotspots_with_source_distribution.to_string(),
-            passed: export.hotspots_with_source_distribution as i64 >= args.min_hotspots.min(export.hotspot_count),
+            passed: export.hotspots_with_source_distribution as i64
+                >= args.min_hotspots.min(export.hotspot_count),
         });
     }
 
     let failures = checks
         .iter()
         .filter(|check| !check.passed)
-        .map(|check| format!("{} expected {}, actual {}.", check.name, check.expected, check.actual))
+        .map(|check| {
+            format!(
+                "{} expected {}, actual {}.",
+                check.name, check.expected, check.actual
+            )
+        })
         .collect::<Vec<_>>();
     StrictGate {
         enabled: true,
@@ -293,7 +341,9 @@ fn value_after(raw: &[String], index: usize, name: &str) -> Result<String, Strin
 }
 
 fn parse_positive_i64(value: &str, name: &str) -> Result<i64, String> {
-    let parsed = value.parse::<i64>().map_err(|_| format!("{name} must be a positive integer."))?;
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("{name} must be a positive integer."))?;
     if parsed <= 0 {
         return Err(format!("{name} must be a positive integer."));
     }
@@ -301,7 +351,9 @@ fn parse_positive_i64(value: &str, name: &str) -> Result<i64, String> {
 }
 
 fn parse_positive_usize(value: &str, name: &str) -> Result<usize, String> {
-    let parsed = value.parse::<usize>().map_err(|_| format!("{name} must be a positive integer."))?;
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("{name} must be a positive integer."))?;
     if parsed == 0 {
         return Err(format!("{name} must be a positive integer."));
     }
@@ -309,11 +361,15 @@ fn parse_positive_usize(value: &str, name: &str) -> Result<usize, String> {
 }
 
 fn parse_non_negative_usize(value: &str, name: &str) -> Result<usize, String> {
-    value.parse::<usize>().map_err(|_| format!("{name} must be a non-negative integer."))
+    value
+        .parse::<usize>()
+        .map_err(|_| format!("{name} must be a non-negative integer."))
 }
 
 fn parse_rate(value: &str, name: &str) -> Result<f64, String> {
-    let parsed = value.parse::<f64>().map_err(|_| format!("{name} must be a number between 0 and 1."))?;
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("{name} must be a number between 0 and 1."))?;
     if !(0.0..=1.0).contains(&parsed) {
         return Err(format!("{name} must be a number between 0 and 1."));
     }
