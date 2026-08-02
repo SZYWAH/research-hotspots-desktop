@@ -1,0 +1,142 @@
+{
+  "workPackage": "M1.3j",
+  "title": "Sidera 一键直达聚焦与论文恒星近景",
+  "date": "2026-07-31",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e",
+  "worktree": "dirty",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "technical": "PASS_WITH_CARGO_DEFERRED",
+    "productVisual": "UNVERIFIED"
+  },
+  "supersedes": {
+    "workPackage": "M1.3i",
+    "productConclusion": "FAIL / SUPERSEDED",
+    "reusedAssets": [
+      "structured answer references",
+      "read-only entity resolver",
+      "sampled vertex identity and stable dynamic slots",
+      "opposite-side information card",
+      "R10 exact theory camera resume",
+      "fullscreen Agent shell"
+    ]
+  },
+  "implemented": [
+    "one Sidera focus sample drives target, camera, dimming and information-card blends",
+    "single-target emphasis with bounded next-and-close carousel controls",
+    "automatic theory route from overview through hotspot entry to paper close-up",
+    "hotspot target stops at the local hotspot system",
+    "same-hotspot and cross-hotspot retarget route coordinator",
+    "focus release no longer forces the dialog collapsed or expanded",
+    "dialog width clamp(480px, 36vw, 640px)",
+    "agent-theory-only real SphereGeometry paper photosphere",
+    "160-240px paper close-up with 18/14px LOD hysteresis",
+    "white-hot core, domain-warped ridged plasma network and bright stellar limb",
+    "continuous irregular thin-corona filaments without full-screen bloom",
+    "three-layer photosphere architecture with emissive body, additive energy veil and vertex-displaced corona",
+    "four-layer refinement with macro transport, screen-space derivative-controlled narrow filaments, micro granulation, an irregular core and an analytic ray-sphere tangent silhouette ring",
+    "separate target-energy and background-dimming shader controls",
+    "in-flight theory paper ownership guard for entering, focused and paper-focus states",
+    "completed retarget transitions resolve to hold before interpreting the previous phase"
+  ],
+  "constraints": {
+    "formalAgentBackendConnected": false,
+    "defaultStartupChanged": false,
+    "databaseSchemaChanged": false,
+    "theoryCoordinatesChanged": false,
+    "analysisGalaxyChanged": false,
+    "committed": false,
+    "pushed": false
+  },
+  "verification": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "audit:sidera-direct-focus": "PASS",
+    "audit:agent-dual-focus": "PASS",
+    "audit:agent-focus-resolver": "PASS",
+    "audit:agent-fullscreen-shell": "PASS",
+    "audit:agent-immersive-flow": "PASS",
+    "audit:agent-theory-stellar-material": "PASS",
+    "audit:agent-theory-perimeter-lod": "PASS",
+    "audit:agent-theory-r10": "PASS",
+    "gitDiffCheck": "PASS_WITH_LINE_ENDING_WARNINGS",
+    "cargoCheck": "PENDING_COMPETING_TAURI_PROCESS",
+    "tauriBalanced": "PARTIAL_PASS",
+    "userVisual": "UNVERIFIED"
+  },
+  "runtimeDefectsFoundAndFixed": [
+    {
+      "defect": "theory paper route reversed immediately after entering started",
+      "rootCause": "the route treated every active paper state other than focused as a reason to return to the system center",
+      "fix": "entering, focused and paper-focus now retain ownership of the desired paper route",
+      "tauriResult": "paper/system/focused reached without a second click"
+    },
+    {
+      "defect": "next-target transition remained in retargeting after visual completion",
+      "rootCause": "runtime mapping interpreted the previous retargeting phase before checking the unified timeline completion flag",
+      "fix": "completed acquisition or retarget samples resolve to hold first",
+      "tauriResult": "target and information card update and the runtime stabilizes in hold"
+    },
+    {
+      "defect": "the first three-layer photosphere hot reload failed the real WebGL corona program gate",
+      "rootCause": "vertex displacement and vPlume were attached to the energy veil while the corona fragment shader expected a matching corona vertex varying",
+      "fix": "restore the veil to a concentric emissive pass and move vertex FBM, vPlume and displacedPosition into the corona vertex program",
+      "tauriResult": "the retry gate compiles and links the materials and renders the approximately 200px close-up without a shader error overlay"
+    }
+  ],
+  "tauriLowLoadChecks": [
+    "theory paper one-click direct route",
+    "theory close releases paper and system then resumes the ambient cruise",
+    "immersive dimming and camera movement share the same acquisition sample",
+    "bounded multi-entity answer exposes next and close only",
+    "single next-target operation reaches hold",
+    "dialog remains centered and uses the widened reading layout",
+    "real WebGL shader readiness gate passes for the three-layer paper photosphere",
+    "approximately 200px emissive close-up renders in the active Tauri balanced window"
+  ],
+  "metrics": {
+    "firstRafTargetBlend": 0.00002623677574715491,
+    "firstRafCameraBlend": 0.00002623677574715491,
+    "firstRafBackgroundDimBlend": 0.00002623677574715491,
+    "paperPhotosphereDiameterPx": [
+      160,
+      240
+    ],
+    "paperPhotosphereDefaultViewportRatio": 0.22,
+    "paperPhotosphereLodEnterPx": 18,
+    "paperPhotosphereLodExitPx": 14,
+    "paperPhotosphereSilhouetteRingAlgorithm": "camera-ray sphere-tangent discriminant",
+    "paperPhotosphereSilhouetteRingQuadScaleRange": [
+      1.16,
+      1.6
+    ],
+    "paperPhotosphereSilhouetteRingCorePhysicalPx": [
+      1,
+      1.5
+    ],
+    "paperPhotosphereSilhouetteRingShoulderPhysicalPx": [
+      2,
+      3
+    ],
+    "paperPhotosphereAnalyticSilhouetteMaximumError": 2.6645352591003757e-15,
+    "paperPhotosphereCoronaBaseScale": 1.038,
+    "paperPhotosphereCoronaMaximumVisualScale": 1.14,
+    "paperPhotosphereCoronaStrength": [
+      0.14,
+      0.16
+    ],
+    "maximumCarouselEntities": 6,
+    "simultaneouslyEmphasizedTargets": 1
+  },
+  "environmentNotes": [
+    "A Tauri/Cargo process from D:\\wenjian\\Desktop\\个人知识库 was still active during the implementation check.",
+    "Per workstation GPU and concurrency protection rules, this work package did not start a second Cargo build while that process remained active.",
+    "The existing debug executable plus the current Vite frontend was used for conservative Tauri balanced-window checks without starting a competing Cargo build.",
+    "The four-layer post-comparison material passed build and static audits, but its final Tauri visual recheck stopped when the foreground switched to another user application; post-refinement runtime visual acceptance remains unverified.",
+    "The first four-layer mid-scale contour implementation visually regressed into broad marble/camouflage bands; it was replaced by fwidth-controlled screen-space filaments with gated coverage, lower exposure and a more legible 1.018x limb shell.",
+    "The latest user screenshot confirmed that the remaining Fresnel SphereGeometry shell still represented a three-dimensional shell instead of the reference image's projected circular boundary; the shell was replaced by a camera-facing derivative-controlled silhouette ring while retaining the true sphere body and displaced corona.",
+    "A subsequent screenshot measured the first planar ring approximately 3px to the right of the visible sphere center and 3-13px inside the actual outline; the center-plane radius approximation was replaced by a per-fragment camera-ray sphere-tangent discriminant that accounts for close perspective and off-axis framing.",
+    "Cross-hotspot retargeting, five-cycle stability, 160/200/240px comparison and user visual acceptance remain required before product PASS."
+  ]
+}

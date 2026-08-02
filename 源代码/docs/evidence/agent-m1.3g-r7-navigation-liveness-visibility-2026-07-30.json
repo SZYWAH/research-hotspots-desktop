@@ -1,0 +1,122 @@
+{
+  "workPackage": "M1.3g-R7",
+  "title": "Agent 理论背景交互闭环与系统论文可见度修复",
+  "generatedAt": "2026-07-30T15:11:22+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "status": {
+    "technical": "PASS",
+    "tauri": "PARTIAL_PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "implemented": {
+    "labels": {
+      "projectionFpsMaximum": 30,
+      "showAfterCollisionFreePasses": 2,
+      "hideAfterCollisionMs": 250,
+      "fadeMs": 160,
+      "clearedByLodPending": false
+    },
+    "navigation": {
+      "levels": [
+        "overview",
+        "system",
+        "paper"
+      ],
+      "requests": [
+        "return-system",
+        "return-overview"
+      ],
+      "escapeOrder": "paper -> system -> overview -> exit-explore"
+    },
+    "cruiseLiveness": {
+      "frozenState": [
+        "accumulatorSeconds",
+        "advanceAllowed",
+        "checkpointSaveAllowed",
+        "checkpointValid",
+        "visibilityGuard",
+        "lastSafeCheckpoint",
+        "ambientTimeSeconds"
+      ],
+      "minimumSuccessfulFixedSteps": 2,
+      "minimumProjectedMovementPx": 0.15,
+      "publishesIdleBeforeProof": false
+    },
+    "agentTheorySystemPaperVisibility": {
+      "baseAlpha": 0.76,
+      "minimumPointSizeCssPx": {
+        "far": 2.75,
+        "middle": 2.9,
+        "near": 3.0
+      },
+      "maximumPointSizeCssPx": 4.8,
+      "depthBrightnessFloor": 0.9,
+      "depthSizeFloor": 0.94,
+      "focusContextBrightness": 0.62,
+      "focusNeighborBrightness": 0.74,
+      "scope": "agent-theory system only"
+    }
+  },
+  "automaticValidation": [
+    {
+      "command": "pnpm build",
+      "status": "PASS",
+      "detail": "TypeScript and Vite production build completed; 1653 modules transformed."
+    },
+    {
+      "command": "cargo check -j 2",
+      "status": "PASS",
+      "detail": "Rust dev profile completed in 2.90s."
+    },
+    {
+      "command": "node scripts/agent_theory_r7_audit.mjs",
+      "status": "PASS",
+      "detail": "12/12 R7 source and contract checks passed."
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_explore_return_r6_audit.mjs",
+      "status": "PASS",
+      "detail": "Real Three.js anchor contained 3505 papers, 59 hotspots and 13 hotspot cells; nonzero interaction scenarios returned exactly."
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_visibility_r5_audit.mjs",
+      "status": "PASS",
+      "detail": "Three deterministic ten-minute simulations retained all paper, hotspot and cell floors."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "detail": "No whitespace errors; only existing Windows line-ending warnings."
+    }
+  ],
+  "tauriValidation": {
+    "windowTitle": "Research Hotspots Desktop",
+    "mode": "balanced window",
+    "observed": [
+      "The native Tauri window launched and the Agent theory background passed its ready gate.",
+      "Explore displayed hotspot labels after interaction.",
+      "After interaction and Explore exit, two passive frames approximately 1.2s and 3.4s later showed continued perimeter cruise movement.",
+      "No black frame or frozen post-return background was observed in the sampled cycle."
+    ],
+    "notCompleted": [
+      "Ten-second continuous drag and wheel label observation",
+      "Paper to system to overview dynamic return sequence",
+      "Five consecutive Explore round trips",
+      "Small, medium and large hotspot system brightness comparison"
+    ],
+    "limitation": "Computer Use detected concurrent user mouse input, so further automated clicks were stopped to avoid competing with the user."
+  },
+  "boundaries": {
+    "immersiveBackgroundChanged": false,
+    "analysisTheoryGalaxyChanged": false,
+    "displayGalaxyChanged": false,
+    "databaseChanged": false,
+    "umapChanged": false,
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

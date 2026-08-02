@@ -1,0 +1,124 @@
+{
+  "workPackage": "M1.3g-R8",
+  "generatedAt": "2026-07-30T16:18:00+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree preserved; no commit, push, PR or release",
+  "status": {
+    "technical": "PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "supersedes": {
+    "workPackage": "M1.3g-R7.1",
+    "previousTechnicalResult": "PASS",
+    "previousDesktopResult": "FAIL",
+    "reason": "The visibility guard still owned fixed-step permission. Re-evaluating the same rejected deterministic checkpoint created a permanent cruise deadlock after Explore."
+  },
+  "lockedScope": {
+    "preserved": [
+      "perimeter cruise visual language",
+      "R6 exact Explore anchor return",
+      "R7 labels and hierarchical navigation",
+      "overview paper and hotspot materials",
+      "raw theory XYZ and membership"
+    ],
+    "changed": [
+      "cruise integrator ownership",
+      "visibility guidance",
+      "return liveness publication",
+      "runtime liveness diagnostics"
+    ]
+  },
+  "architecture": {
+    "fixedStepSeconds": 0.016666666666666666,
+    "maximumCatchUpStepsPerFrame": 3,
+    "visibilityEvaluationIntervalMs": 250,
+    "predictionHorizonSeconds": 6,
+    "guidanceModes": [
+      "normal",
+      "steering",
+      "fallback"
+    ],
+    "speedScaleRange": [
+      0.35,
+      1
+    ],
+    "guardCanStopIntegrator": false,
+    "returnPublishesIdleAfterSuccessfulSteps": 1,
+    "lodUnionRetirementMs": 300,
+    "healthAuditDurationMs": 900,
+    "healthAuditBlocksIdle": false,
+    "diagnosticMaximumPublishHz": 4
+  },
+  "runtimeDiagnostics": [
+    "cameraMode",
+    "guidanceMode",
+    "stepIndex",
+    "stepDeltaLastSecond",
+    "projectionMovementPxLastSecond",
+    "visibilitySafe",
+    "predictedPaperCount",
+    "predictedHotspotCount",
+    "consecutiveStillMs",
+    "recoveryCount",
+    "pausedReason"
+  ],
+  "desktopUserAcceptance": {
+    "sustainedCruiseAndReturn": "PASS",
+    "freeLookWheelBeforeAdjustment": "FAIL_TOO_SENSITIVE",
+    "freeLookWheelAfterAdjustment": "UNVERIFIED",
+    "standardWheelTravelRatioBefore": 0.324,
+    "standardWheelTravelRatioAfter": 0.0672
+  },
+  "validation": {
+    "localTypeScriptBuild": "PASS",
+    "localTypeScriptBuildAfterWheelTuning": "PASS",
+    "viteProductionBuild": {
+      "status": "PASS",
+      "transformedModules": 1653,
+      "durationSeconds": 32.23
+    },
+    "cargoCheckJ2": "PASS",
+    "agentTheoryR8Audit": {
+      "status": "PASS 8/8",
+      "tenMinuteSeeds": 3,
+      "stepsPerSeed": 36000,
+      "maximumStillSteps": 0,
+      "exactAnchorReturnCycles": 5,
+      "stepDeltaPerReturn": 1,
+      "threeCameraProjectionMovementPx": 0.9496143776150979
+    },
+    "agentTheoryFreeLookContinuityHotspotsAudit": "PASS 26/26",
+    "agentTheoryR7AuditV2": "PASS 14/14",
+    "agentTheoryR6Audit": {
+      "status": "PASS 12/12",
+      "snapshotId": "project-default:v20:1784365136031",
+      "paperCount": 25463,
+      "hotspotCount": 160
+    },
+    "agentTheoryR5Audit": {
+      "status": "PASS 14/14",
+      "tenMinuteSeeds": 3,
+      "minimumPaperCount": 4985,
+      "minimumHotspotCount": 65,
+      "minimumHotspotCellCount": 10
+    },
+    "agentTheoryStellarMaterialAudit": "PASS 19/19",
+    "agentDualBackgroundAudit": "PASS",
+    "projectDocumentationAudit": "PASS",
+    "gitDiffCheck": "PASS",
+    "desktopDevelopmentWindow": "PASS",
+    "desktopAgentTheoryFirstFrame": "PASS",
+    "desktopFiveCycleCruise": "UNVERIFIED"
+  },
+  "unchanged": [
+    "immersive background",
+    "Agent theory overview star materials",
+    "Agent theory system paper visibility",
+    "analysis theory galaxy",
+    "display galaxy",
+    "raw theory XYZ",
+    "database and active snapshot",
+    "UMAP experiments"
+  ]
+}

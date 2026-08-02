@@ -1,0 +1,30 @@
+{
+  "workPackage": "M1.3l-R1",
+  "title": "Sidera unified starfield navigation shell",
+  "date": "2026-08-01",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree",
+  "scope": {
+    "agentTransparentTitleBar": true,
+    "navigationScrimBlur": false,
+    "navigationScrimDimming": false,
+    "navigationDrawerPanel": false,
+    "workPageSidebarChanged": false
+  },
+  "visualCheck": {
+    "surface": "Tauri dev hot reload",
+    "continuousStarfield": "PASS",
+    "dialogRemainsUndimmed": "PASS",
+    "topLeftHardCornerRemoved": "PASS",
+    "userAcceptance": "UNVERIFIED"
+  },
+  "technicalStatus": "PASS",
+  "productVisualStatus": "UNVERIFIED",
+  "delivery": {
+    "committed": false,
+    "pushed": false,
+    "pullRequest": false,
+    "released": false
+  }
+}

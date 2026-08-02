@@ -1,0 +1,75 @@
+{
+  "workPackage": "M1.3n Sidera Agent 运行中心",
+  "recordedAt": "2026-08-01",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "implementation": {
+    "view": "agent-runs",
+    "topLevelNavigationItemAdded": false,
+    "entry": "Sidera 更多 / Agent 运行中心",
+    "defaultSection": "inbox",
+    "inboxOrder": [
+      "awaiting-action",
+      "active",
+      "recent-failed"
+    ],
+    "recentFailedWindowDays": 7,
+    "recentFailedLimit": 3,
+    "historyFilters": [
+      "status",
+      "run-kind",
+      "keyword"
+    ],
+    "manualCreationKinds": [
+      "research_report"
+    ],
+    "historicalRunKindsReadable": 6,
+    "governanceDrawer": "on-demand",
+    "runtimeSchemaChanged": false,
+    "publicTauriApiChanged": false
+  },
+  "regression": {
+    "m1_3m_r3": "PASS_FROZEN",
+    "m1_3j_productVisual": "UNVERIFIED",
+    "rendererUpperBound": 1,
+    "agentStatePreservedAcrossNavigation": true
+  },
+  "verification": {
+    "pnpmBuild": "PASS",
+    "sideraAgentRunCenterAudit": "PASS",
+    "agentUiAudit": "PASS",
+    "agentDesktopAcceptanceAudit": "PASS_MANUAL_DESKTOP_REQUIRED",
+    "agentCapabilitiesStaticAudit": "PASS",
+    "agentDualBackgroundAudit": "PASS",
+    "sideraUnifiedShellAudit": "PASS",
+    "sideraBackgroundOwnershipAudit": "PASS",
+    "sideraWorkbenchSurfacesAudit": "PASS",
+    "sideraGalaxySpatialUiR3Audit": "PASS",
+    "cargoCheck": "DEFERRED_DEVICE_PROTECTION",
+    "tauriVisualAcceptance": "PARTIAL_PASS_READ_ONLY",
+    "tauriReadOnlyCoverage": [
+      "menu-entry",
+      "inbox-empty-state",
+      "history-filter-surface",
+      "legacy-mysql-failure",
+      "legacy-research-report-completion",
+      "professional-page-recovery-action",
+      "return-to-sidera"
+    ],
+    "tauriMutationCoverage": "UNVERIFIED",
+    "productVisual": "UNVERIFIED"
+  },
+  "boundaries": {
+    "piIntegrated": false,
+    "formalConversationBackendIntegrated": false,
+    "conversationHistoryAdded": false,
+    "campusLibraryIntegrated": false,
+    "fullTextReaderAdded": false,
+    "databaseMigrationAdded": false,
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

@@ -1,0 +1,162 @@
+{
+  "workPackage": "M1.3g-R5",
+  "generatedAt": "2026-07-30",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "technicalStatus": "PASS_AUTOMATED",
+  "productVisualStatus": "UNVERIFIED",
+  "scope": {
+    "modifiedSurface": "Agent page theory background only",
+    "unchanged": [
+      "immersive background",
+      "paper material and paper semantic color",
+      "raw theory XYZ",
+      "paper and hotspot membership",
+      "standalone theory galaxy",
+      "presentation galaxy",
+      "database",
+      "UMAP",
+      "active snapshot"
+    ],
+    "deliveryBoundary": {
+      "commit": false,
+      "push": false,
+      "pullRequest": false,
+      "release": false
+    }
+  },
+  "sourceIdentity": {
+    "snapshotId": "project-default:v20:1784365136031",
+    "paperCount": 25463,
+    "hotspotCount": 160,
+    "rawCoordinateHash": "192bf4e585f18819fb8d6874df5adb6de61f18c82753d8d08f8fda3617cc730d"
+  },
+  "implemented": {
+    "hotspotHierarchy": {
+      "coreCssPx": [
+        2.8,
+        5.2
+      ],
+      "opticalCssPx": [
+        5.5,
+        10
+      ],
+      "opticalAlphaMaximum": 0.1,
+      "overviewSphereSlots": 0,
+      "ambientExploreRule": "shared point source and PSF"
+    },
+    "visibilityEnvelope": {
+      "version": "agent-theory-visibility-v1",
+      "evaluationIntervalMs": 250,
+      "predictionHorizonSeconds": 6,
+      "paperHardFloor1440x900Balanced": 1200,
+      "hotspotHardFloor": 12,
+      "hotspotCellHardFloor": 5
+    },
+    "screenLod": {
+      "version": "agent-theory-screen-lod-v3",
+      "selectionOrder": "viewport first, guard band second",
+      "fixtureViewportSelected": 4340,
+      "fixtureViewportTarget": 4340,
+      "fixtureGuardBandSelected": 3556,
+      "runtimeGateCount": "viewportSelectedCount"
+    },
+    "exploreReturn": {
+      "entryAnchor": "frozen previous/current checkpoint, interpolation, position, quaternion, look target and framing",
+      "unchangedExit": "resume the exact frozen cruise state without a manufactured 1.6 second journey",
+      "changedExit": "C2 return to the proven entry checkpoint",
+      "renderMismatchRecovery": "800ms center-envelope recovery inside the same return-handoff controller",
+      "completionGate": "current viewport and future six-second papers, hotspots and cells plus stable depth and LOD"
+    },
+    "checkpoint": {
+      "visibilityVersion": "agent-theory-visibility-v1",
+      "legacyR4Restore": "seed and time may be preserved; camera framing must be revalidated"
+    }
+  },
+  "automatedEvidence": [
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_visibility_r5_audit.mjs",
+      "status": "PASS",
+      "checks": "14/14",
+      "simulation": "three deterministic 10-minute paths; minimum 4985 papers, 65 hotspots and 10 cells"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_screen_lod_worker_audit.mjs",
+      "status": "PASS",
+      "checks": "12/12"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_interaction_audit.mjs",
+      "status": "PASS",
+      "checks": "23/23"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_free_look_continuity_hotspots_audit.mjs",
+      "status": "PASS",
+      "checks": "25/25"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_perimeter_continuity_audit.mjs",
+      "status": "PASS",
+      "checks": "8/8"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_stellar_material_audit.mjs",
+      "status": "PASS",
+      "checks": "19/19"
+    },
+    {
+      "command": "node_modules/.bin/tsc -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "command": "node_modules/.bin/vite build",
+      "status": "PASS"
+    },
+    {
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+      "status": "PASS"
+    }
+  ],
+  "desktopEvidence": {
+    "environment": "Tauri development build, balanced window, low-load sampling",
+    "confirmed": [
+      "Ambient initialized with real papers",
+      "R5 hotspot point sources were visible in Ambient",
+      "Explore retained papers and displayed labels for real hotspots",
+      "the pre-anchor return bug was reproduced as a near-black return-handoff instead of being misreported as complete"
+    ],
+    "diagnosticFinding": [
+      "the old perceptible paper count included guard-band entities outside the viewport",
+      "the return completion gate rejected the near-black result",
+      "the old return target was manufactured even when Explore had no user camera input"
+    ],
+    "postFixStatus": "UNVERIFIED",
+    "reason": "the final automated desktop capture was stopped when foreground user activity made the returned screenshot no longer reliably correspond to the target application"
+  },
+  "userEvidence": [
+    "hotspots were absent in the R4 product build",
+    "R4 could cruise to a fully black view after Explore exit",
+    "entering Explore and immediately exiting without any interaction still made the static star field slide to black"
+  ],
+  "remainingAcceptance": [
+    "immediate unchanged Explore exit remains visually stationary",
+    "changed Explore exit returns continuously to the frozen safe anchor",
+    "three consecutive exits remain non-black for at least 30 seconds each",
+    "hotspot-system exit returns to the safe perimeter",
+    "immersive to theory round-trip restores a valid first frame",
+    "user accepts hotspot prominence and transition feel"
+  ],
+  "documentation": {
+    "canonicalDocsUpdated": [
+      "PROJECT.md",
+      "ROADMAP.md",
+      "STATUS.md",
+      "ARCHITECTURE.md",
+      "DECISIONS.md",
+      "DEVELOPMENT.md"
+    ],
+    "projectDocsAudit": "PASS"
+  }
+}

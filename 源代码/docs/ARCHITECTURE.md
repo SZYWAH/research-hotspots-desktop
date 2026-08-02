@@ -2,7 +2,7 @@
 
 状态：权威架构入口
 
-更新时间：2026-07-29
+更新时间：2026-08-02
 
 ## 现有基础
 
@@ -21,11 +21,177 @@ M1.3d 重新建立两种互不继承空间结构的产品背景：
 
 两种视图共享实体身份和快照身份，但不共享世界坐标解释器。M1.3d 完成两套静置背景和显式切换，但产品视觉未通过；M1.3e 在不改变该空间边界的前提下修订沉浸流动与 Agent 理论恒星材质。
 
+M1.3l 在 `immersive` 内部增加两种正式空间解释器，但仍共用无坐标身份载荷：
+
+```text
+AgentImmersiveBackgroundPayloadV2（身份、颜色、年份；无 XYZ）
+  → AgentImmersiveStyle
+      ├─ random-field（现有扁平随机空间＋两级 Curl）
+      └─ star-river（稳定对角样条骨架＋会话随机细节）
+           ├─ 6,000 真实论文＋160 真实热点
+           ├─ 同一 128×64 状态纹理中的约 2,000 暗微尘槽
+           └─ 单绘制调用的程序化星云薄带
+  → 分样式 elapsed/checkpoint
+  → 共享锐利恒星材质、聚焦身份和单渲染器切换门
+```
+
+`star-river` 的位置元数据只由 `sessionSeed + entityId + star-river-v1`生成，不携带热点质心或语义距离。样式切换延续逻辑实体和聚焦会话，但在黑色遮罩内释放旧渲染器并由新解释器重新捕获；两套世界坐标不做逐星插值。
+
+已落地的星河运动同时具有 GPGPU 与解析式路径。GPGPU 继续使用单个 `128×64` Ping-Pong 状态纹理：语义实体和 32 个动态焦点槽之后的 2,000 个槽位专用于无业务身份的暗微尘；位置目标由只读流带元数据重建，再叠加切线输运、局部 Curl、横截面回归、中央缓流和端部连续回转。随机星海保留原两级 Curl 代码路径与旧检查点兼容。语义星、微尘和程序化薄带是不同绘制层，性能降级不得降低语义星 DPR 或清晰核心。
+
+M1.3m 将 M1.3l-R1 的透明界面扩展为根级空间外壳。`SideraTitleBar(transparent)` 与 `agent-navigation-drawer` 成为所有页面唯一的标题栏和导航；普通工作页不再挂载永久 `sidebar-surface`。M1.3m-R1 将导航布局显式拆为两类：Agent、科研星图等空间页面使用 `spatial-overlay`，导航只覆盖 DOM；总览、文献、热点、报告和设置等密集工作页使用 `workbench-reserve`，导航展开时只改变工作表面的左右边界，背景画布及其 WebGL 尺寸保持不变。
+
+M1.3m-R2 将科研星图内部进一步拆为持久的 Renderer/Camera 生命周期与可替换 Scene Layer 生命周期。展示/理论模式只替换热点、论文、标签和模式材质层；当前相机姿态按源/目标场景尺度映射后在同一帧应用，模式变化不能再触发页面级 `fit`。科研星图 HUD 使用左侧折叠区、顶部工具条和单一 `GalaxyContextRail` 三个互斥安全区；详情轨道通过相机投影偏移让位，不能移动 DOM 画布或修改世界坐标。
+
+```text
+SideraShell
+  ├─ SideraTitleBar
+  ├─ SideraBackgroundHost
+  │    ├─ agent-immersive | agent-theory
+  │    ├─ workbench-star-river
+  │    ├─ research-galaxy
+  │    └─ pipeline-formation
+  ├─ current page / SideraAgentStage
+  ├─ SideraNavigationDrawer
+  └─ scene transition mask
+```
+
+当前实现以 `AgentDualBackgroundPage.shellPresentation` 提供 `agent / workbench / suspended` 三种根级展示状态：Agent 使用用户背景偏好；普通工作页复用 `star-river`，亮度为 `0.34`、速度为 `0.20`；科研星图挂载时将 Agent 背景置为 `suspended`，释放其 WebGL 子画布。工作页之间只切换内容，不重建星河。根壳通过 `data-navigation-open`、`data-navigation-layout` 与 `data-shell-scene`驱动 DOM 布局，`SideraChromeSafeArea` 统一标题栏高度、232px 导航宽度、24px 工作台间距和窗口控件占用宽度。科研星图的 React 业务状态保留，但 `App17GalaxyCanvas` 只在页面活动时挂载，并通过 `GalaxyCameraPose` 保存恢复姿态；产品空间模式直接启用沉浸展示参数，全屏开关只留给开发/经典回归。流水线通过 `SideraPipelineSpatialState` 发布运行、暂停、取消和完成状态；完整的聚类凝聚动画留给后续工作包。
+
 M1.3f 在理论背景内部进一步区分“原始理论空间”和“Agent 显示空间”。原始载荷与数据库仍保存未经修改的 XYZ；只有 `agent-theory` 渲染入口创建确定的纵深配置，并将同一显示变换一致应用于论文、热点、标签、拾取、相机拟合和热点进入。独立理论星图始终绕过该变换。
 
-M1.3g 在 Agent 显示空间之外增加“观察控制层”。它读取增强后的只读坐标构建 PCA 外围安全壳，但不改写任何实体位置。Ambient 相机由会话随机巡航控制器写入；Explore 继续由既有 Orbit/热点系统控制器写入；返回外围使用独立、有限时长的连续过渡。三个模式任意时刻只有一个相机写入者。
+M1.3g 在 Agent 显示空间之外增加“观察控制层”。它读取增强后的只读坐标构建 PCA 外围安全壳，但不改写任何实体位置。初版 Explore 曾继续使用既有 Orbit 控制器；M1.3g-R3 已将它替换为独立自由相机。Ambient、自由 Explore、返回与交接任意时刻只有一个相机写入者。
+
+M1.3h 在两套背景之上增加不解释世界坐标的共享聚焦控制层：
+
+```text
+AgentDualFocusIntent
+  → FocusCoordinator（revision、实体身份、模式、阶段）
+  → resolve_agent_dual_focus_scene（只读 SQLite）
+  → AgentDualFocusScene
+      ├─ ImmersiveFocusAdapter（会话流场、单侧凝聚、动态槽）
+      └─ TheoryFocusAdapter（真实 XYZ、外围定位、系统/论文进入）
+```
+
+`FocusCoordinator` 不保存沉浸或理论世界坐标。切换背景时只延续 `entityId`、聚焦模式、上下文、快照身份和逻辑阶段；新背景在黑色遮罩后从自己的 acquisition 开始。这样不会制造两套空间之间虚假的逐星连续性。
+
+实体解析一次最多处理 32 个身份，并明确区分 `sampled / snapshot-unsampled / active-only / missing`。数据库命令只读，返回标题等按需元数据与真实 V20 membership；背景常驻载荷仍不携带摘要或证据正文。
+
+理论聚焦适配器具有独立运行时就绪门。`enter-system / focus-paper / agent-focus-overview` 只在 App17 WebGL `onReady` 后发出，并用 focus revision 保证每个目标最多发出一次。材质时间线完成只代表视觉权重归零，不能直接向协调器报告 `idle`；只有论文近景、热点系统和 R10 精确相机返回全部完成后，理论适配器才释放协调器所有权。
+
+双背景页面只在理论概览且没有聚焦时持久化相机姿态。热点系统、论文近景和返回过程中的相机回调不能覆盖概览姿态，避免下一次背景恢复落入局部系统坐标。这样形成 `WebGLReady → FocusCommand → VisualRelease → NavigationRelease → R10Return → CoordinatorIdle` 的单向生命周期。
+
+M1.3i 保留上述解析与生命周期资产，但替换产品控制层。正式路径现在是：
+
+```text
+SideraAssistantMessage（streaming 阶段只渲染文字）
+  → complete + structured entityRefs
+  → resolve_agent_dual_focus_scene（revision 门、只读 SQLite）
+  → SideraFocusSession（messageId、最多 6 个候选、currentIndex、固定 side）
+      ├─ ImmersiveEvidenceStage
+      │    ├─ sampled：复用原论文/热点顶点
+      │    ├─ unsampled/active-only：复用稳定动态槽
+      │    └─ 共速相机捕获；不移动或重排上下文星
+      └─ TheoryEvidenceStage
+           ├─ 真实 XYZ 原位材质强调
+           ├─ 外围侧面相机构图
+           └─ 用户二次命令才进入 system / paper close-up
+  → EvidenceCard / Carousel / ExplicitClose
+  → R10 exact resume
+```
+
+`SideraFocusSession` 只保存回答、实体身份、当前索引、背景和固定侧别，不保存跨背景世界坐标。切换背景时在黑色短遮罩内释放旧渲染器，由新背景对同一实体重新捕获；任意时刻仍只有一个 WebGL 渲染器。
+
+回答 `streaming` 期间不能创建聚焦意图，也不能改变相机、背景压暗或实体材质。结构化引用既是正文直接入口，也是回答末尾轮播的事实来源；`missing` 只产生“本地库未找到”状态，不生成星体。信息卡元数据按需获取，不进入背景常驻载荷。
+
+M1.3h 的 `signal / soft-focus / full-focus` 自动触发和 24 颗上下文自动凝聚不再进入产品路径。其实体解析、顶点映射、动态槽、运行时就绪门和释放协调保留为 M1.3i 的底层适配器。
+
+M1.3j 再次收窄产品控制层。`SideraFocusTimelineSample` 是背景压暗、目标材质、相机和信息卡的唯一时间源；渲染器不得继续用 M1.3h 的三级时间线解释 `sidera-explicit`。理论论文聚焦由同一 revision 自动串联 `enter-system → focus-paper`，热点只执行 `enter-system`；信息卡不再发出二次深入命令。
+
+理论路由的所有权以“目标是否仍由当前局部导航处理”判断，而不是只检查最终 `focused`：同一论文处于 `entering / focused` 或系统处于 `paper-focus` 时，协调器不得发出 `return-system-center`。统一时间线完成后的状态映射也必须先检查 `sample.complete`，再解释旧的 `retargeting` 阶段；否则视觉已经接管的新目标会永久停留在过渡态。两项约束均来自 M1.3j 的真实 Tauri 运行时复验。
+
+```text
+Sidera explicit click
+  → resolve real entity
+  → SideraDirectFocusRoute
+      ├─ immersive: acquire same vertex/dynamic slot + co-moving camera
+      └─ theory:
+           paper → enter-system → focus-paper
+           hotspot → enter-system
+           active-only → unclassified peripheral focus
+  → hold / next target / release
+  → exact origin restore + R10 next fixed step
+```
+
+Agent 理论论文近景增加独立 `SphereGeometry` 光球通路。远距离点源/PSF、真实光球和拾取仍共享同一业务实体。近景由四层共享中心、身份和交接进度的光学几何构成：本体 Sphere 使用局部三维位置计算宏观输运、中尺度连通流丝和微观颗粒，并以不规则能量场调制白热核心；中/细尺度流丝使用 GLSL `fwidth` 将阈值宽度约束在屏幕像素尺度，避免世界空间固定阈值形成大块迷彩等值带；略微外扩的能量薄层以受限加法混合补足内部白热能量；独立 `PlaneGeometry` 只作为圆环片元的保守包围面，Fragment Shader 从当前 NDC、相机 FOV/Aspect、球心 View 坐标和真实世界半径重建相机射线，并用射线—球体判别式的 `tangentField = 0` 生成精确透视轮廓，随后以 `fwidth(tangentField)` 生成约 `1–1.5` 物理像素高温主线和极弱外肩部；96×64 日冕 Sphere 在顶点 Shader 中执行稳定噪声位移，再由 Fragment Shader 生成稀疏火舌。圆环不再由平面中心或平面世界半径决定位置，能够补偿近距离角半径放大和离轴轮廓中心偏移；它仍是同一恒星的屏幕空间光学层，不是业务实体或第二个三维球壳。独立分析理论星图继续使用原有论文近景实现。
 
 M1.3g-R1 明确渲染坐标契约：纵深增强后的 XYZ 先统一乘以 `APP15_THEORY_COORDINATE_SCALE`，外围剖面、巡航相机、论文与热点世界坐标、PSF 世界直径和真实光球半径全部消费同一单位。原始 XYZ 与数据库值不变；禁止外围控制器在原始单位、渲染器在缩放单位的双尺度运行。
+
+M1.3g-R2 已增加稳定屏幕 LOD 控制层和独立 Explore 枢轴/过渡层。全部论文身份和顶点继续常驻；屏幕 LOD 只改变逐顶点权重，balanced 同屏目标为 3,500–5,500 颗。Explore 枢轴从当前可见语义实体计算，外围巡航方向辅助点不再进入 Orbit 控制器。
+
+R2 的屏幕 LOD 与热/冷路径隔离已通过自动技术验证，但固定 Orbit 枢轴和轻微稳定构图未通过用户视觉验收。M1.3g-R3 已将 Agent 理论相机写入者改为：
+
+```text
+cruise
+  → explore-free
+  → returning
+  → return-handoff
+  → cruise
+```
+
+- `explore-free` 直接保存相机世界位置与视线，不使用固定中心；左拖改变 yaw/pitch，滚轮沿 forward 移动，Shift/中键沿局部平面平移。双击瞄准使用 500ms 有界过渡，任何手动输入都可连续取消。
+- 热点单击选择先进入 500ms 判定窗口；只有未发生双击时才进入热点系统。双击只执行自由相机瞄准，因此一次指针序列不会同时触发瞄准和热点进入。
+- Explore 的 reset / fit / top 不再只修改旧 Orbit 参数；它们使用相机位置 lerp 与四元数 slerp 恢复最佳、适配或顶视姿态，并保持自由相机状态连续。
+- `returning` 使用外围巡航的真实构图参数和独立注视速度建立 C2 返回；`return-handoff` 用 450ms 连续交接位置、方向、线速度与角速度。
+- 返回与 handoff 期间暂停深度目标切换和屏幕 LOD 重选，交接结束后才以空闲任务刷新；末帧使用真实热点世界位置作为参考，显式记录其投影误差与相机方向变化，避免诊断遗漏最终跃迁。
+- 巡航保存 previous/current 的 `1/60s` 固定步状态并按 accumulator 插值；每帧最多三步且积压限制为 100ms。深度范围使用 900ms 时间常数连续逼近。
+- 屏幕 LOD 在巡航中最多每 1.2s 空闲评估一次；选集变化不足 4% 时不交接，需要交接时使用 300ms 能量连续淡化。低可见度重构图要求持续 2s 且具有 8s 冷却。
+- 热点渲染独立于论文可辨识预算：Ambient 构图单独评估至少 16 个热点和 6 个屏幕区域，Sphere 槽位只允许视锥内热点占用。进入退场交接的 Sphere 在视觉衰减完成前继续持有所有权，current 与 retiring 合计仍不得超过 12；预算溢出时立即归还点源。
+
+上述 R3 路径自动技术验证通过，但用户实机确认拖拽时护栏外论文直到松手才补齐、长时巡航仍跳动、退出时视觉状态分批恢复、热点概览仍像圆片。M1.3g-R4 因此将运行结构替换为：
+
+```text
+Stable Paper Catalog（Worker 常驻）
+  + Camera localToClip / viewport / quality / masks
+  → ScreenLodWorker（±1.35 NDC，active 20Hz，idle 4Hz）
+  → revision gate（latest request wins）
+  → visible / incoming / retiring / resident typed arrays
+  → 90ms incoming + delayed retiring
+
+96-sector conservative envelope
+  → periodic cubic B-spline C2 shell
+  → full-entity radial safety validation
+  → analytic tangent / outward normal
+  → fixed-step cruise without runtime reframe
+
+Explore return
+  → prepare camera + depth + terminal LOD
+  → one atomic visual commit
+  → velocity-only return handoff
+
+Hotspot overview
+  → sharp core + non-circular PSF + stable short rays
+  → enter hotspot system
+  → final 400ms local photosphere crossfade
+```
+
+R3 交互性能历史实现采用“相机热路径与 LOD 冷路径分离”：
+
+- 拖拽、滚轮惯性、进入 Explore 和返回外围期间，只更新相机矩阵与既有 GPU 顶点，不执行 25,463 篇论文的重新投影、排序或权重交接。
+- 手势结束并稳定 140ms 后，通过空闲回调执行一次 LOD 重选；外围巡航的重选间隔下限为 750ms。
+- 已开始的 LOD 交接在手势期间暂停时间线，结束后从原进度继续；交接 CPU 循环只遍历实际变化的顶点。
+- Explore 入口复用既有 LOD 选择和预计算理论边界，不再为求枢轴二次扫描全部论文。
+- Explore 拖拽和缩放期间暂时隐藏标签，停稳并完成一次 LOD 刷新后再绘制，避免 2D 标签重绘与 WebGL 相机更新竞争主线程。
+
+R4 保留“不在主线程同步扫描全部论文”的约束，但不再冻结手势期间的选集。Worker 在交互期连续维护护栏实体，主线程只应用增量权重。Agent 理论 Ambient 的 24/18 FPS 人工节流被取消；性能降级优先降低非语义装饰和诊断频率，不得通过停掉或量化相机 RAF 制造卡顿。独立分析理论星图继续使用原有帧率策略。
+
+实际运行期中，Screen LOD Worker 只在 WebGL Shader、首帧错误和真实语义星视锥检查全部通过后初始化，并由画布资源生命周期唯一终止。客户端同时最多保留一个 Worker 执行中请求和一个最新待执行请求，新相机状态直接覆盖尚未执行的旧状态，避免 20Hz 拖拽产生过期计算队列。Worker 不可用或异常时，主线程以每个 RAF 最多约 1.5ms 的协作分块方式继续投影，结果在空闲槽提交，不能退回“拖拽冻结、松手补星”。返回路径在 handoff 结束前用终点相机预取论文集合并同步收敛深度；只有 Worker 和后备任务为零、深度误差不超过 1%、LOD 渐变完成且论文数与选集哈希连续稳定 500ms 后才进入巡航，完成后不再补写选集、深度目标或标签。
+
+R4 的上述返回事务只证明“视觉状态稳定”，不能证明“画面有内容”；其开放式巡航也没有运行期可见性约束。R5 已在观察控制层内加入单一写入者的连续可见性包络：有界论文样本与全部热点共同评估当前和未来 6 秒路径，巡航参数在同一控制器内缓变，不安全积分步直接保留最后安全检查点；Explore 自由相机继续绕过该约束。热点诊断同时从纯视锥计数升级为实际屏幕核心尺寸、能量和网格分散度计数。
+
+R5 还修正了“护栏居民等于视口可见”的错误语义。`agent-theory-screen-lod-v3` 先满足 `viewportTargetCount`，再把剩余预算放入 `±1.35 NDC` 护栏；完成门使用 `viewportSelectedCount`，屏外预加载实体只能保证拖拽连续性，不能证明当前画面有内容。若六秒预测与真实 WebGL/Screen LOD 计数仍不一致，`return-handoff` 在同一相机状态机中连续转向已验证的中心安全包络，并预取该终点 LOD；此过程不创建第二相机写入者，也不允许近空选集进入普通巡航。
+
+Explore 入口同时保存一份只读安全锚点：前后巡航检查点、插值进度、相机位置/方向、注视点和可见构图参数。退出时若相机相对锚点没有发生有效变化，状态直接从 `explore-free` 恢复到同一巡航姿态；发生交互后，C2 返回也优先以该锚点为终点，而不是从最终 Explore 位置的方位角临时制造一个未经验证的新外围终点。
 
 ## M1.3d 双背景数据流
 
@@ -111,17 +277,130 @@ App17GalaxyPayload（原始理论 XYZ，只读）
 Agent 增强显示 XYZ（只读）
   → APP15_THEORY_COORDINATE_SCALE（统一 Three.js 世界单位）
   → PCA 主平面
-  → 96 扇区真实外缘 + 保守包络 + 安全间隔
+  → 96 扇区真实外缘 + 周期 C2 安全壳 + 全实体验证
   → 会话随机 CruiseCheckpoint
-  → cruise / explore / returning 单一相机写入者
+  → cruise / explore-free / return-preparing / returning-anchor
+    单一相机写入者
+  → CruiseIntegrator（始终推进）→ VisibilityGuidance（只调方向与速度）
+  → Worker 护栏论文 LOD + 精确锚点返回视觉事务
   → 观测深度与投影视直径
-  → Point / PSF / Near-PSF / Sphere LOD
+  → 论文 Point / PSF / Near-PSF
+  → 热点概览 PSF / 系统内部 Photosphere
   → Agent 理论渲染器
 ```
 
 - 巡航检查点保存种子、固定步数、位置、速度、加速度、PRNG 状态和已访问扇区；背景往返时恢复同一会话路径。
-- 普通论文永不进入真实光球；近景热点最多占用 12 个共享实例槽。Sprite 与 Sphere 共享业务实体 ID、拾取来源和屏幕中心。
-- Explore 不重新布局、不自动切到最佳全图；最佳全图只作为 Explore 内显式“重置理论视图”命令。
+- 普通论文永不进入真实光球；Ambient/Explore 的热点也只使用 Point/PSF。用户进入热点系统后，局部光球才在最后约 400ms 接管；两种所有权共享业务实体 ID、拾取来源和屏幕中心。
+- Explore 不重新布局、不自动切到最佳全图；R3 改为无固定枢轴的自由观察，最佳全图只作为 Explore 内显式“重置理论视图”命令。
+
+### R6 Explore 精确锚点返回
+
+```text
+Explore entry
+  → freeze Camera(position/quaternion/FOV/near/far/zoom)
+  → freeze Cruise(previous/current/alpha/framing)
+  → freeze Depth(current/target)
+  → freeze LOD(selection/weights/hash/viewport/snapshot)
+
+Explore exit
+  → return-preparing
+       ├─ stop dolly/drag/aim inertia
+       ├─ resolve return-anchor LOD with projection signature
+       └─ prewarm currentSelection ∪ anchorSelection
+  → returning-anchor
+       ├─ position = lerp(start, anchor, smootherstep(t))
+       ├─ quaternion = slerp(start, anchor, smootherstep(t))
+       └─ dialog consumes the same RAF progress
+  → arrive exact anchor
+       ├─ atomically restore previous/current/alpha/accumulator
+       ├─ restore current + target Guidance and relative clocks
+       ├─ enter cruise immediately
+       ├─ publish idle after the first successful fixed step
+       └─ retire union to anchor selection over 300ms
+  → passive 3s post-return trajectory trace
+       └─ never changes camera, Guidance, depth or LOD ownership
+```
+
+自由相机最后几帧的速度和加速度不进入返回轨迹。相机运动不会越过起点—锚点线段；视口发生变化时只重算锚点 LOD，不重新推导锚点相机。Worker 请求必须同时匹配 `purpose`、投影矩阵签名和视口，旧 Explore/cruise 响应在返回阶段只能被丢弃。返回阶段再次进入 Explore 会从当前姿态继续自由观察，并保留最初安全锚点供下一次退出使用。
+
+### R7 交互与巡航生命期闭环
+
+R7 将标签、局部导航和巡航生命期纳入 Agent 理论包装层。热点标签只依赖热点投影与稳定碰撞状态，不再读取论文 LOD Worker 的 pending 状态；相机交互期间继续以受限频率更新，新的标签布局完整后才替换旧布局。
+
+Agent 页面消费画布发布的 `overview / system / paper` 导航状态，并以 nonce 命令调用既有 `return-system-center` 或 `exit-system`。Escape 使用相同的论文→热点→概览→退出层级。
+
+Explore 安全锚点除相机、深度和论文 LOD 外，还冻结巡航 accumulator、可见性引导、护栏快照和最后安全检查点。R8 不再冻结或恢复“推进许可”，因为可见性层没有停止积分器的权限；首个恢复固定步渲染后即可发布 `idle`。
+
+热点系统论文材质新增 `agent-theory` 可见度配置。它与分析/展示模式共享实体、几何和拾取身份，但使用独立的亮核、深度下限和聚焦上下文倍率；概览论文材质不经过该配置。
+
+实际实现中，标签状态由每个热点的 `opacity / targetOpacity / collisionFreePasses / collisionStartedAtMs` 保持；Canvas 只在显式关闭标签时清空。安全锚点的 `liveness` 同时保存 accumulator、推进/保存许可、护栏快照、最后安全检查点和 Ambient 时间。
+
+R7 的初版恢复证明只验证两个固定步并在证明期间暂停护栏；R7.1 虽把证明延长到 900ms 和两次护栏评估，仍保留了“护栏可拒绝固定步”的控制结构。真实桌面复验表明同一不安全检查点会被无限重复评估，从而形成稳定死锁。
+
+### R8 巡航生命期与可见性引导解耦
+
+```text
+CruiseIntegrator (1/60s, max 3 catch-up steps)
+  → always advance while Ambient is active
+  → previous/current checkpoint interpolation
+  → Camera
+
+Visibility sampling (4Hz, current + 6s horizon)
+  → normal | steering | fallback
+  → tangentWeight / verticalAimRatio / directionSign / speedScale
+  → CruiseIntegrator control input for the next step
+```
+
+`VisibilityGuidance` 不再返回可阻塞推进的布尔值。`normal / steering / fallback` 的速度目标保持非零，fallback 在无普通安全候选时连续减速、提高中心构图权重并平滑反向；角速度、线速度和加速度仍由同一巡航积分器连续积分，不传送检查点，也不创建第二相机写入者。检查点保存可继续受安全性约束，但保存失败不能影响运行时前进。
+
+返回锚点后恢复冻结的 guidance、previous/current、插值和 accumulator，并在同一帧进入 `cruise`。首个成功固定步结束输入栏与相机的返回状态。R10 已删除“900ms 审计失败调用 fallback”的返回专用路径；生命期和可见性仍在正常巡航中工作，但返回诊断只能记录事实，不能形成第二次控制接管。最高 4Hz 的只读生命期诊断记录 step delta、投影位移、连续静止时间和恢复次数，React 诊断不能反向控制相机。
+
+### R9 连续随机运动与 Worker 引导
+
+```text
+Session PRNG
+  → 4–7s random targets
+  → quintic envelopes + jerk-limited dynamics
+  → 1/60s previous/current checkpoints
+  → Hermite position + quaternion slerp
+  → Camera
+
+ScreenLodWorker (single instance)
+  ← immutable 2,048-paper / 160-hotspot guidance catalog
+  ← newest cruise-guidance request, max 2Hz
+  → tangent / vertical / direction / speed + depth percentiles
+  → 1.5s hold + 5% improvement hysteresis
+  → continuous VisibilityGuidance target
+```
+
+巡航随机性只生成连续目标，不直接改写 `verticalVelocity`、角速度或相机姿态。检查点 V2 保存目标起止步、角速度目标、垂直目标、切线目标和垂直加速度；旧检查点保留种子、步号、位置、速度、方位与访问扇区后原位迁移。
+
+Screen LOD 与巡航引导共享唯一 Worker 和任务队列。引导任务优先于普通 LOD，只允许一个执行中任务及每类一个最新待执行任务；旧 revision 只能被丢弃。Ambient 深度 P5/P50/P95 读取 Worker 结果，差异不足 1% 时忽略。Worker 故障时使用 `requestIdleCallback` 执行 512 篇、3 个未来时点、最高 1Hz 的降级预测，RAF 不同步扫描候选。
+
+### R10 Explore 返回后的单一巡航接管
+
+Explore 安全锚点在 R6 相机、深度和 LOD 基础上继续冻结：
+
+```text
+Cruise previous/current + interpolation alpha + accumulator
+  + Guidance current/target
+  + target-hold remaining time
+  + next Worker evaluation remaining time
+  + safe/unsafe counters + Worker epoch
+  + Depth current/target + LOD selection/hash
+    → Explore pause（logical time does not advance）
+    → exact anchor return
+    → atomic restore
+    → next fixed step of the frozen cruise
+```
+
+Explore 入口和锚点恢复各推进一次组件级 Worker epoch；请求闭包同时校验 epoch 与 revision。旧 Guidance 或 Screen LOD 响应即使在返回后到达，也只能计入丢弃诊断，不能改变相机、深度或论文集合。
+
+锚点后前三秒是只读轨迹观测窗：物理巡航继续从冻结检查点推进，但 Guidance Worker、空闲降级和返回专用 fallback 都不能重新构图。观测窗记录唯一相机写入者、Guidance 当前值/目标值/来源、Worker 接受与丢弃 revision、fallback 次数、LOD/深度哈希和参考实体轨迹残差。窗口结束后，Worker 按 Explore 入口保存的剩余调度时间恢复；Explore 停留时长不进入目标保持、安全持续时间或 Worker 间隔。
+
+Guidance 反向时，目标方向进入巡航积分器的限加加速度控制，运行态 `directionSign` 只随实际角速度过零更新，不在 Worker 接管帧直接翻转。Anchor LOD 的并集收敛只改变同一顶点的透明权重，不改变实体世界位置或相机。
+
+系统论文实际 Shader 配置通过性能快照公开基础透明度、亮核能量、深度衰减和聚焦上下文倍率。R7.1 继续只增强 `agent-theory` 局部系统，概览论文、分析理论星图和展示星图不读取该配置。
 
 ### Agent 理论真实 WebGL 就绪门
 
@@ -134,7 +413,7 @@ named Agent theory materials
   → onReady / remove switch mask
 ```
 
-任一步失败都会记录具体材质名称，停止该画布 RAF，禁止保存当前巡航检查点，并通过 `onRuntimeError` 显示“理论背景渲染失败”及重试入口。就绪门不得通过关闭 Three.js Shader 错误检查绕过。连续三帧真实语义可见比例低于 5% 时，巡航相机仍留在外围，只平滑重构图到有效包围盒，并记录 `perimeter-reframe`。
+任一步失败都会记录具体材质名称，停止该画布 RAF，禁止保存当前巡航检查点，并通过 `onRuntimeError` 显示“理论背景渲染失败”及重试入口。就绪门不得通过关闭 Three.js Shader 错误检查绕过。R4 只允许在首次就绪时确定性选择有效构图；巡航开始后不得因低可见度执行 `perimeter-reframe`、回看中心或启动第二相机写入者。
 
 `AgentTheoryDepthProfileV1` 的比例由快照坐标统计确定，限制在 `1.0–2.2`。增强载荷只存在于 Agent 页面内存，不写回数据库、快照或导出资源。Ambient 与 Explore 消费同一增强载荷，因此切换模式不替换坐标空间。
 
@@ -306,9 +585,113 @@ M1.2a 开发评审入口继续与默认应用隔离，提供引力、剪切、�
 
 开发评审模式支持只在固定时间截图时启用 `preserveDrawingBuffer`，并直接从 WebGL drawing buffer 导出 3840×2160 PNG；正常运行和视频模式不保留绘制缓冲。100% 星体裁切通过相机 `viewOffset` 重新渲染目标区域，不进行后期放大，避免浏览器界面缩放污染清晰度证据。PNG 保存端点仅在 Vite 开发服务器内启用，限制本机来源、文件名、PNG 文件头和文件大小，不属于生产 API。
 
+## 规划中的全文与机构来源边界
+
+状态：`PLANNED / NOT IMPLEMENTED`。以下内容只冻结模块边界，不代表当前存在数据库表、Tauri 命令、连接器或阅读器。
+
+```text
+用户上传 / 开放获取 / 浏览器合法下载 / 机构连接器
+  → SourcePolicyGate（来源、授权、许可与能力检查）
+  → AcquisitionRecord（URL、DOI、Provider、时间、访问方式、哈希）
+  → ImmutableDocumentStore（原始文件与版本）
+  → ExtractionPipeline（原生文本 / 页面 / 版面 / OCR / 图表）
+  → PageAnchoredSegments
+      ├─ FTS/BM25
+      ├─ E5 语义索引
+      ├─ ImmersiveReader
+      └─ ReadingAssistant（最小必要片段）
+```
+
+架构原则：
+
+- `PaperEntity` 与 `Document/DocumentVersion` 分离。一篇论文可关联多个文件版本；一个期刊卷期可以关联目录和多篇文章。
+- 原始文件不可变，解析、OCR、缩略图、索引和 AI 结果均为可重建派生数据；用户批注独立保存。
+- `PageAnchoredSegment` 必须携带文档版本、页码、章节、文本范围或页面坐标及提取置信度。
+- `SourceConnector` 必须声明能力，不存在可以登录任意校园网站并抓取全文的万能连接器。
+- 校园身份认证留在机构页面；凭据和 Cookie 不进入 Agent、文档库或日志。正式 API Token 才可进入 Windows Credential Manager。
+- 阅读侧栏通过 `ReadingContextScope` 明确消费选段、当前页、章节、文档或关联文献集合；外部模型默认只获得检索后的最小片段。
+- 所有下载结果先经过来源与文档治理，再进入阅读器和索引；连接器不能直接写论文正文或绕过入库审批。
+
+## M1.3m-R3 科研星图空间 Chrome
+
+产品科研星图的空间 UI 数据流收敛为：
+
+```text
+SideraTitleBar.toolsHost
+  ← React Portal ← GalaxyToolbarPopover / scene actions
+
+8px EdgeHotzone → 150ms arming → SideraNavigationDrawer
+
+Galaxy selection callbacks
+  → GalaxyContextRailState(one owner)
+  → hotspot | paper-summary | paper-reading
+  → viewportOffsetRatio(0 | 0.08)
+```
+
+常驻左侧筛选、左下图例和旧 `.galaxy-hud` 只允许经典/开发回归路径渲染。产品标题栏工具不拥有 Camera；它只能提交显式命令。详情轨道的热点、论文摘要与论文阅读共享一个判别联合状态，旧聚焦/面板回调只能派发状态转换，不能直接控制第二块 DOM 面板。
+
+## M1.3n Agent 运行中心
+
+```text
+Sidera Agent “更多”
+  → ActiveView = agent-runs
+  → workbench-star-river（复用根级单渲染器所有权）
+  → AgentRunCenter
+       ├─ InboxProjection（等待动作 → 活动 → 最近失败）
+       ├─ HistoryProjection（终态运行筛选）
+       ├─ RunDetail（计划 / 过程 / 成果）
+       └─ GovernanceDrawer（审批 / 用户问题 / 成果复核）
+  → AgentDesktopClient
+  → 既有 Tauri Agent Runtime / SQLite Agent 表
+```
+
+- `agent-runs` 是内部工作页视图，不进入一级导航；离开 Agent 时根壳保存原背景、相机与聚焦状态，返回时恢复。
+- 待办与历史是现有 Run 数据的只读投影，不新增状态机或数据库表。治理操作继续通过现有命令完成，前端不直接修改运行状态。
+- 手工创建器只构造 `research_report`；六类既有 `AgentRunKind` 仍用于历史呈现和审计兼容。专业失败运行只导航到对应工作页，不在运行中心复制专业执行流程。
+- Token、费用、租约、库修订、快照和 Registry 哈希属于按需技术详情；Artifact 的内容哈希、证据和复核状态保持不可变语义。
+
+## M2.0a Pi 基础会话链路
+
+```text
+SideraAgentStage
+  → SideraPiConversationController
+  → Tauri narrow commands
+  → SideraPiRuntimeState (single process/session/active turn)
+  → Node + Pi --mode rpc
+  → strict LF JSONL parser
+  → normalized sidera-pi-event stream
+  → one streaming SideraAssistantMessage
+```
+
+- Rust 拥有子进程、stdin/stdout/stderr、请求序号、活动回合与停止边界；React 不接触原始 Pi 事件，也没有通用 RPC 命令入口。
+- 每个应用会话使用隔离缓存目录和私有 `models.json`。真实 API Key 只通过子进程环境变量提供，配置文件仅包含环境变量引用；全局 `~/.pi/agent` 不可读写。
+- 当前能力是纯文本多轮会话。全部 Pi 工具、扩展、技能、模板和上下文文件关闭；本地论文库、文件、Shell、网页、结构化引用和星图聚焦不进入该链路。
+- Pi 会话只保存在内存中。离开 Agent 会中止正在生成的回合但不销毁进程上下文；进程崩溃后不自动重放请求，下次显式提交建立新会话。
+- `SideraPiRuntimeState` 只接受 `start_session / submit_prompt / abort_turn / get_status / stop_session` 五个窄命令。原始 RPC 响应和 `message_update` 不进入 React；Rust 将其规范化为带单调 `sequence/revision` 的 `session-ready / turn-start / assistant-delta / turn-complete / turn-cancelled / runtime-error`。
+- 子进程 stdout 只按 LF 分帧，CR 只允许作为行尾剥离；单条记录、提示词、累计回答与 stderr 诊断均有上限。Pi 崩溃或模型设置变化时销毁旧 epoch，旧事件不能写回当前消息，问题也不会自动重放。
+- 正式 Sidera 对话控制器在根级维护本次应用运行的用户消息、单条流式回答和活动回合引用；背景模式切换不拥有对话会话。开发回答夹具只在显式视觉评审参数下启用，普通启动不再混入模拟回答。
+
+## Sidera 桌面壳与冷启动门
+
+M1.3k 使用同一主 WebView 完成启动展示与应用运行，不创建第二个 Splash 窗口：
+
+```text
+BootDataGate
+  → AgentDualBackgroundPage mount
+  → immersive/theory renderer onReady
+  → SideraSplash fade-out
+  → normal Agent session
+```
+
+- `SideraSplash` 只覆盖冷启动，最短展示 1000ms；它等待真实数据与背景就绪，不以固定延时冒充加载完成。
+- `SideraTitleBar` 是唯一桌面窗口控制层。M1.3m 起 Agent、启动页、普通工作页和空间页面均使用透明材质；标题栏高度不参与画布或工作台布局，右上角控件通过安全区避让。
+- Tauri identifier、数据库路径与存储键不随 `productName=Sidera` 改名。窗口默认最大化、非独占全屏，关闭系统 decorations 后只开放拖动、最小化、切换最大化、关闭和状态读取权限。
+- `AgentDualBackgroundPage` 通过稳定的 `onInitialReady/onInitialError` 回调向启动门报告一次性背景结果；失败时可在不创建 WebGL 渲染器的情况下进入纯黑静态深空退路。回调引用稳定是生命周期不变量，根组件状态变化不得触发背景重新挂载。
+
 ## 兼容边界
 
 - 展示星图和理论星图继续使用现有实现。
 - UMAP-A/B/C 继续隔离。
-- 默认启动页在 M1 人工选择前不改变。
+- 旧“默认启动页在 M1 人工选择前不改变”的边界已由 M1.3k 的用户决策取代；普通桌面冷启动进入 Sidera Agent，视觉评审参数仍可覆盖入口。
 - M1.3c 无数据库迁移和发布资源变更；新增的 Tauri 实体解析命令为内部只读命令，不改变 Agent 后端协议或默认首页。
+- 全文阅读与校园图书馆连接器当前仅为规划，不改变现有 SQLite Schema、Agent 协议、凭据存储或默认导航。

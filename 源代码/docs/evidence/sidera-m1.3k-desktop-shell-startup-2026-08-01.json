@@ -1,0 +1,102 @@
+{
+  "workPackage": "M1.3k",
+  "title": "Sidera desktop shell, startup and default entry",
+  "generatedAt": "2026-08-01T13:18:00+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree preserved; no commit, push, PR or release",
+  "status": {
+    "implementation": "PASS",
+    "frontendAndStaticAudits": "PASS",
+    "cargoCheck": "NOT_RUN_SEPARATELY",
+    "nativeTauriAcceptance": "PARTIAL_PASS",
+    "productVisualAcceptance": "UNVERIFIED",
+    "m1_3jPhotosphereVisual": "UNVERIFIED"
+  },
+  "implemented": [
+    "normal cold start selects the full-screen Agent route",
+    "single-WebView Sidera boot state machine waits for the real background onReady gate",
+    "1000ms minimum splash visibility and 2000ms delayed local-knowledge status",
+    "retry, settings and static-background recovery paths",
+    "transparent Agent and solid work-page Sidera title bar",
+    "scoped native window controls and 38px safe area",
+    "maximized centered fallback, non-fullscreen and undecorated Tauri window",
+    "Sidera productName and title while retaining the existing application identifier",
+    "stable initial-ready callbacks that do not remount the background on parent renders"
+  ],
+  "automatedEvidence": [
+    {
+      "name": "TypeScript project build",
+      "command": ".\\node_modules\\.bin\\tsc.cmd -b",
+      "status": "PASS"
+    },
+    {
+      "name": "Vite production build",
+      "command": ".\\node_modules\\.bin\\vite.cmd build",
+      "status": "PASS",
+      "note": "1662 modules transformed; only the existing Tauri event chunk warning remained"
+    },
+    {
+      "name": "Sidera desktop shell audit",
+      "command": "node scripts/sidera_desktop_shell_audit.mjs",
+      "status": "PASS",
+      "checks": 11
+    },
+    {
+      "name": "Agent fullscreen shell audit",
+      "command": "node scripts/agent_fullscreen_shell_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "Agent dual-background audit",
+      "command": "node scripts/agent_dual_background_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "Project documentation audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "Whitespace validation",
+      "command": "git diff --check",
+      "status": "PASS",
+      "note": "CRLF conversion notices only"
+    }
+  ],
+  "browserShellEvidence": {
+    "status": "PASS",
+    "expectedDesktopPayloadFailureObserved": true,
+    "staticFallbackReachedAgent": true,
+    "navigationDrawerOverlayWorked": true,
+    "workPageTitlebar": "solid",
+    "agentTitlebarAfterReturn": "transparent",
+    "splashReplayedOnNavigation": false,
+    "consoleErrorsAfterFallback": 0
+  },
+  "nativeEvidence": {
+    "status": "PARTIAL_PASS",
+    "cargoBuildJobs": 2,
+    "incrementalCompileSeconds": 43.76,
+    "process": "research-hotspots-desktop.exe",
+    "windowTitle": "Sidera",
+    "visibleNativeWindow": true,
+    "defaultAgentVisible": true,
+    "immersiveBackgroundVisible": true,
+    "customTitlebarVisible": true,
+    "nativeWindowInteractionAcceptance": "UNVERIFIED"
+  },
+  "pendingEvidence": [
+    "user review of the native Sidera cold-start transition",
+    "native maximize, drag, double-click, minimize, restore and close controls",
+    "100%, 125% and 150% native DPI inspection",
+    "native restoration of the remembered theory background"
+  ],
+  "pendingReason": "Two unrelated Tauri/Cargo development tasks were active in other workspaces. The repository GPU/BSOD safety policy forbids starting a third Rust/native workload concurrently or terminating the other tasks.",
+  "identity": {
+    "productName": "Sidera",
+    "windowTitle": "Sidera",
+    "identifier": "com.local.research-hotspots-desktop",
+    "identifierChanged": false
+  }
+}

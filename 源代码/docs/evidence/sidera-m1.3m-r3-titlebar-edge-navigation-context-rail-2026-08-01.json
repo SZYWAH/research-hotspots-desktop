@@ -1,0 +1,81 @@
+{
+  "workPackage": "M1.3m-R3",
+  "title": "Sidera 科研星图顶部工具化、边缘导航与详情轨道修复",
+  "date": "2026-08-01",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree",
+  "status": {
+    "implementation": "PASS",
+    "automaticTechnical": "PASS",
+    "tauriVisual": "UNVERIFIED",
+    "productVisual": "UNVERIFIED"
+  },
+  "implementation": {
+    "productPersistentLeftHudCount": 0,
+    "titlebarToolHost": "React Portal",
+    "edgeNavigation": {
+      "widthPx": 8,
+      "dwellMs": 150,
+      "autoCloseDelayMs": 220,
+      "keyboardShortcut": "Alt+N",
+      "closeActions": ["outside-click", "navigation-complete", "Escape", "Alt+N"]
+    },
+    "contextRail": {
+      "stateOwnerCount": 1,
+      "modes": ["closed", "hotspot", "paper-summary", "paper-reading"],
+      "entityIdentityInState": true,
+      "viewportOffsetRatio": 0.08
+    },
+    "cameraLifecyclePreserved": true,
+    "automaticFitOnModeSwitch": 0
+  },
+  "checks": [
+    {
+      "command": "pnpm build",
+      "status": "PASS",
+      "notes": "TypeScript and Vite production build completed."
+    },
+    {
+      "command": "pnpm audit:sidera-galaxy-spatial-ui-r3",
+      "status": "PASS",
+      "notes": "Titlebar tool host, edge navigation, single rail state and persistent camera source invariants passed."
+    },
+    {
+      "command": "pnpm audit:sidera-unified-shell && pnpm audit:sidera-background-ownership && pnpm audit:sidera-spatial-pages",
+      "status": "PASS",
+      "notes": "Edge-only navigation, single-renderer ownership and exclusive research-galaxy scene invariants passed."
+    },
+    {
+      "command": "pnpm audit:project-docs",
+      "status": "PASS",
+      "notes": "The six canonical project documents and M1.3m-R3 evidence are consistent."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "notes": "No whitespace errors; only existing Windows LF/CRLF conversion warnings were reported."
+    },
+    {
+      "command": "cargo check -j 2",
+      "status": "DEFERRED",
+      "notes": "Two existing Cargo processes were active during closeout; no concurrent Rust build was started under the GPU and memory safety policy."
+    }
+  ],
+  "deferred": [
+    "Tauri balanced edge hover and false-positive review",
+    "titlebar collision review at 1100/1440/1920 and 100/125/150 percent scale",
+    "twenty hotspot-paper-reading-return cycles",
+    "native product visual acceptance"
+  ],
+  "boundaries": {
+    "databaseChanged": false,
+    "umapChanged": false,
+    "theoryXyzChanged": false,
+    "agentBackgroundChanged": false,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

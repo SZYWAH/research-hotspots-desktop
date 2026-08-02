@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "sidera-m1.3m-evidence-v1",
+  "generatedAt": "2026-08-01T15:40:00+08:00",
+  "workPackage": "M1.3m",
+  "title": "Sidera unified spatial shell",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "status": {
+    "implementation": "PASS",
+    "automatedTechnical": "PASS",
+    "tauriLowLoad": "PARTIAL_PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "implemented": [
+    "root scene and renderer ownership contracts",
+    "global transparent title bar and overlay navigation",
+    "workbench star-river presentation with 0.18 brightness and 0.20 speed",
+    "single floating workbench surface across ordinary pages",
+    "exclusive research-galaxy canvas with retained React state and camera pose",
+    "pipeline spatial ownership and progress contract"
+  ],
+  "automatedEvidence": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "cargoCheckJ2": "PASS (5.33s)",
+    "audit:sidera-unified-shell": "PASS",
+    "audit:sidera-background-ownership": "PASS",
+    "audit:sidera-workbench-surfaces": "PASS",
+    "audit:sidera-spatial-pages": "PASS",
+    "audit:sidera-desktop-shell": "PASS",
+    "audit:agent-fullscreen-shell": "PASS",
+    "audit:project-docs": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "nativeObservations": [
+    "Agent star-river rendered beneath the transparent global title bar",
+    "navigation opened over Agent without blur, dimming, or canvas resize",
+    "literature workbench rendered as one floating surface over the dim star-river",
+    "navigation opened over the workbench without moving the workbench",
+    "research galaxy became the sole visible spatial canvas without a second shell starfield",
+    "navigation opened over research galaxy without changing its camera composition",
+    "returning to Agent restored the star-river successfully"
+  ],
+  "unverifiedNativeCases": [
+    "Agent theory background to workbench and exact theory camera restoration",
+    "random-field checkpoint restoration through a workbench visit",
+    "pipeline-formation ownership during a live clustering run",
+    "100%, 125%, and 150% scale visual comparison",
+    "longer runtime WebGL and duplicate RAF diagnostics"
+  ],
+  "dataInvariants": {
+    "databaseSchemaChanged": false,
+    "theoryCoordinatesChanged": false,
+    "umapChanged": false,
+    "activeSnapshotChanged": false,
+    "agentBackendProtocolChanged": false
+  },
+  "gitActions": {
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

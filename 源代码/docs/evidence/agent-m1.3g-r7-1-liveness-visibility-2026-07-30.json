@@ -1,0 +1,63 @@
+{
+  "workPackage": "M1.3g-R7.1",
+  "generatedAt": "2026-07-30T15:25:41+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree preserved; no commit, push, PR or release",
+  "status": {
+    "technical": "PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "supersedes": {
+    "workPackage": "M1.3g-R7",
+    "reason": "The former two-step proof completed before the first live visibility-guard cycle and therefore did not prove sustained cruise."
+  },
+  "userAcceptanceBeforeFix": {
+    "stableHotspotLabels": "PASS",
+    "hierarchicalReturnNavigation": "PASS",
+    "sustainedCruiseAfterExplore": "FAIL",
+    "systemPaperVisibility": "PARTIAL"
+  },
+  "cruiseResume": {
+    "minimumDurationMs": 900,
+    "minimumSuccessfulFixedSteps": 30,
+    "minimumSafeGuardEvaluations": 2,
+    "minimumProjectedMovementPx": 0.15,
+    "guardRunsDuringProof": true,
+    "safeCandidateCanAuthorizeAdvance": true,
+    "checkpointSaveStillRequiresCurrentFramingSafe": true
+  },
+  "agentTheorySystemPaperVisibility": {
+    "baseAlpha": 0.82,
+    "minimumPointSizeCssPx": {
+      "far": 2.9,
+      "middle": 3.1,
+      "near": 3.25
+    },
+    "maximumPointSizeCssPx": 5.0,
+    "depthBrightnessFloor": 0.94,
+    "depthSizeFloor": 0.96,
+    "focusContextBrightness": 0.68,
+    "focusNeighborBrightness": 0.8,
+    "stableCoreDiameterPhysicalPixels": 1.2,
+    "stableCoreEnergy": 0.74,
+    "scope": "agent-theory hotspot system only"
+  },
+  "validation": {
+    "pnpmBuild": "PASS",
+    "transformedModules": 1653,
+    "agentTheoryR7AuditV2": "PASS 13/13",
+    "agentTheoryR6Audit": "PASS",
+    "agentTheoryR5Audit": "PASS",
+    "desktopSustainedCruise": "UNVERIFIED",
+    "desktopSystemPaperVisibility": "UNVERIFIED"
+  },
+  "unchanged": [
+    "immersive background",
+    "Agent theory overview paper material",
+    "analysis theory galaxy",
+    "display galaxy",
+    "raw theory XYZ",
+    "database and active snapshot"
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "workPackage": "M1.3h",
+  "title": "双背景动态语义聚焦闭环",
+  "generatedAt": "2026-07-30",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "status": {
+    "technical": "PASS",
+    "desktopLowLoad": "PARTIAL_PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "frozenBaseline": {
+    "m13gR10UserVisual": "PASS",
+    "perimeterCruiseChanged": false,
+    "exploreControlsChanged": false,
+    "overviewStarMaterialChanged": false,
+    "theoryCoordinatesChanged": false
+  },
+  "limits": {
+    "primary": 1,
+    "evidence": 5,
+    "context": 24,
+    "resolvedEntities": 30,
+    "dynamicSlots": 32
+  },
+  "implementation": {
+    "fullscreenAgentShell": true,
+    "overlayNavigationDrawer": true,
+    "revisionGatedCoordinator": true,
+    "readOnlyDualFocusResolver": true,
+    "memberships": [
+      "sampled",
+      "snapshot-unsampled",
+      "active-only",
+      "missing"
+    ],
+    "immersiveSameVertexFocus": true,
+    "immersiveOneSidedContext": true,
+    "immersiveDynamicEntitySlots": true,
+    "theoryPerimeterSignalAndSoftFocus": true,
+    "theoryFullFocusSystemEntry": true,
+    "theoryFullFocusPaperEntry": true,
+    "crossBackgroundIdentityRetention": true,
+    "developmentFocusPanel": true
+  },
+  "runtimeDefectsFoundAndFixed": [
+    {
+      "defect": "理论聚焦命令可能在 WebGL 就绪前发出并被消费",
+      "fix": "命令由真实 onReady 门和 revision 幂等门共同控制"
+    },
+    {
+      "defect": "材质释放时间线结束后过早向协调器报告 idle",
+      "fix": "理论适配器只在论文、系统和 R10 相机返回完成后报告 idle"
+    },
+    {
+      "defect": "论文或热点近景相机可能覆盖概览保存姿态",
+      "fix": "聚焦存在或导航层级不是 overview 时禁止持久化概览相机"
+    }
+  ],
+  "automatedVerification": {
+    "typescript": "PASS",
+    "viteProductionBuild": {
+      "status": "PASS",
+      "modules": 1655,
+      "durationSeconds": 20.78
+    },
+    "cargoCheckJobs2": "PASS",
+    "agentDualFocusAudit": "PASS",
+    "agentFocusResolverAudit": "PASS",
+    "agentFullscreenShellAudit": "PASS",
+    "agentTheoryR10Regression": "PASS",
+    "agentTheoryR8Regression": "PASS",
+    "agentTheoryR9Regression": "PASS",
+    "projectDocumentationAudit": "PASS"
+  },
+  "desktopLowLoadVerification": [
+    {
+      "scenario": "Agent 全屏壳层与悬浮导航",
+      "result": "PASS",
+      "evidence": "固定侧栏未占用 Agent 视口；抽屉覆盖打开，Escape 可关闭"
+    },
+    {
+      "scenario": "sampled 论文跨背景 full-focus",
+      "result": "PASS",
+      "evidence": "沉浸背景同一真实论文发起聚焦；切换理论背景后进入所属热点系统并进入论文近景"
+    },
+    {
+      "scenario": "理论 full-focus 释放",
+      "result": "PASS",
+      "evidence": "运行时依次恢复为 paper/system/overview，最终 phase=idle；随后外围巡航继续运动"
+    },
+    {
+      "scenario": "active-only 动态论文",
+      "result": "PASS",
+      "evidence": "fixture:active-only:paper-001 使用预分配 slot=0，完成 full-focus 与连续释放"
+    },
+    {
+      "scenario": "missing 实体",
+      "result": "PASS",
+      "evidence": "返回 AGENT_DUAL_FOCUS_PRIMARY_MISSING；vertex 与 slot 均为空，不生成星体"
+    }
+  ],
+  "remainingProductAcceptance": [
+    "沉浸背景单侧上下文凝聚的视觉构图仍需用户判断",
+    "signal 与 soft-focus 的主观强度和节奏仍需用户判断",
+    "小中大热点和最多五证据、二十四上下文的视觉密度仍需用户判断",
+    "窗口变化、减少动态和连续五轮切换仍需用户完整实机验收"
+  ],
+  "boundaries": {
+    "thinkingAnswerReadingStatesImplemented": false,
+    "formalAgentBackendConnected": false,
+    "defaultStartupChanged": false,
+    "databaseSchemaChanged": false,
+    "umapChanged": false,
+    "activeSnapshotChanged": false,
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

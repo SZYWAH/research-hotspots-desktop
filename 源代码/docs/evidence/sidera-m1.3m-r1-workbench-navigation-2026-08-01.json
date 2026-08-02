@@ -1,0 +1,51 @@
+{
+  "workPackage": "M1.3m-R1",
+  "title": "Sidera 工作台可读性与全局控件安全区修订",
+  "date": "2026-08-01",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree",
+  "scope": {
+    "preserved": [
+      "M1.3m 单渲染器所有权",
+      "Agent 背景偏好与检查点",
+      "科研星图独占空间",
+      "理论 XYZ 与数据库"
+    ],
+    "changed": [
+      "标题栏品牌旁唯一导航入口",
+      "密集工作页 workbench-reserve",
+      "工作页星河亮度 0.34",
+      "rgba(0,0,0,0.94) 工作台表面",
+      "产品科研星图移除全屏按钮",
+      "统一窗口控件安全区"
+    ]
+  },
+  "implementation": {
+    "navigationWidthPx": 232,
+    "workbenchGapPx": 24,
+    "reserveTransitionMs": 240,
+    "workbenchBackgroundBrightness": 0.34,
+    "workbenchBackgroundSpeedScale": 0.2,
+    "workbenchSurfaceAlpha": 0.94,
+    "productGalaxyFullscreenButton": false,
+    "activeRendererLimit": 1
+  },
+  "verification": {
+    "typescript": "PASS",
+    "auditSideraWorkbenchNavigationR1": "PASS",
+    "auditSideraUnifiedShell": "PASS",
+    "auditSideraWorkbenchSurfaces": "PASS",
+    "auditSideraSpatialPages": "PASS",
+    "viteProductionBuild": "PASS",
+    "cargoCheckJ2": "DEFERRED_EXISTING_CARGO_PROCESSES",
+    "projectDocumentationAudit": "PASS",
+    "gitDiffCheck": "PASS",
+    "tauriProductVisual": "UNVERIFIED"
+  },
+  "status": {
+    "technical": "PARTIAL_PASS_RUST_DEFERRED",
+    "productVisual": "UNVERIFIED"
+  },
+  "commit": null
+}

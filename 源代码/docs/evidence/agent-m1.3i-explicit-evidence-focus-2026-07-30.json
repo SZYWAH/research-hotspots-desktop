@@ -1,0 +1,75 @@
+{
+  "workPackage": "M1.3i",
+  "title": "Sidera 回答后显式证据聚焦与信息台",
+  "date": "2026-07-30",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e",
+  "worktree": "dirty",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "technical": "PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "supersedes": {
+    "workPackage": "M1.3h",
+    "productConclusion": "FAIL / SUPERSEDED",
+    "reusedAssets": [
+      "read-only entity resolver",
+      "sampled vertex identity",
+      "32 stable dynamic slots",
+      "dual-background identity coordination",
+      "R10 exact theory-camera resume",
+      "fullscreen Agent shell and overlay navigation drawer"
+    ]
+  },
+  "implemented": [
+    "structured Sidera assistant message and entity-reference contract",
+    "complete-and-resolved activation gate",
+    "bounded six-entity non-looping carousel",
+    "historical answer focus groups and overflow chooser",
+    "fixed-width conversation panel and fixed-slot controls",
+    "opposite-side evidence information card",
+    "same-entity background switching and explicit deep navigation",
+    "immersive same-vertex common-velocity capture without context relocation",
+    "theory perimeter-only initial focus with read-only XYZ",
+    "main target, five weak evidence entities, static non-closed corona arcs",
+    "continuous 40-45 percent background energy floor"
+  ],
+  "constraints": {
+    "formalAgentBackendConnected": false,
+    "defaultStartupChanged": false,
+    "databaseSchemaChanged": false,
+    "theoryCoordinatesChanged": false,
+    "committed": false,
+    "pushed": false
+  },
+  "verification": {
+    "audit:sidera-explicit-focus": "PASS",
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheck": "PASS",
+    "audit:agent-dual-focus": "PASS",
+    "audit:agent-focus-resolver": "PASS",
+    "audit:agent-fullscreen-shell": "PASS",
+    "audit:agent-immersive-flow": "PASS",
+    "audit:agent-theory-stellar-material": "PASS",
+    "audit:agent-theory-perimeter-lod": "PASS",
+    "audit:agent-theory-perimeter-continuity": "PASS",
+    "audit:agent-theory-r10": "PASS",
+    "audit:project-docs": "PASS",
+    "gitDiffCheck": "PASS",
+    "tauriBalanced": "PARTIAL PASS",
+    "userVisual": "UNVERIFIED"
+  },
+  "tauriObserved": [
+    "streaming answer kept the structured citation disabled and focus runtime idle",
+    "complete structured answer opened a single-entity evidence stage with an opposite-side real metadata card",
+    "single-entity focus control transformed into close and release restored the theory cruise",
+    "overflow fixture exposed eleven structured references and a view-all entry"
+  ],
+  "notes": [
+    "Streaming answers must not change camera, background energy, or entity material.",
+    "Only structured and successfully resolved entity IDs create focus entries.",
+    "M1.3h automatic signal/soft/full and 24-star context gathering remain outside the product path."
+  ]
+}

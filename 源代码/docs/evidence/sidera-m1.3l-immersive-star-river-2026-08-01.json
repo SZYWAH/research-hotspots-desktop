@@ -1,0 +1,129 @@
+{
+  "workPackage": "M1.3l",
+  "title": "Sidera 双沉浸样式与流动知识星河",
+  "recordedAt": "2026-08-01",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "status": {
+    "implementation": "PASS",
+    "automatedValidation": "PASS",
+    "nativeLowLoad": "PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "implementation": {
+    "styles": [
+      "star-river",
+      "random-field"
+    ],
+    "defaultStyle": "star-river",
+    "layoutVersion": "star-river-v1",
+    "stateTexture": [
+      128,
+      64
+    ],
+    "semanticPapers": 6000,
+    "hotspots": 160,
+    "dynamicFocusSlots": 32,
+    "darkDustSlots": 2000,
+    "nebulaRibbonDrawCalls": 1,
+    "theoryCoordinatesConsumed": false,
+    "rendererConcurrencyMaximum": 1
+  },
+  "metrics": {
+    "composition": {
+      "main": 4450,
+      "branch": 1153,
+      "outer": 557,
+      "mainRatio": 0.7224025974025974,
+      "branchRatio": 0.1871753246753247,
+      "outerRatio": 0.09042207792207792
+    },
+    "fiveSecondMovementPx": {
+      "median": 6.233501363932904,
+      "p75": 9.617721606545826,
+      "p95": 14.478914319876228
+    },
+    "globalDirectionality": 0.005601408083587604,
+    "localTangentAlignment": 0.6319000970385287,
+    "centralCalmSpeedRatio": 0.6810610809773077,
+    "deterministicCoordinateHash": "2fa5a0e51390e3b6037367995da9748a820106bcde34c02da25c6a52cc65d001"
+  },
+  "checks": [
+    {
+      "name": "TypeScript project build",
+      "status": "PASS",
+      "command": ".\\node_modules\\.bin\\tsc.cmd -b --pretty false"
+    },
+    {
+      "name": "Vite production build",
+      "status": "PASS",
+      "command": ".\\node_modules\\.bin\\vite.cmd build"
+    },
+    {
+      "name": "Rust incremental check",
+      "status": "PASS",
+      "command": "cargo check -j 2"
+    },
+    {
+      "name": "Star-river deterministic and motion audit",
+      "status": "PASS",
+      "command": "node --experimental-strip-types scripts/sidera_immersive_star_river_audit.mjs"
+    },
+    {
+      "name": "Existing random-field motion regression",
+      "status": "PASS",
+      "command": "node scripts/agent_immersive_flow_audit.mjs"
+    },
+    {
+      "name": "Dual-background regression",
+      "status": "PASS",
+      "command": "node scripts/agent_dual_background_audit.mjs"
+    },
+    {
+      "name": "Desktop shell regression",
+      "status": "PASS",
+      "command": "node scripts/sidera_desktop_shell_audit.mjs"
+    },
+    {
+      "name": "Explicit-focus regression",
+      "status": "PASS",
+      "command": "node scripts/sidera_explicit_focus_audit.mjs"
+    },
+    {
+      "name": "Project documentation audit",
+      "status": "PASS",
+      "command": "node scripts/project_documentation_audit.mjs"
+    }
+  ],
+  "nativeValidation": {
+    "mode": "Tauri balanced low-load window",
+    "windowTitle": "Sidera",
+    "webglFirstFrame": "PASS",
+    "shaderFailureSurfaceShown": false,
+    "styleControlVisible": true,
+    "styleRoundTrip": [
+      "star-river",
+      "random-field",
+      "star-river"
+    ],
+    "randomFieldRendered": true,
+    "starRiverRendered": true,
+    "longDurationOrStressTest": false
+  },
+  "boundaries": {
+    "databaseChanged": false,
+    "theoryBackgroundChanged": false,
+    "theoryCoordinatesChanged": false,
+    "umapChanged": false,
+    "agentBackendChanged": false,
+    "committed": false,
+    "pushed": false,
+    "released": false
+  },
+  "remaining": [
+    "User visual acceptance of the river composition, density, motion, dust, and ribbons.",
+    "Long-duration, fullscreen, 4K, and GPU stress tests remain intentionally excluded by the device-protection policy.",
+    "Cross-style focus capture requires product-level visual acceptance with a real focus fixture."
+  ]
+}

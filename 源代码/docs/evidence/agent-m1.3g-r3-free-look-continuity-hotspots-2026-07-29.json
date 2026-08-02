@@ -1,0 +1,209 @@
+{
+  "workPackage": "M1.3g-R3",
+  "title": "Agent theory free-look, cruise continuity and hotspot hierarchy",
+  "generatedAt": "2026-07-29T20:40:00+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e",
+  "worktree": "dirty",
+  "releaseState": {
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "published": false
+  },
+  "status": {
+    "implementation": "PASS",
+    "automatedTechnicalValidation": "PASS",
+    "tauriLowLoad": "PARTIAL_PASS",
+    "userVisual": "UNVERIFIED",
+    "overallStage": "IN_PROGRESS"
+  },
+  "scope": {
+    "included": [
+      "free-look Explore camera",
+      "C2 return and 450ms return-handoff",
+      "fixed-step cruise render interpolation",
+      "smoothed depth staging and idle screen LOD",
+      "independent hotspot visual hierarchy",
+      "bounded near-paper core enhancement"
+    ],
+    "unchanged": [
+      "immersive background",
+      "original theory XYZ",
+      "independent theory galaxy",
+      "presentation galaxy",
+      "database schema",
+      "UMAP and active snapshot",
+      "formal research Agent backend"
+    ]
+  },
+  "snapshot": {
+    "id": "project-default:v20:1784365136031",
+    "paperCount": 25463,
+    "hotspotCount": 160,
+    "rawCoordinateSha256": "192bf4e585f18819fb8d6874df5adb6de61f18c82753d8d08f8fda3617cc730d"
+  },
+  "implementationFacts": {
+    "cameraModes": [
+      "cruise",
+      "explore-free",
+      "returning",
+      "return-handoff"
+    ],
+    "freeLook": {
+      "sensitivityDegreesPerCssPixel": 0.12,
+      "pitchLimitDegrees": 85,
+      "aimDurationMs": 500,
+      "maximumTheoryBoundsMultiplier": 1.5,
+      "hotspotSingleClickDelayMs": 500,
+      "singleClickAndDoubleClickMutuallyExclusive": true,
+      "viewPresetTransition": "position-lerp-and-quaternion-slerp",
+      "viewPresets": [
+        "reset",
+        "fit",
+        "top"
+      ]
+    },
+    "return": {
+      "handoffDurationMs": 450,
+      "positionAndLookVelocitiesSeparated": true,
+      "lodAndDepthRefreshDeferred": true
+    },
+    "cruise": {
+      "fixedStepSeconds": 0.016666666666666666,
+      "maximumStepsPerFrame": 3,
+      "maximumAccumulatedSeconds": 0.1,
+      "renderInterpolation": true
+    },
+    "depthAndScreenLod": {
+      "maximumDepthSamplePapers": 2048,
+      "depthResponseSeconds": 0.9,
+      "cruiseLodIntervalMs": 1200,
+      "selectionChangeThreshold": 0.04,
+      "crossfadeDurationMs": 300,
+      "reframeDwellMs": 2000,
+      "reframeCooldownMs": 8000
+    },
+    "hotspots": {
+      "ambientMinimumVisible": 16,
+      "ambientMinimumScreenRegions": 6,
+      "coreCssPx": [
+        2.6,
+        6
+      ],
+      "opticalCssPx": [
+        4.5,
+        9
+      ],
+      "sphereEnterCssPx": 12,
+      "sphereExitCssPx": 9,
+      "maximumSphereSlots": 12,
+      "offFrustumSphereSlotsAllowed": 0,
+      "retiringSphereRetainsOwnership": true,
+      "currentAndRetiringShareMaximumBudget": true,
+      "overflowFallsBackToPointSource": true
+    },
+    "nearPaper": {
+      "minimumCssPx": 2.06,
+      "minimumAlpha": 0.86,
+      "maximumSizeMultiplier": 1.06,
+      "maximumCoreRadiance": 1.12,
+      "maximumOpticalAlpha": 0.15,
+      "coreRadianceUsesNearnessBlend": true
+    },
+    "continuityDiagnostics": {
+      "returnFinalFrameProjectionErrorRecorded": true,
+      "handoffFinalFrameProjectionErrorRecorded": true,
+      "returnFinalFrameDirectionDeltaRecorded": true,
+      "handoffFinalFrameDirectionDeltaRecorded": true,
+      "referenceSource": "real-hotspot-world-position"
+    }
+  },
+  "automatedValidation": [
+    {
+      "name": "direct TypeScript build",
+      "status": "PASS"
+    },
+    {
+      "name": "direct Vite production build",
+      "status": "PASS"
+    },
+    {
+      "name": "cargo check -j 2",
+      "status": "PASS"
+    },
+    {
+      "name": "agent theory R3 audit",
+      "status": "PASS",
+      "checksPassed": 25,
+      "checksTotal": 25
+    },
+    {
+      "name": "agent theory interaction audit R3",
+      "status": "PASS"
+    },
+    {
+      "name": "agent theory perimeter audit R3",
+      "status": "PASS"
+    },
+    {
+      "name": "galaxy visual invariants",
+      "status": "PASS"
+    },
+    {
+      "name": "theory camera audit",
+      "status": "PASS"
+    },
+    {
+      "name": "hotspot transition audit",
+      "status": "PASS"
+    },
+    {
+      "name": "dual background audit",
+      "status": "PASS"
+    },
+    {
+      "name": "agent theory stellar material audit",
+      "status": "PASS"
+    },
+    {
+      "name": "project documentation audit at implementation start",
+      "status": "PASS"
+    },
+    {
+      "name": "project documentation audit after R3 closeout",
+      "status": "PASS"
+    }
+  ],
+  "environmentNotes": [
+    "pnpm exec shim was abnormal; direct project-local tsc and vite commands passed.",
+    "pnpm Store was not cleaned or reinstalled.",
+    "GPU protection remained active; no fullscreen, 4K recording or stress test was run."
+  ],
+  "tauriEvidence": {
+    "status": "PARTIAL_PASS",
+    "verified": [
+      "Agent theory stars were visible in the desktop development build.",
+      "Dragging in Explore visibly changed the composition.",
+      "The stars remained visible after Explore dragging, confirming free-look was active."
+    ],
+    "unverified": [
+      "wheel dolly",
+      "Shift-left and middle-button pan",
+      "double-click aim and manual cancellation",
+      "complete return-handoff from ordinary Explore",
+      "complete return after hotspot-system exit",
+      "final hotspot hierarchy appearance",
+      "final near-paper brightness appearance",
+      "overall user visual acceptance"
+    ],
+    "stopReason": "User input was detected, so further automated GUI interaction was stopped."
+  },
+  "constraints": {
+    "noCodeChangeDuringDocumentationCloseout": true,
+    "noCommit": true,
+    "noPush": true,
+    "noPullRequest": true,
+    "noRelease": true
+  }
+}

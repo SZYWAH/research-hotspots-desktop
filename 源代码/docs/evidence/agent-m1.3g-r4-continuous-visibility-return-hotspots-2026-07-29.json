@@ -1,0 +1,190 @@
+{
+  "workPackage": "M1.3g-R4",
+  "generatedAt": "2026-07-29",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e",
+  "worktree": "dirty",
+  "overallStatus": "IN_PROGRESS",
+  "productVisualStatus": "UNVERIFIED",
+  "scope": {
+    "modifiedSurface": "Agent page theory background only",
+    "unchanged": [
+      "raw theory XYZ",
+      "paper and hotspot membership",
+      "immersive background",
+      "standalone theory galaxy",
+      "presentation galaxy",
+      "database",
+      "UMAP",
+      "active snapshot"
+    ],
+    "deliveryBoundary": {
+      "commit": false,
+      "push": false,
+      "pullRequest": false,
+      "release": false
+    }
+  },
+  "userObservedR3Failures": [
+    "papers outside the previous screen selection appear only after pointer release",
+    "Ambient cruise still shows rare jumps after long observation",
+    "Explore exit contains multiple camera or visual-state jumps and delayed paper appearance",
+    "overview hotspots still look like discs or lose a stable stellar hierarchy"
+  ],
+  "validatedSlices": {
+    "screenLodWorker": {
+      "status": "PASS",
+      "audit": "agent-theory-screen-lod-worker-v1",
+      "checks": "11/11",
+      "metrics": {
+        "guardBandNdc": 1.35,
+        "activeIntervalMs": 50,
+        "idleIntervalMs": 250,
+        "viewportSelectedCount": 4340,
+        "guardBandSelectedCount": 3556,
+        "incomingAfterPan": 1079,
+        "retiringAfterPan": 1173
+      },
+      "runtimeLifecycle": "PASS",
+      "fallback": "1.5ms chunked main-thread projection",
+      "limitation": "computer control cannot capture a screenshot while the mouse button remains held; final sustained-drag perception requires user review"
+    },
+    "continuousPerimeter": {
+      "status": "PASS",
+      "audit": "agent-theory-perimeter-c2-continuity-r4-v1",
+      "checks": "8/8",
+      "snapshotId": "project-default:v20:1784365136031",
+      "metrics": {
+        "profileVersion": "agent-theory-perimeter-v2-c2",
+        "paperCount": 25463,
+        "hotspotCount": 160,
+        "simulationSeconds": 600,
+        "simulationSteps": 36000,
+        "automaticSafetyReframeRequests": 0,
+        "minimumEntitySafetyRatio": 0.07083721068980867,
+        "maximumStepDistance": 0.0000653103248634949,
+        "maximumStepDirectionRadians": 0.00051761868161829
+      }
+    },
+    "perimeterCruise": {
+      "status": "PASS",
+      "audit": "agent-theory-perimeter-lod-r4-v1",
+      "checks": "19/19",
+      "metrics": {
+        "simulationSeconds": 600,
+        "coveredSectors": "96/96",
+        "fiveSecondNearMedianDisplacementPx": 9.1668
+      }
+    },
+    "hotspotPsf": {
+      "status": "PASS",
+      "audit": "agent-theory-hotspot-r4-v1",
+      "checks": "9/9",
+      "metrics": {
+        "overviewCoreCssSize": [
+          1.1,
+          1.6
+        ],
+        "overviewOpticalCssSize": [
+          5,
+          11
+        ],
+        "overviewSphereSlots": 0,
+        "systemPhotosphereCrossfadeMs": 400,
+        "localCoronaEnergyMaximum": 0.12
+      },
+      "limitation": "implementation and source contract pass; product material quality and system-entry crossfade remain user-unverified"
+    }
+  },
+  "inProgress": {
+    "workerRuntimeLifecycle": {
+      "status": "PASS",
+      "reason": "runtime-gated initialization, single lifecycle owner, deterministic disposal, one-active-plus-latest-queued coalescing and live chunked fallback are implemented and audited"
+    },
+    "atomicReturnTransaction": {
+      "status": "PASS",
+      "reason": "terminal camera LOD is prefetched before handoff, fallback remains chunked, and cruise waits for zero pending work, <=1% depth error, completed LOD and 500ms stable paper count/hash"
+    },
+    "tauriLowLoadAcceptance": {
+      "status": "PARTIAL_PASS",
+      "reason": "theory load and one large Explore drag were sampled in the existing balanced desktop window; the final return emitted no delayed paper batch but landed in a near-empty natural sparse sector, while sustained held-drag, long Ambient and hotspot-system paths remain user-unverified"
+    },
+    "userVisualAcceptance": {
+      "status": "UNVERIFIED",
+      "reason": "the user has not yet reviewed the completed R4 behavior"
+    }
+  },
+  "automatedEvidence": [
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_screen_lod_worker_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "node --experimental-strip-types scripts/agent_theory_perimeter_continuity_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "node scripts/agent_theory_hotspot_r4_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "command": "pnpm audit:agent-theory-r4",
+      "status": "PASS",
+      "checks": {
+        "screenLodWorker": "11/11",
+        "interactionRuntime": "23/23",
+        "freeLookContinuityHotspots": "25/25",
+        "perimeterC2": "8/8",
+        "hotspotPsf": "9/9"
+      }
+    },
+    {
+      "command": "tsc -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "command": "vite build",
+      "status": "PASS",
+      "workerArtifact": "agentTheoryScreenLod.worker"
+    },
+    {
+      "command": "cargo check -j 2",
+      "status": "PASS"
+    }
+  ],
+  "desktopEvidence": {
+    "environment": "Tauri development build, balanced window, low-load sampling",
+    "checks": [
+      "Agent theory background initialized with visible papers",
+      "Explore opened without blanking the scene",
+      "a 250px horizontal drag showed new-view papers in the first captured post-drag frame",
+      "the final visual-stability gate produced no delayed post-return paper batch",
+      "one returned cruise composition was naturally sparse and nearly blank; automatic reframing remained disabled by design"
+    ],
+    "limitations": [
+      "the computer-control API cannot capture the middle of a held mouse drag",
+      "no 60-90 second GPU observation was performed",
+      "no hotspot-system entry or exit was exercised in this short pass"
+    ]
+  },
+  "finalCodeReview": {
+    "status": "PASS",
+    "resolvedBlockers": [
+      "return handoff previously switched to cruise before pending visual work and 500ms stability completed",
+      "terminal Worker failure previously bypassed the chunked fallback",
+      "continuous 20Hz requests previously allowed obsolete Worker calculations to queue"
+    ],
+    "remainingNonBlockingRisk": "the fallback performs its final selection and sort in one idle callback after chunked projection"
+  },
+  "documentation": {
+    "canonicalDocsUpdated": [
+      "PROJECT.md",
+      "ROADMAP.md",
+      "STATUS.md",
+      "ARCHITECTURE.md",
+      "DECISIONS.md",
+      "DEVELOPMENT.md"
+    ],
+    "projectDocsAudit": "PASS"
+  }
+}

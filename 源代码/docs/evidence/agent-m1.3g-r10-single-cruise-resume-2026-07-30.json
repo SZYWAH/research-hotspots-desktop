@@ -1,0 +1,106 @@
+{
+  "workPackage": "M1.3g-R10",
+  "generatedAt": "2026-07-30T20:45:00+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e",
+  "worktree": "dirty worktree preserved; no commit, push, PR or release",
+  "status": {
+    "implementation": "PASS",
+    "automatedTechnical": "PASS",
+    "tauriLowLoad": "PARTIAL_PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "userObservedFailure": {
+    "r9ProductVisual": "FAIL",
+    "description": "After the exact Explore anchor return, the theory background performed two additional slides followed by one jump.",
+    "confirmedScope": "The anchor trajectory itself was correct; the failure occurred after arrival."
+  },
+  "rootCause": [
+    "Cruise Guidance Worker scheduling resumed from wall-clock time immediately after the anchor.",
+    "The legacy 900ms return health audit counted only main-thread guard passes, so the Worker-primary path could falsely request fallback.",
+    "The runtime Guidance state copied directionSign from a discrete target before the jerk-limited angular velocity crossed zero."
+  ],
+  "implementation": {
+    "frozenState": [
+      "previous/current cruise checkpoints",
+      "interpolation alpha and accumulator",
+      "current and target Guidance",
+      "target-hold remaining time",
+      "next Worker evaluation remaining time",
+      "safe duration and consecutive unsafe count",
+      "Worker epoch and accepted revision",
+      "depth current/target",
+      "LOD selection, weights, viewport and snapshot identity"
+    ],
+    "workerOwnership": {
+      "entryEpochIncrement": true,
+      "restoreEpochIncrement": true,
+      "staleEpochRejected": true,
+      "staleRevisionRejected": true,
+      "screenLodResponsesEpochScoped": true
+    },
+    "returnResume": {
+      "exactAnchorPreserved": true,
+      "visibleHandoffRemoved": true,
+      "nextFixedStepResume": true,
+      "postReturnDiagnosticMs": 3000,
+      "postReturnGuidanceReframeAllowed": false,
+      "healthAuditCanTriggerFallback": false
+    },
+    "directionContinuity": "Target direction enters the jerk-limited integrator; runtime direction follows actual angular velocity."
+  },
+  "automatedChecks": {
+    "typescript": "PASS",
+    "agentTheoryR10": {
+      "status": "PASS",
+      "checks": 10
+    },
+    "agentTheoryR6": "PASS",
+    "agentTheoryR8": "PASS",
+    "agentTheoryR9": "PASS",
+    "screenLodWorker": "PASS",
+    "viteProductionBuild": "PASS",
+    "cargoCheckJobs2": "PASS",
+    "projectDocs": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "runtimeDiagnostics": [
+    "camera pose, quaternion and trajectory residual",
+    "camera writer",
+    "Guidance current source and epoch",
+    "accepted and discarded Worker revisions",
+    "fallback trigger count",
+    "LOD and depth hashes",
+    "post-return extra framing count"
+  ],
+  "desktopAcceptance": {
+    "mode": "Tauri balanced short-window",
+    "requiredScenarios": [
+      "immediate Explore exit",
+      "single wheel step then exit",
+      "small and large drag then exit",
+      "pan then exit",
+      "combined wheel, drag and pan then exit",
+      "five repeated Explore return cycles"
+    ],
+    "requiredObservation": "At least five seconds after each anchor arrival with exactly one natural cruise trajectory.",
+    "observedScenarios": [
+      "single wheel step then exit",
+      "small drag then exit"
+    ],
+    "observedResult": "In both sampled desktop scenarios, the exact anchor return completed and the following five seconds showed one continuous cruise trajectory without a second reframe, jump, black screen, Shader error or WebGL error.",
+    "remainingHumanScenarios": [
+      "pan then exit",
+      "combined wheel, drag and pan then exit",
+      "five repeated Explore return cycles"
+    ],
+    "status": "PARTIAL_PASS; final product visual remains UNVERIFIED"
+  },
+  "boundaries": {
+    "immersiveBackgroundChanged": false,
+    "stellarMaterialsChanged": false,
+    "theoryCoordinatesChanged": false,
+    "databaseChanged": false,
+    "publicTauriApiChanged": false
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "workPackage": "M2.0a Pi 基础会话链路",
+  "recordedAt": "2026-08-01",
+  "branch": "codex/sidera-m2-pi-baseline",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "featureCheckpoint": "03e844560b6857ec4aa0e529dab5ba504d512392",
+  "worktree": "documentation-checkpoint-pending-at-record-time",
+  "dependency": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "0.82.1",
+    "bin": "dist/cli.js",
+    "lockfileExact": true
+  },
+  "runtime": {
+    "owner": "Rust SideraPiRuntimeState",
+    "launchMode": "node-direct-rpc",
+    "shellUsed": false,
+    "maximumProcessesPerApp": 1,
+    "maximumSessionsPerApp": 1,
+    "maximumActiveTurns": 1,
+    "sessionPersistence": "application-memory-only",
+    "rpcFraming": "LF JSONL",
+    "toolsEnabled": false,
+    "extensionsEnabled": false,
+    "skillsEnabled": false,
+    "promptTemplatesEnabled": false,
+    "contextFilesEnabled": false,
+    "approvalEnabled": false,
+    "globalPiConfigurationRead": false,
+    "automaticPromptReplay": false
+  },
+  "credentials": {
+    "source": "Windows Keyring via existing AiSettings",
+    "childEnvironmentOnly": true,
+    "commandLineContainsSecret": false,
+    "modelsJsonContainsSecret": false,
+    "frontendEventContainsSecret": false,
+    "testSnapshotContainsSecret": false
+  },
+  "desktopAcceptance": {
+    "surface": "native Tauri WebView2",
+    "firstTurn": {
+      "prompt": "请只回复：第一轮成功。",
+      "observedAnswer": "第一轮成功。",
+      "status": "PASS"
+    },
+    "contextFollowUp": {
+      "prompt": "我上一条要求你回复什么？",
+      "observedAnswer": "您上一条要求我回复“第一轮成功”。",
+      "status": "PASS"
+    },
+    "realAbort": {
+      "promptClass": "at-least-3000-character-methodology-article",
+      "partialTextRetained": true,
+      "messageStatus": "已停止",
+      "status": "PASS"
+    },
+    "postAbortRecovery": {
+      "prompt": "请只回复：真实中止后仍可恢复。",
+      "observedAnswer": "真实中止后仍可恢复。",
+      "status": "PASS"
+    },
+    "finalStatus": "PASS"
+  },
+  "verification": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "sideraPiBasicAudit": "PASS",
+    "rustProtocolTests": "PASS_5_OF_5",
+    "cargoCheckJ2": "PASS",
+    "projectDocumentationAudit": "PASS",
+    "gitDiffCheck": "PASS",
+    "userAcceptance": "UNVERIFIED"
+  },
+  "unverifiedDesktopScenarios": [
+    "invalid-key",
+    "network-disconnected",
+    "background-switch-during-generation",
+    "leave-and-return-agent-during-session"
+  ],
+  "boundaries": {
+    "localPaperToolsAdded": false,
+    "fileToolsAdded": false,
+    "shellToolsAdded": false,
+    "webToolsAdded": false,
+    "structuredReferencesAdded": false,
+    "focusTriggeredByPi": false,
+    "conversationHistoryPersisted": false,
+    "agentRunCenterBridged": false,
+    "databaseMigrationAdded": false,
+    "productionNodePackagingAdded": false,
+    "committed": true,
+    "pushed": false,
+    "pushAuthorized": true,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "evidenceVersion": "agent-m1.3g-r2-theory-interaction-v1",
+  "generatedAt": "2026-07-29T19:43:30+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineCommit": "38e732e",
+  "worktree": "dirty",
+  "status": {
+    "implementation": "PASS",
+    "automaticValidation": "PASS",
+    "tauriInteractionValidation": "UNVERIFIED",
+    "productVisual": "UNVERIFIED"
+  },
+  "scope": {
+    "changed": [
+      "Agent theory screen-space LOD scheduling",
+      "Agent theory Explore pivot preparation",
+      "Agent theory LOD weight transition CPU path",
+      "Agent theory ambient cadence degradation",
+      "Agent theory system ambient cadence",
+      "M1.3g-R2 audits and canonical development documents"
+    ],
+    "unchanged": [
+      "immersive background",
+      "independent analysis theory galaxy",
+      "presentation galaxy",
+      "raw theory XYZ",
+      "database schema and active snapshot",
+      "UMAP candidates"
+    ]
+  },
+  "runtimeDiagnosis": {
+    "desktopProcessResponding": true,
+    "shaderOrWebglErrorObserved": false,
+    "applicationHangObserved": false,
+    "sampleWindowSeconds": 3,
+    "processTreeCpuSeconds": 0.218,
+    "processTreeWorkingSetMb": 295.1,
+    "processTreePrivateMb": 442.3,
+    "primaryCause": [
+      "screen LOD projected and sorted all 25463 papers on the interaction thread",
+      "LOD crossfade traversed all resident weights on each transition frame",
+      "slow-frame degradation permanently disabled overview ambient RAF"
+    ]
+  },
+  "implementation": {
+    "interactionSettleMs": 140,
+    "cruiseRefreshMinimumMs": 750,
+    "normalOverviewFps": 24,
+    "degradedAgentTheoryOverviewFps": 18,
+    "agentTheorySystemAmbientFps": 24,
+    "selectionDuringDrag": "frozen",
+    "selectionDuringWheelInertia": "frozen",
+    "stableRefresh": "requestIdleCallback with timeout fallback",
+    "explorePivotInput": "current stable LOD selection plus precomputed theory bounds",
+    "transitionTraversal": "changed vertex indices only",
+    "labelsDuringGesture": "temporarily hidden and restored after stable refresh"
+  },
+  "screenLod": {
+    "paperCount": 25463,
+    "hotspotCount": 160,
+    "balanced": {
+      "perceptiblePaperCount": 4985,
+      "selectionHash": "073ff907",
+      "occupiedTileRatio": 0.951048951048951,
+      "overlapP95": 4
+    },
+    "high": {
+      "perceptiblePaperCount": 6322,
+      "selectionHash": "0ac96a9e",
+      "occupiedTileRatio": 0.9649122807017544,
+      "overlapP95": 3
+    }
+  },
+  "validation": [
+    {
+      "name": "TypeScript incremental check",
+      "status": "PASS",
+      "command": "node_modules/.bin/tsc.CMD -b --pretty false"
+    },
+    {
+      "name": "Vite production build",
+      "status": "PASS",
+      "command": "node_modules/.bin/vite.CMD build",
+      "durationSeconds": 9.05
+    },
+    {
+      "name": "Agent theory interaction audit",
+      "status": "PASS",
+      "command": "pnpm audit:agent-theory-interaction"
+    },
+    {
+      "name": "Agent theory perimeter and stellar LOD audit",
+      "status": "PASS",
+      "command": "pnpm audit:agent-theory-perimeter-lod"
+    },
+    {
+      "name": "Agent theory stellar material audit",
+      "status": "PASS",
+      "command": "pnpm audit:agent-theory-stellar-material"
+    },
+    {
+      "name": "Project documentation audit",
+      "status": "PASS",
+      "command": "pnpm audit:project-docs"
+    },
+    {
+      "name": "Whitespace validation",
+      "status": "PASS",
+      "command": "git diff --check"
+    }
+  ],
+  "remainingAcceptance": [
+    "continuous Explore drag at 1440x900 balanced",
+    "continuous wheel zoom and one deferred LOD refresh after settling",
+    "Agent theory hotspot-system idle cadence",
+    "Explore exit and nearest-perimeter return",
+    "user assessment of interaction smoothness"
+  ]
+}

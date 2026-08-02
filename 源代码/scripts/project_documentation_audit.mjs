@@ -34,7 +34,7 @@ const requireText = (name, pattern, description) => {
 };
 
 for (const name of requiredDocs) {
-  requireText(name, "更新时间：2026-08-01", "current update date");
+  requireText(name, "更新时间：2026-08-02", "current update date");
 }
 
 requireText("PROJECT.md", "## 最终目标", "final goal section");

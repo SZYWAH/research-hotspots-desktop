@@ -1,0 +1,128 @@
+{
+  "workPackage": "M1.3g-R6",
+  "title": "Explore exact anchor return and gap-free LOD handoff",
+  "generatedAt": "2026-07-30T13:38:00+08:00",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty worktree",
+  "sourceSnapshotId": "project-default:v20:1784365136031",
+  "scope": {
+    "papers": 25463,
+    "hotspots": 160,
+    "viewport": [
+      1440,
+      900
+    ],
+    "changed": [
+      "exact Explore entry anchor",
+      "derivative-free smootherstep position return",
+      "quaternion slerp return",
+      "current plus anchor LOD union prewarm",
+      "actual camera and vertex-weight completion gate",
+      "LOD worker purpose and projection signature",
+      "shared camera and input-bar progress"
+    ],
+    "unchanged": [
+      "immersive background",
+      "paper and hotspot materials",
+      "cruise parameters",
+      "original theory XYZ",
+      "database schema",
+      "active snapshot"
+    ]
+  },
+  "rootCause": {
+    "status": "CONFIRMED",
+    "summary": "R5 no-interaction exit used the saved pose, while any interaction selected a separate quintic Hermite path that injected free-look derivatives. That path could leave the safe anchor segment while competing LOD responses retired the current visible set."
+  },
+  "implementation": {
+    "cameraPhases": [
+      "return-preparing",
+      "returning-anchor",
+      "return-commit",
+      "cruise"
+    ],
+    "workerProtocol": "agent-theory-screen-lod-worker-v2",
+    "anchorReturnVersion": "agent-theory-anchor-return-v2",
+    "prewarmMilliseconds": 120,
+    "actualVisibilityStableMilliseconds": 120,
+    "anchorRetirementMilliseconds": 300,
+    "rendererRecreated": false,
+    "businessEntitiesDuplicated": false
+  },
+  "automatedEvidence": {
+    "agentTheoryR6": {
+      "status": "PASS",
+      "checks": "12/12",
+      "maximumSegmentDeviation": 0,
+      "maximumPositionError": 7.9e-17,
+      "maximumDirectionErrorDegrees": 0,
+      "maximumTerminalDirectionStepDegrees": 0.007685,
+      "minimumVisiblePaperCountForVisibleScenarios": 2940,
+      "minimumVisibleHotspotCountForVisibleScenarios": 48,
+      "minimumVisibleHotspotCellCountForVisibleScenarios": 10,
+      "nonzeroInteractionCoverage": [
+        "wheel-forward",
+        "wheel-backward",
+        "one-pixel-drag",
+        "drag-and-pan",
+        "combined",
+        "intentional-blank-view"
+      ]
+    },
+    "screenLodWorker": {
+      "status": "PASS",
+      "checks": "13/13",
+      "purposeAndProjectionSignature": true
+    },
+    "typescript": {
+      "status": "PASS",
+      "command": "node_modules/.bin/tsc.cmd -b --pretty false"
+    },
+    "vite": {
+      "status": "PASS",
+      "command": "node_modules/.bin/vite.cmd build",
+      "modulesTransformed": 1653,
+      "buildSeconds": 17.26
+    },
+    "rust": {
+      "status": "PASS",
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+      "elapsedSeconds": 3.66
+    },
+    "stellarMaterial": {
+      "status": "PASS",
+      "checks": "19/19"
+    },
+    "projectDocs": {
+      "status": "PASS"
+    },
+    "diffCheck": {
+      "status": "PASS",
+      "note": "Tracked diff and R6 untracked files have no whitespace errors."
+    },
+    "dualBackgroundRegression": {
+      "status": "PASS",
+      "singleRendererSwitch": true
+    }
+  },
+  "desktopAcceptance": {
+    "status": "UNVERIFIED",
+    "required": [
+      "immediate Explore exit",
+      "one wheel notch then exit",
+      "small and large drag then exit",
+      "intentional blank view then exit",
+      "five consecutive Explore return cycles",
+      "hotspot-system exit",
+      "immersive background round trip",
+      "zero Shader Worker and WebGL console errors"
+    ]
+  },
+  "delivery": {
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

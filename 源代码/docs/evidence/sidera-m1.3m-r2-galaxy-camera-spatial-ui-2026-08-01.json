@@ -1,0 +1,69 @@
+{
+  "workPackage": "M1.3m-R2",
+  "title": "科研星图相机稳定与空间面板整合",
+  "date": "2026-08-01",
+  "branch": "codex/agent-theory-perimeter-lod",
+  "baselineHead": "38e732e5b6905dfab7dc551a6588f4bab88542cb",
+  "worktree": "dirty",
+  "scope": {
+    "databaseChanged": false,
+    "theoryCoordinatesChanged": false,
+    "stellarMaterialsChanged": false,
+    "agentBackgroundChanged": false
+  },
+  "implementation": {
+    "automaticFitOnVisualModeSwitch": 0,
+    "persistentRenderer": true,
+    "persistentCamera": true,
+    "relativePoseMapping": true,
+    "navigationHudCollapse": true,
+    "contextRailDefault": "closed",
+    "contextRailModes": [
+      "closed",
+      "hotspot",
+      "paper-summary",
+      "paper-reading"
+    ],
+    "separateProductPaperOverlay": false,
+    "viewportComposition": {
+      "maximumHorizontalOffsetRatio": 0.08,
+      "smallViewportMaximumOffsetRatio": 0.05,
+      "durationMs": 320,
+      "changesCanvasSize": false,
+      "changesWorldCoordinates": false
+    }
+  },
+  "tests": {
+    "typescriptNoEmit": "PASS",
+    "viteProductionBuild": "PASS",
+    "r2Audit": "PASS",
+    "spatialPagesAudit": "PASS",
+    "workbenchNavigationR1Audit": "PASS",
+    "theoryCameraAudit": "PASS",
+    "hotspotTransitionAudit": "PASS",
+    "projectDocumentationAudit": "PASS",
+    "gitDiffCheck": "PASS",
+    "visualInvariantsAudit": {
+      "status": "FAIL",
+      "reason": "The pre-existing createSystemPaperLayer golden hash no longer matches earlier Agent-theory visibility work; the R2 camera and HUD changes do not alter that function. The golden hash was intentionally not rewritten without a separate baseline review."
+    },
+    "cargoCheck": {
+      "status": "DEFERRED",
+      "reason": "An existing Tauri/Cargo development chain remains active; concurrent Rust compilation was avoided under the GPU/blue-screen protection policy."
+    },
+    "nativeDesktop": {
+      "windowDetected": true,
+      "title": "Sidera",
+      "interactionStatus": "UNVERIFIED",
+      "reason": "The automation provider returned an inconsistent 15x15 interaction bound for a 1360x864 capture, so no further pointer input was issued."
+    }
+  },
+  "status": {
+    "implementation": "PASS",
+    "automaticTechnical": "PARTIAL_PASS",
+    "productVisual": "UNVERIFIED"
+  },
+  "commit": null,
+  "push": false,
+  "pullRequest": false
+}
