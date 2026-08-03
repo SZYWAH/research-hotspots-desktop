@@ -1,0 +1,103 @@
+{
+  "workPackage": "M2.0b-R1",
+  "title": "Sidera conversation orchestration, reading panel, and evidence gate",
+  "date": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "scope": {
+    "implemented": [
+      "root SideraConversationTurn model",
+      "turn-scoped streaming and terminal events",
+      "safe GFM Markdown rendering",
+      "compact, reading, and custom dialog layouts",
+      "sidera_get_library_overview read-only tool",
+      "buffered evidence completion gate with one internal steer",
+      "invalid-evidence UI without references or focus"
+    ],
+    "excluded": [
+      "web search",
+      "hotspot retrieval",
+      "full text",
+      "campus library",
+      "conversation persistence",
+      "database schema changes",
+      "automatic focus"
+    ]
+  },
+  "dependencies": {
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "libraryOverview": {
+    "paperCount": 25463,
+    "fieldCount": 15,
+    "hotspotCount": 160,
+    "activeSnapshotId": "project-default:v20:1784966366263",
+    "snapshotPaperCount": 25463,
+    "libraryRevision": "0",
+    "databaseReadOnly": true
+  },
+  "validation": [
+    {
+      "name": "vite-production-build",
+      "command": "pnpm run build",
+      "status": "PASS",
+      "detail": "1913 modules; 10.74s; existing dynamic-import warning only"
+    },
+    {
+      "name": "pi-basic-conversation-audit",
+      "command": "pnpm audit:sidera-pi-basic",
+      "status": "PASS"
+    },
+    {
+      "name": "pi-local-paper-rag-audit",
+      "command": "node --experimental-strip-types scripts/sidera_pi_local_paper_rag_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "conversation-evidence-ui-audit",
+      "command": "pnpm audit:sidera-pi-conversation-r1",
+      "status": "PASS"
+    },
+    {
+      "name": "rust-check",
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml --jobs 2",
+      "status": "PASS",
+      "durationSeconds": 10.89
+    },
+    {
+      "name": "real-default-library-rag-audit",
+      "command": "cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin audit_sidera_pi_rag --jobs 2 -- --database release-assets/default-library/research-hotspots-v7.sqlite --project project-default",
+      "status": "PASS",
+      "retrievalMode": "hybrid-e5-like",
+      "candidateCount": 12,
+      "evidenceCount": 6,
+      "verifiedReferenceCount": 1
+    },
+    {
+      "name": "rust-targeted-unit-tests",
+      "command": "cargo test --lib sidera_rag::tests -j 2",
+      "status": "BLOCKED",
+      "detail": "test target compiled, but the Windows test executable hung before entering the test framework; residual processes were stopped"
+    },
+    {
+      "name": "tauri-native-shell-launch",
+      "status": "PASS",
+      "detail": "one visible native Sidera window; star-river background, default reading panel, and resize affordance rendered"
+    },
+    {
+      "name": "tauri-provider-product-acceptance",
+      "status": "UNVERIFIED",
+      "detail": "requires user validation of three interleaved turns, Markdown, panel resizing, overview, stop, citations, and focus"
+    }
+  ],
+  "result": {
+    "technical": "PASS",
+    "product": "UNVERIFIED",
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

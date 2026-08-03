@@ -199,7 +199,7 @@ export function AgentTheoryBackgroundCanvas({
     kind: App17GalaxyCommand["kind"],
     options?: Pick<
       App17GalaxyCommand,
-      "focusMode" | "cameraPose" | "focusSide"
+      "focusMode" | "cameraPose" | "focusSide" | "focusAnchorNdcX"
     >,
   ) => {
     setCommand((current) => ({
@@ -317,6 +317,9 @@ export function AgentTheoryBackgroundCanvas({
         issueCommand("agent-focus-overview", {
           focusMode: focus.intent.primary.mode,
           focusSide: focus.side,
+          focusAnchorNdcX: focus.composition
+            ? focus.composition.normalizedAnchorX * 2 - 1
+            : undefined,
         });
       }
     }, 90);
@@ -341,7 +344,12 @@ export function AgentTheoryBackgroundCanvas({
       const scopedKey = `${focus.intent.revision}:${key}`;
       if (explicitRouteLastActionRef.current === scopedKey) return;
       explicitRouteLastActionRef.current = scopedKey;
-      issueCommand(kind, { focusSide: focus.side });
+      issueCommand(kind, {
+        focusSide: focus.side,
+        focusAnchorNdcX: focus.composition
+          ? focus.composition.normalizedAnchorX * 2 - 1
+          : undefined,
+      });
     };
 
     if (primary.kind === "paper" && !targetHotspotId) {
@@ -566,6 +574,8 @@ export function AgentTheoryBackgroundCanvas({
           blend: sample.materialBlend,
           productMode: focus.productMode,
           side: focus.side,
+          normalizedAnchorX: focus.composition?.normalizedAnchorX,
+          targetDiameterPx: focus.composition?.targetDiameterPx,
         });
       }
       if (now - focusRuntimeReportedAtRef.current >= 100) {
@@ -652,7 +662,12 @@ export function AgentTheoryBackgroundCanvas({
       const scopedKey = `${focus.intent.revision}:${key}`;
       if (explicitReleaseLastActionRef.current === scopedKey) return;
       explicitReleaseLastActionRef.current = scopedKey;
-      issueCommand(kind, { focusSide: focus.side });
+      issueCommand(kind, {
+        focusSide: focus.side,
+        focusAnchorNdcX: focus.composition
+          ? focus.composition.normalizedAnchorX * 2 - 1
+          : undefined,
+      });
     };
     if (paperFocusState === "exiting") return;
     if (

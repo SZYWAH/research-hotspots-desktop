@@ -1,7 +1,10 @@
 mod agent_model_gateway;
 mod agent_runtime;
 pub mod semantic_embedding;
+mod sidera_conversations;
 mod sidera_pi_runtime;
+mod sidera_rag;
+mod sidera_stream_gate;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -46,6 +49,14 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{path::BaseDirectory, Emitter, Manager};
+
+#[cfg(feature = "dev-tools")]
+pub fn audit_sidera_pi_rag_database(
+    database_path: &Path,
+    project_id: &str,
+) -> Result<serde_json::Value, String> {
+    sidera_rag::audit_database(database_path, project_id)
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -872,10 +883,49 @@ struct V20HotspotSnapshot {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SideraPiStartSessionInput {
     project_id: String,
+    conversation_id: String,
+    database_dir: String,
     provider: String,
     base_url: String,
     model: String,
     use_env_key: bool,
+    #[serde(default)]
+    cache_retention: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SideraAgentLocalReadinessInput {
+    database_dir: String,
+    project_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SideraConversationReadinessResult {
+    status: String,
+    code: Option<String>,
+    detail: String,
+    schema_version: Option<i64>,
+    repaired: bool,
+    conversation_count: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SideraPiReadinessResult {
+    status: String,
+    code: Option<String>,
+    detail: String,
+    package_version: Option<String>,
+    node_version: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SideraAgentLocalReadinessResult {
+    conversation_store: SideraConversationReadinessResult,
+    pi_runtime: SideraPiReadinessResult,
 }
 
 #[derive(Clone, Deserialize)]
@@ -4323,16 +4373,23 @@ fn sidera_pi_start_session(
         .path()
         .app_cache_dir()
         .map_err(|error| format!("SIDERA_PI_CACHE_PATH_FAILED:{error}"))?;
+    let library_root = PathBuf::from(&input.database_dir);
+    let session_root = sidera_conversations::session_root(&input.database_dir, &input.project_id)?;
     state.start_session(
         &app,
         sidera_pi_runtime::PiLaunchConfig {
             project_id: input.project_id,
+            conversation_id: input.conversation_id,
+            database_path: PathBuf::from(input.database_dir).join("research-hotspots-v7.sqlite"),
+            library_root,
+            session_root,
             provider,
             base_url,
             model,
             api_key,
             package_json_path,
             cache_root,
+            cache_retention: input.cache_retention,
         },
     )
 }
@@ -4362,11 +4419,181 @@ fn sidera_pi_get_status(
 }
 
 #[tauri::command]
+fn sidera_pi_get_session_stats(
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+) -> Result<sidera_pi_runtime::SideraSessionStats, String> {
+    state.get_session_stats()
+}
+
+#[tauri::command]
+fn sidera_pi_decide_tool_approval(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
+    input: sidera_pi_runtime::SideraToolApprovalDecisionInput,
+) -> Result<(), String> {
+    state.decide_tool_approval(&app, input)
+}
+
+#[tauri::command]
 fn sidera_pi_stop_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, sidera_pi_runtime::SideraPiRuntimeState>,
 ) {
     state.stop_session(Some(&app));
+}
+
+#[tauri::command]
+fn sidera_agent_local_readiness(
+    input: SideraAgentLocalReadinessInput,
+) -> SideraAgentLocalReadinessResult {
+    let conversation_store = match sidera_conversations::check_conversation_store(
+        sidera_conversations::ConversationScopeInput {
+            database_dir: input.database_dir.clone(),
+            project_id: input.project_id.clone(),
+        },
+    ) {
+        Ok(readiness) => SideraConversationReadinessResult {
+            status: readiness.status,
+            code: None,
+            detail: if readiness.repaired {
+                format!(
+                    "已原地补全会话库 schema v{}，保留 {} 条会话。",
+                    readiness.schema_version, readiness.conversation_count
+                )
+            } else {
+                format!(
+                    "会话库 schema v{} 可用，共 {} 条会话。",
+                    readiness.schema_version, readiness.conversation_count
+                )
+            },
+            schema_version: Some(readiness.schema_version),
+            repaired: readiness.repaired,
+            conversation_count: Some(readiness.conversation_count),
+        },
+        Err(error) => SideraConversationReadinessResult {
+            status: "fail".to_string(),
+            code: Some(sidera_readiness_error_code(&error)),
+            detail: error,
+            schema_version: None,
+            repaired: false,
+            conversation_count: None,
+        },
+    };
+
+    let pi_runtime = match find_project_root() {
+        Some(root) => {
+            let package_json_path = root
+                .join("node_modules")
+                .join("@earendil-works")
+                .join("pi-coding-agent")
+                .join("package.json");
+            let database_path = PathBuf::from(&input.database_dir)
+                .join("research-hotspots-v7.sqlite");
+            match sidera_pi_runtime::check_installation(&package_json_path, &database_path) {
+                Ok(readiness) => SideraPiReadinessResult {
+                    status: "pass".to_string(),
+                    code: None,
+                    detail: format!(
+                        "Pi {} 与 Node {} 可用。",
+                        readiness.package_version, readiness.node_version
+                    ),
+                    package_version: Some(readiness.package_version),
+                    node_version: Some(readiness.node_version),
+                },
+                Err(error) => SideraPiReadinessResult {
+                    status: "fail".to_string(),
+                    code: Some(sidera_readiness_error_code(&error)),
+                    detail: error,
+                    package_version: None,
+                    node_version: None,
+                },
+            }
+        }
+        None => SideraPiReadinessResult {
+            status: "fail".to_string(),
+            code: Some("SIDERA_PI_PROJECT_ROOT_NOT_FOUND".to_string()),
+            detail: "SIDERA_PI_PROJECT_ROOT_NOT_FOUND".to_string(),
+            package_version: None,
+            node_version: None,
+        },
+    };
+
+    SideraAgentLocalReadinessResult {
+        conversation_store,
+        pi_runtime,
+    }
+}
+
+fn sidera_readiness_error_code(error: &str) -> String {
+    error
+        .split(':')
+        .next()
+        .filter(|value| value.starts_with("SIDERA_"))
+        .unwrap_or("SIDERA_AGENT_LOCAL_READINESS_FAILED")
+        .to_string()
+}
+
+#[tauri::command]
+fn sidera_conversation_list(
+    input: sidera_conversations::ListConversationsInput,
+) -> Result<Vec<sidera_conversations::SideraConversationSummary>, String> {
+    sidera_conversations::list_conversations(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_open_recent(
+    input: sidera_conversations::ConversationScopeInput,
+) -> Result<Option<sidera_conversations::SideraConversationSnapshot>, String> {
+    sidera_conversations::open_most_recent(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_create(
+    input: sidera_conversations::CreateConversationInput,
+) -> Result<sidera_conversations::SideraConversationSnapshot, String> {
+    sidera_conversations::create_conversation(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_open(
+    input: sidera_conversations::ConversationIdInput,
+) -> Result<sidera_conversations::SideraConversationSnapshot, String> {
+    sidera_conversations::open_conversation(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_rename(
+    input: sidera_conversations::RenameConversationInput,
+) -> Result<sidera_conversations::SideraConversationSummary, String> {
+    sidera_conversations::rename_conversation(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_archive(
+    input: sidera_conversations::ConversationIdInput,
+) -> Result<sidera_conversations::SideraConversationSummary, String> {
+    sidera_conversations::archive_conversation(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_restore(
+    input: sidera_conversations::ConversationIdInput,
+) -> Result<sidera_conversations::SideraConversationSummary, String> {
+    sidera_conversations::restore_conversation(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_delete(
+    input: sidera_conversations::ConversationIdInput,
+) -> Result<(), String> {
+    sidera_conversations::delete_conversation(input)
+}
+
+#[tauri::command]
+fn sidera_conversation_upsert_turn(
+    input: sidera_conversations::UpsertConversationTurnInput,
+) -> Result<sidera_conversations::SideraStoredTurn, String> {
+    sidera_conversations::upsert_turn(input)
 }
 
 #[tauri::command]
@@ -11579,15 +11806,17 @@ fn agent_get_draft_model_profiles(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(PaperImportTaskRegistry::default())
         .manage(ClusterTaskRegistry::default())
         .manage(SemanticModelingRegistry::default())
         .manage(LibraryMutationRegistry::default())
         .manage(AiTaskRegistry::default())
         .manage(agent_runtime::AgentRuntimeState::default())
-        .manage(sidera_pi_runtime::SideraPiRuntimeState::default())
-        .plugin(tauri_plugin_dialog::init())
+        .manage(sidera_pi_runtime::SideraPiRuntimeState::default());
+    #[cfg(all(not(test), feature = "desktop-dialog"))]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    builder
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             agent_create_run,
@@ -11652,7 +11881,19 @@ pub fn run() {
             sidera_pi_submit_prompt,
             sidera_pi_abort_turn,
             sidera_pi_get_status,
+            sidera_pi_get_session_stats,
+            sidera_pi_decide_tool_approval,
             sidera_pi_stop_session,
+            sidera_agent_local_readiness,
+            sidera_conversation_list,
+            sidera_conversation_open_recent,
+            sidera_conversation_create,
+            sidera_conversation_open,
+            sidera_conversation_rename,
+            sidera_conversation_archive,
+            sidera_conversation_restore,
+            sidera_conversation_delete,
+            sidera_conversation_upsert_turn,
             cancel_ai_task,
             write_text_file,
             read_markdown_exports,

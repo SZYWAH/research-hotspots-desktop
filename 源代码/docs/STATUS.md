@@ -1,8 +1,8 @@
 # 科研 Agent 当前状态
 
-更新时间：2026-08-02
+更新时间：2026-08-03
 
-当前分支：`codex/sidera-m2-pi-baseline`
+当前分支：`codex/sidera-m2-rag`
 
 M1.3d 基线提交：`63e83d3cd7b49d513df1613dfb42ef01fd1b5ce0`
 
@@ -12,15 +12,104 @@ M1.3e 文档检查点：`07de19d`
 
 M1.3f 失败归档提交：`220a5c4`
 
-当前 HEAD：`03e844560b6857ec4aa0e529dab5ba504d512392`
+当前 HEAD：`d6e044af8d15fe04039bb1184a71ee5a0b159665`
 
-当前阶段：M2.0a“Pi 基础会话链路”，状态为 `IMPLEMENTED / TECHNICAL PASS / USER ACCEPTANCE UNVERIFIED`
+当前阶段：M2.0b-R4-R3“Agent 长缓存默认与真实首段流式修复”，状态为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED`
 
 原生桌面已完成低负载只读验收：入口、待办空态、历史筛选、既有失败/完成运行、专业页面建议入口及返回 Sidera 为 `PARTIAL PASS`；创建、审批、暂停、恢复、取消等有状态治理操作仍为 `UNVERIFIED`。
 
-提交收口：功能基线已创建为 `03e844560b6857ec4aa0e529dab5ba504d512392`；权威文档与证据由独立文档检查点承载。推送授权已确认，待最终审计通过后与功能基线一次性推送；不创建 PR、不合并、不发布。
+提交收口：M2.0a 基线已经收口；M2.0b 与 R1–R4-R3 当前为 `dirty worktree`。用户明确要求本工作包不提交、不推送、不创建 PR、不发布。
 
 当前开发总账：[DEVELOPMENT.md](./DEVELOPMENT.md)
+
+## 2026-08-03 M2.0b-R4-R3 Agent 长缓存默认与真实首段流式修复
+
+- Agent 设置新增缓存策略 v2 标记；新项目、缺失字段和旧备份默认使用 `long`。启动迁移会遍历所有项目，把未带 v2 标记的 `auto`、`long`或缺失值原地升级为 `long`并补标记；迁移后用户显式选择 `auto`可持续保存，不会再次被强制改写。
+- 设置项现为“长缓存（默认，推荐）”与“兼容模式（上游不支持长缓存时使用）”。明确的长缓存参数拒绝会映射为持久 `SIDERA_PI_LONG_CACHE_UNSUPPORTED`错误，提示用户手动切换兼容模式，本轮不会静默降级或自动重放。
+- Rust 运行时已删除 512 字节首段缓冲，并提取 Tauri-free 纯流式门状态机。普通文本从首个 `text_delta`立即发送；工具开始进入隐藏态并通过带 session/message/revision/sequence 的 `assistant-replace`清除未核验前言；系统工具结束后与 RAG `finalize`后分别按原协议释放最终正文。
+- 用户停止普通回答时保留已显示部分；隐藏工具旁白不会在停止或结算时整块补出；证据核验失败使用替换事件显示固定失败说明。`toolcall_start`只参与显示状态，现有 `tool_execution_start`白名单和审批绑定未改变。
+- TypeScript、Vite 6.4.3（1916 modules）、`cargo check -j 2`、会话与流式 harness 8/8、Windows 生成物禁用字符串扫描、R4-R3 至 R1/双背景回归和 Pi 无 Provider RPC 均为 `PASS`；Provider调用数为 0。真实缓存用量、首字流式与原生体验保持 `UNVERIFIED`。
+- 证据：[sidera-m2.0b-r4-r3-cache-default-true-streaming-2026-08-03.json](./evidence/sidera-m2.0b-r4-r3-cache-default-true-streaming-2026-08-03.json)
+
+## 2026-08-02 M2.0b-R4-R2 Agent 后台连续性与清透光学玻璃修复
+
+- 根级控制器已移除“离开 Agent 页面即 abort 当前轮次”的策略。普通导航只改变可见页面，Pi 流、500ms 检查点、SQLite 轮次和工具等待状态继续；停止按钮、项目/配置/会话变更仍走明确停止或确认。
+- Agent 以外页面通过现有标题栏宿主显示 `正在回答 / 等待工具审批 / 已完成 / 失败`状态。运行态可返回 Agent并单独停止；审批只能返回原审批卡处理；后台完成 3 秒消失，后台错误复用持久全局错误提示。
+- 对话材质已从约 54% 外壳、28px 模糊和逐回答烟熏卡片改为 34% 清透外壳、18px 模糊、115%饱和度与单一连续烟熏阅读层。左上大片径向灰光和助手嵌套矩形被移除；历史抽屉、折叠输入与标题栏状态共享光学变量。
+- 主 Rust lib 保持 `test=false`，项目脚本只调用无 Tauri 依赖的会话 harness；旧 `target`测试 EXE 按边界保留但不再属于标准入口。harness 4/4 通过，生成物禁用字符串匹配数为 0。
+- TypeScript、Vite 6.4.3（1915 modules）、`cargo check -j 2`、R4-R2/R4/R3专项和会话 harness 为 `PASS`；未调用 Provider。普通导航后台连续性、审批返回、标题栏多工具并存和 1100/1360/1920px 多缩放视觉仍待原生验收。
+- 证据：[sidera-m2.0b-r4-r2-background-continuity-optical-glass-2026-08-02.json](./evidence/sidera-m2.0b-r4-r2-background-continuity-optical-glass-2026-08-02.json)
+
+## 2026-08-02 M2.0b-R4-R1 Agent 会话存储与诊断修复
+
+- R4 原生程序实际暴露两项产品失败：会话 Schema 的 Rust `\`跨行字符串吞掉词间空格，导致残缺 `user_version=0`数据库只有 `conversations`表且 Agent 无法创建会话；同时 Tauri 测试 EXE 缺少 Common Controls v6 清单，加载 `TaskDialogIndirect`时直接报入口错误。因此原 R4 原生结论更正为 `PRODUCT FAIL / SUPERSEDED BY R4-R1`。
+- 会话 v1 Schema 已移入保留换行的独立 SQL 文件；所有查询、更新和 UPSERT 均改为不会吞空格的原始多行字符串。`open_store()`先设置 WAL/外键，再在事务内建表、验证列/索引/级联外键并写入 `user_version=1`。
+- 对现有 `user_version=0`且只有兼容 `conversations`表的残缺库执行幂等原地补全，已有行保持不变；发现列定义或版本不兼容时返回 `SIDERA_CONVERSATION_SCHEMA_INCOMPATIBLE`，不会删除或重建数据库。
+- 设置页“测试连接”已升级为“检测 Agent”，分别呈现 Provider、会话存储和 Pi 运行时；只有三项通过才显示“Agent 可以对话”。对话表面只显示安全错误码和简短说明，原始技术详情放在可展开区域。
+- 会话存储使用不链接 Tauri/rfd 的独立 Rust 测试框架；4 组定向用例真实运行并通过，生成的测试 EXE 中 `TaskDialogIndirect / comctl32 / tauri-plugin-dialog / rfd`匹配数为 0。Tauri 主程序仍按默认 `desktop-dialog`特性加载原生对话框插件。
+- TypeScript、Vite、`cargo check -j 2`、R4-R1 专项、R4/R3/R2/R1、双背景、科研星图与 Pi 无 Provider RPC 回归为 `PASS`；未调用付费 Provider。最新可见 Tauri 已将原残缺库在原路径修复为 v1，保留原 1 条会话，并确认“检测 Agent”入口和无 Windows 弹窗，记录为 `NATIVE PARTIAL PASS`；三项检测结果、第一条真实消息和重启历史 CRUD 仍为 `UNVERIFIED`。
+- 证据：[sidera-m2.0b-r4-r1-conversation-store-readiness-2026-08-02.json](./evidence/sidera-m2.0b-r4-r1-conversation-store-readiness-2026-08-02.json)
+
+## 2026-08-02 M2.0b-R4 Agent 会话、工具能力与 Liquid Glass 收口
+
+- 会话事实已从内存升级为所选论文库下的 `Sidera/conversations-v1.sqlite`，完整保存会话元数据和 UI 轮次；Pi 使用 `Sidera/pi-sessions/project-<hash>/`原生 JSONL，启动参数改为 `--session-dir + --session-id`，不再使用 `--no-session`。最近活动会话按项目恢复，异常退出的流式轮次标记为“已中断”，不会自动重放付费请求。
+- 新对话、历史搜索、活动/归档切换、重命名、归档、恢复和归档区二次确认永久删除已经接入 Tauri 窄命令。生成中切换、新建或归档当前会话必须先确认、发出停止并等待终止事件；Pi 上下文损坏或缺失时保留 SQLite 阅读历史，但禁止在旧会话继续提问。
+- 历史抽屉位于对话框左侧，宽度 `clamp(272px, 20vw, 320px)`、间距 16px；宽屏按“抽屉＋间距＋对话框”整体居中，对话框连续右移半个新增宽度，低于 960px 改为覆盖层。打开历史会释放聚焦，空间 Explore/聚焦会关闭历史。
+- Pi 内置工具继续关闭。会话扩展新增目录浏览、文件读取/搜索、HTTPS GET、文件写入/编辑/删除和 PowerShell；只读工具直接执行，写入、编辑、删除与任意 PowerShell 都通过 Rust 一次性审批卡。审批绑定当前 session/message/tool/toolCallId/参数哈希；子进程环境先清空再只恢复必要系统项，输出限量、最长 120 秒，用户中止轮次会传播到正在执行的已审批 Shell；HTTPS 重定向降级为非 HTTPS 时拒绝，敏感字段统一脱敏。
+- 设置新增 `auto / long`缓存策略；`auto`不写长缓存环境变量，`long`只在新建或重新打开会话时设置 `PI_CACHE_RETENTION=long`。会话统计展示输入、输出、cacheRead、cacheWrite、成本和上下文占用；零缓存只显示“未检测到缓存用量”。
+- 完整对话工作区、历史抽屉、按钮、输入区和审批卡已统一为静态深色 Liquid Glass：约 28px 模糊、半透明材质、顶/左镜面高光、细边和柔和阴影；助手正文使用更稳定的烟熏玻璃。没有增加 WebGL、动态噪声或逐帧滤镜，并提供 reduced motion、降低透明度、高对比度、forced colors 和不支持 backdrop-filter 的纯色退路。
+- TypeScript、Vite、`cargo check -j 2`、R4 专项、R3/R1/R2 与 Pi 基础 RPC 回归为 `PASS`；Rust 会话测试目标完成编译，但本机测试可执行文件仍在进入测试框架前挂起并超时，与 R1 已记录环境阻塞一致，因此记录为 `BLOCKED`，不覆盖 Rust 编译和源码/协议专项 `PASS`。没有调用付费 Provider。
+- 原生桌面随后确认会话 Schema SQL 拼接失败，Agent 无法创建新会话；Rust 测试 EXE 还出现 `TaskDialogIndirect`入口错误。本工作包产品结论因此更正为 `PRODUCT FAIL / SUPERSEDED BY M2.0b-R4-R1`；其余原生会话、工具、缓存和 Liquid Glass 验收仍未完成。证据：[sidera-m2.0b-r4-agent-conversations-tools-liquid-glass-2026-08-02.json](./evidence/sidera-m2.0b-r4-agent-conversations-tools-liquid-glass-2026-08-02.json)
+
+## 2026-08-02 M2.0b-R3 对话体验收口
+
+- Agent 无对话时默认只显示底部输入条；首次有效提交在调用 Provider 前立即恢复固定阅读面板，因此后续失败也会留在大面板中展示。已有对话手动收起后，下一次有效提交同样自动展开。
+- 对话只保留现有阅读尺寸：宽度 `clamp(560px, 42vw, 760px)`、历史区最大 `min(56vh, 580px)`。紧凑/阅读切换按钮、自由缩放手柄、`SideraDialogLayoutPreference`及旧布局偏好读写已经删除；旧 `research-agent:sidera-dialog-layout:v1`数据保留但不再读取。
+- 用户消息已去除渐变背景、右边框、阴影与气泡底色，只保留右对齐文字、用户标签和轮次间距。
+- textarea 改为单行 42px 基线、20px 行高、11px 上下内边距，并按真实 `scrollHeight`向上增长至 100px；超过上限后内部滚动，发送清空后恢复 42px。折叠与理论 Explore 输入均使用底部锚点，30px 眼睛/发送按钮继续垂直居中。
+- 全局提示现为带唯一 ID 的 `success / info / error`消息对象。成功和普通信息 3 秒自动关闭；错误保持到点击/键盘关闭或被新提示替换。计时器按消息 ID 校验并在替换时清理，旧计时器不会误删新提示；设置保存成功明确使用 `success`，异常通知使用 `error`。
+- TypeScript、Vite、R3 对话专项、R1 会话证据回归、R2 空间构图、Agent 双背景、科研星图 R3、热点过渡、项目文档审计和差异检查均为 `PASS`；原生桌面和用户视觉尚未执行，产品状态保持 `UNVERIFIED`。
+- 本工作包不实现新对话、历史持久化、联网或缓存架构，也未调用付费 Provider。当前继续保留全部脏工作树和未跟踪证据，不提交、不推送、不创建 PR、不发布。证据：[sidera-m2.0b-r3-conversation-experience-2026-08-02.json](./evidence/sidera-m2.0b-r3-conversation-experience-2026-08-02.json)
+
+## 2026-08-02 M2.0b-R2 对话控件与空间构图连续性
+
+- 输入区已经统一为 42px 基准控制高度，左右 30px 操作按钮与文本区共享垂直中心；当时的阅读、紧凑、自定义、折叠和 Explore 不再使用独立底部偏移规则。紧凑/自定义布局随后由 R3 删除。
+- Agent 显式聚焦不再使用固定 `22% / 78%` 或理论近景 `±0.56` 锚点。`ResizeObserver` 从真实对话框、证据卡、标题栏和视口边界生成 `SideraFocusComposition`，并由沉浸相机、理论论文近景与 CSS 光学强调共同消费。
+- 科研星图右侧轨道继续按热点、论文摘要、论文阅读使用三档实际宽度，但展示星图的空闲投影偏移固定为 `0`；轨道作为覆盖层，不再推动星系几何中心离开物理画布中心。
+- 论文摘要和阅读锚点分别按对应轨道宽度与 24px 间隔计算，并由论文 Journey 连续驱动相机和目标论文。研究星图路径继续取消独立 acquisition；返回时轨道可保留热点详情，但系统姿态恢复到物理画布中心，不触发额外 fit/reset。
+- 用户实机反馈科研星图无法点击热点、无法进入且右侧轨道不打开。根因是 Canvas 运行时被 Fast Refresh 或场景替换重建后已回到 `overview`，外层 React 仍保留 `system`，导致模式按钮禁用且 `exit-system` 被内部概览守卫忽略。Canvas 现在会在每次运行时重建时立即发布真实的 `overview` 状态。
+- 用户随后实机确认论文靠近仍会先横移，返回末端会突然居中。根因是起始锚点由带右栏 `setViewOffset` 的真实相机投影取得，但 Journey 四元数求解使用不含该偏移的规范投影，导致右栏位移被同时写入相机姿态与渲染投影；返回结束再由 Journey 切回 Orbit 时暴露姿态跳变。
+- Canvas 现在使用 Journey 规范投影记录论文起始锚点，并按实际 `viewOffset` 修正锚点诊断；新增运行级回归确认 1920px 论文摘要轨道夹具从旧约 `11.80°` 首帧/返回角误差收敛为位置 `0`、角度 `0°`。修复已实现，等待用户在当前 Tauri 完成论文飞近/返回复验。
+- 用户继续指出返回后展示星图的视觉中心不再是星系中心。根因是旧修复把连续返回终点稳定在热点轨道的“剩余区域中心”；现在科研展示模式会清除全场景 `viewOffset`，只把论文目标移动到轨道左侧安全锚点。
+- 用户进一步澄清真正未修复的是旋转枢轴：展示星图拖拽时围绕某个热点或其他点旋转，而不是围绕可见圆圈中心。根因是系统态 `orbit.center=hotspot` 被持续发布到外层相机姿态，Fast Refresh/场景重建又把该瞬态中心写回 `cameraPreset.center`；上一轮只修复投影主点，没有修复 Orbit 枢轴。
+- 概览姿态解析现在始终输出场景规范中心；只有保存中心与前一概览规范中心一致时才继承距离/角度，否则恢复整组默认概览姿态。姿态发布函数本身增加 `overview + paper idle` 守卫，连 effect 清理也不能再保存热点中心。展示星图规范枢轴为 `[0, 0, -0.1]`。
+- TypeScript、覆盖 1100/1360/1440/1920px 的 R2 构图专项、科研星图 R3 和热点过渡回归为 `PASS`；空闲星系中心误差不超过 1px，Journey 起点/返回位置误差为 `0`，摘要↔阅读交互后的返回角度误差小于 `0.00001°`。按钮像素对齐、修复后的五轮论文往返和多缩放视觉验收仍为 `UNVERIFIED`。
+- 新增旋转枢轴运行夹具为 `PASS`：热点瞬态中心 `[2.4, -1.2, 0.5]`被拒绝，0°/90°/180°/270°/360°旋转均围绕规范圆心，最大圆心投影误差约 `4.79e-16`。真实 Tauri 拖拽视觉仍为 `UNVERIFIED`。
+- 当前继续保留 `dirty worktree`，不提交、不推送、不创建 PR、不发布。证据：[sidera-m2.0b-r2-spatial-composition-2026-08-02.json](./evidence/sidera-m2.0b-r2-spatial-composition-2026-08-02.json)
+
+## 2026-08-02 M2.0b-R1 对话编排、阅读面板与证据闭环（自动技术闭环）
+
+- 真实桌面对话确认 M2.0b 的检索与多轮上下文有效，但产品验收失败：用户问题与回答分组错位、Markdown 原文裸露、阅读面板偏小、库总量无法可靠回答，并且读取证据后仍可能绕过结构化引用收口。
+- R1 将根级状态改为逐轮交错的 `SideraConversationTurn`，增加安全 GFM Markdown、阅读面板和只读 `sidera_get_library_overview`；R1 当时加入的紧凑/自定义布局已由 R3 的单一固定阅读面板取代。
+- 证据回合增加不可绕过的完成门：检索过程旁白不进入正文；读取成功后必须完成结构化引用，否则进入 `invalid`并禁止引用与聚焦。
+- TypeScript/Vite、Pi 基础会话审计、混合 RAG 审计、R1 会话专项、`cargo check -j 2`和默认 SQLite 只读审计均为 `PASS`。默认库概况为 25,463 篇论文、15 个学科、160 个热点，活动快照含 25,463 篇论文。
+- Rust 定向测试目标能够完成编译，但 Windows 测试可执行文件在进入测试框架前挂起；该项记录为环境 `BLOCKED`，不以此覆盖独立 Rust 编译和真实数据库审计的 `PASS`。
+- R1 阶段的 Tauri 开发版曾低负载确认唯一可见 `Sidera` 原生窗口、流动星河及阅读面板；当时呈现的自定义尺寸拖拽入口已由 R3 删除。未代用户发送真实 Provider 问题，避免未经确认产生模型调用费用。
+- 当前仍保留现有脏工作树。真实 Provider 的三轮交错、Markdown、尺寸恢复、停止和引用/聚焦桌面验收尚未完成，因此产品状态从已知 `FAIL`恢复为 `UNVERIFIED`，不得提前标记 `PASS`。
+- 证据：[sidera-m2.0b-r1-conversation-evidence-ui-2026-08-02.json](./evidence/sidera-m2.0b-r1-conversation-evidence-ui-2026-08-02.json)
+
+## 2026-08-02 M2.0b Pi 本地论文轻量混合 RAG（自动技术闭环）
+
+- 从 M2.0a 干净基线创建隔离分支 `codex/sidera-m2-rag`，HEAD `d6e044af8d15fe04039bb1184a71ee5a0b159665`；当前实现保留为 `dirty worktree`。
+- Pi 会话不再使用“全部工具关闭”，而是关闭全部内置工具和通用发现，仅显式加载会话专用扩展。扩展只注册 `sidera_search_local_papers`、`sidera_get_papers_by_ids`和`sidera_finalize_evidence`。
+- Rust 工具桥通过会话 nonce、进程 epoch、回合 revision、活动 `toolCallId`和三项白名单校验请求；项目 ID 与只读数据库路径由 Rust 注入，模型不能提供 SQL、数据库路径或其他项目。
+- 混合检索复用现有 `search_blob` LIKE 路径和活动快照的 384 维 multilingual-e5-small 向量，以语义 `0.55`、关键词 `0.45`、`k=60`的确定性 RRF 融合。向量表缺失或模型版本不匹配时在加载 E5 前安全降级，不现场重建。
+- 引用闭包限制为本回合已搜索并成功读取的真实论文 ID；最多搜索 3 次、读取 2 次、引用收口 1 次，证据最多 6 篇，摘要和累计工具输出均有上限。标题与摘要明确标记为不可信数据。
+- 前端已经显示“正在检索本地文献 / 正在读取证据 / 正在组织回答”，只在完整回答且结构化引用通过核验后生成引用与现有显式聚焦入口；无引用核验时保留正文但禁用引用。
+- `cargo check -j 2`、TypeScript、Vite 生产构建、M2.0a 回归、M2.0b 专项和项目文档审计均已通过；默认发布库真实验证为 `hybrid-e5-like`，旧数据库真实验证为 `lexical-fallback`。
+- Rust 定向单元测试可执行文件在进入测试框架前被 Windows 以 `0xC0000139 / STATUS_ENTRYPOINT_NOT_FOUND`终止；本轮未重装依赖或改动系统 DLL。该项记录为 `BLOCKED`，真实数据库审计可执行程序仍为独立 `PASS`。
+- 真实桌面 Provider 的中文跨语言检索、流式证据回答、点击引用与显式聚焦尚未执行，产品状态保持 `UNVERIFIED`。
+- 证据：[sidera-m2.0b-pi-local-paper-rag-2026-08-02.json](./evidence/sidera-m2.0b-pi-local-paper-rag-2026-08-02.json)
 
 ## 2026-08-01 M2.0a Pi 基础会话链路（技术闭环完成）
 

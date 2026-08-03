@@ -78,7 +78,7 @@ type AgentWorkspaceProps = {
   v20Snapshot: V20HotspotSnapshot | null;
   onNavigate: (view: ActiveView) => void;
   onOpenPaper: (paperId: string, title?: string) => void;
-  onNotice: (message: string) => void;
+  onNotice: (message: string, kind?: "success" | "info" | "error") => void;
   visualReviewScenario?: string;
 };
 
@@ -558,15 +558,16 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       setNewRunOpen(false);
       setDraft(createDraft(props.settings));
       await loadRuns();
-      props.onNotice(draft.mode === "advisor" ? "顾问计划已生成。" : "研究计划已生成，等待审批。"
+      props.onNotice(
+        draft.mode === "advisor" ? "顾问计划已生成。" : "研究计划已生成，等待审批。",
+        "success",
       );
     } catch (value) {
       const normalized = normalizeAgentError(value);
       if (normalized.code === "AGENT_ACTIVE_RUN_EXISTS" && normalized.runId) {
         setNewRunOpen(false);
         selectRun(normalized.runId);
-        props.onNotice("当前项目已有活动运行，已为你打开。"
-        );
+        props.onNotice("当前项目已有活动运行，已为你打开。", "info");
       } else {
         setError(errorMessage(value));
       }

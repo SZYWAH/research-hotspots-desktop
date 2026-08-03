@@ -164,8 +164,8 @@ assert(
   "Session continuation or background preference persistence is missing",
 );
 assert(
-  dualPage.includes("正式回答后端尚未接入；证据舞台仅使用开发答案夹具"),
-  "The prompt shell does not disclose the absent Agent backend",
+  dualPage.includes("Pi 本地 RAG · 可审计文件与 HTTPS 工具 · 变更操作逐次审批"),
+  "The prompt shell does not disclose the active evidence and approval boundary",
 );
 assert(
   app.includes("<AgentDualBackgroundPage"),

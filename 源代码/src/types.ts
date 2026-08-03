@@ -239,6 +239,8 @@ export type AiSettings = {
   apiCredentialConfigured?: boolean;
   temperature: number;
   streamOutput: boolean;
+  sideraCacheRetention: "auto" | "long";
+  sideraCachePolicyVersion: number;
   dataDir: string;
   databaseDir: string;
   librarySetupCompleted: boolean;

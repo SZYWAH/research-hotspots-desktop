@@ -94,6 +94,7 @@ export type GalaxyPaperJourneyStartOptions = {
   targetAnchorNdcX: number;
   targetAnchorNdcY?: number;
   durationMs?: number;
+  acquireDurationMs?: number;
   retargeting?: boolean;
   projection: GalaxyPaperJourneyProjection;
   starCenter?: THREE.Vector3;
@@ -311,6 +312,24 @@ function projectWorldToNdc(
     y: local.y / halfHeight,
     depth,
   };
+}
+
+/**
+ * Project a paper into the Journey's canonical camera space.
+ *
+ * The renderer may apply `PerspectiveCamera.setViewOffset()` to reserve room
+ * for a context rail. That principal-point shift belongs to the final render,
+ * not to the camera pose solved by the Journey. Callers must therefore use
+ * this projection instead of `Vector3.project(camera)` when recording path
+ * anchors, otherwise the rail offset is baked into the quaternion and then
+ * applied a second time by the renderer.
+ */
+export function projectGalaxyPaperTargetToNdc(
+  worldPosition: THREE.Vector3,
+  cameraPose: GalaxyPaperCameraPose,
+  projection: GalaxyPaperJourneyProjection,
+) {
+  return projectWorldToNdc(worldPosition, cameraPose, projection);
 }
 
 function projectedTargetDiameter(
@@ -701,14 +720,15 @@ export class App17PaperJourneyController {
     this.viewportHeight = Math.max(1, options.viewportHeight ?? 1);
     this.inboundPath = clonePath(preparedPath);
     this.inboundReturnsToSystem = !retargeting;
+    const acquireDurationMs = Math.max(0, options.acquireDurationMs ?? ACQUIRE_MS);
     this.segment = this.createSegment(
       this.inboundPath,
-      options.now + (retargeting ? 0 : ACQUIRE_MS),
+      options.now + (retargeting ? 0 : acquireDurationMs),
       options.durationMs ?? (retargeting ? DEFAULT_RETARGET_MS : DEFAULT_FLIGHT_MS),
     );
     this.phaseStartedAt = options.now;
-    this.phaseDurationMs = retargeting ? 0 : ACQUIRE_MS;
-    this.state = retargeting ? "flying-in" : "acquiring";
+    this.phaseDurationMs = retargeting ? 0 : acquireDurationMs;
+    this.state = retargeting || acquireDurationMs <= 0 ? "flying-in" : "acquiring";
     this.readingOrbit = null;
     this.readingInteracted = false;
     this.readingAnchorTransition = null;

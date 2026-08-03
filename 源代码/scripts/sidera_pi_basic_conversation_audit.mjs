@@ -22,8 +22,10 @@ const desktopBridge = await readFile(path.join(root, "src", "lib", "sideraPi.ts"
 
 for (const flag of [
   "--mode",
-  "--no-session",
-  "--no-tools",
+  "--session-dir",
+  "--session-id",
+  "--no-builtin-tools",
+  "--extension",
   "--no-extensions",
   "--no-skills",
   "--no-prompt-templates",
@@ -32,7 +34,10 @@ for (const flag of [
 ]) {
   assert.ok(rustSource.includes(`\"${flag}\"`), `Rust runtime must pass ${flag}`);
 }
+assert.ok(!rustSource.includes('"--no-session"'), "Sidera runtime must preserve Pi sessions");
 assert.ok(rustSource.includes("PI_CODING_AGENT_DIR"), "Pi config directory must be isolated");
+assert.ok(rustSource.includes("sidera_get_library_overview,sidera_search_local_papers,sidera_get_papers_by_ids,sidera_finalize_evidence"), "Pi must retain the four Sidera library tools");
+assert.ok(rustSource.includes("sidera_list_directory,sidera_read_file,sidera_search_files,sidera_fetch_url"), "Pi must receive the audited read-tool allowlist");
 assert.ok(rustSource.includes("$SIDERA_PI_API_KEY"), "models.json must reference an environment key");
 assert.ok(!rustSource.includes('.arg(api_key)'), "API key must not be a process argument");
 assert.ok(!rustSource.includes('"type": "bash"'), "Sidera runtime must not issue Pi bash commands");

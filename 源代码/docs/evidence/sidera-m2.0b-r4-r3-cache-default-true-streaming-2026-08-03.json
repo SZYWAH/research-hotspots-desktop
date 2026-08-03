@@ -1,0 +1,128 @@
+{
+  "workPackage": "M2.0b-R4-R3",
+  "title": "Sidera long-cache default and true first-delta streaming repair",
+  "date": "2026-08-03",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "changes": {
+    "cachePolicy": {
+      "version": 2,
+      "default": "long",
+      "legacyAuto": "migrated once to long",
+      "legacyLong": "preserved as long and marked v2",
+      "legacyMissing": "migrated once to long",
+      "explicitV2Auto": "preserved across save, restart and modern backup restore",
+      "longRejection": "persistent SIDERA_PI_LONG_CACHE_UNSUPPORTED error; no fallback or replay"
+    },
+    "streaming": {
+      "textDecisionBufferBytes": "removed",
+      "directText": "first text_delta emitted immediately",
+      "toolStart": "enters hidden state and retracts provisional visible text with assistant-replace",
+      "systemTools": "next final response released after tool completion",
+      "rag": "release remains gated by overview, no-result or evidence finalize",
+      "abort": "visible direct text retained; hidden tool prose never flushed",
+      "evidenceFailure": "fixed failure explanation replaces unverified text",
+      "toolAuthorization": "unchanged; toolcall_start has no authorization authority"
+    },
+    "interfaces": {
+      "cacheRetention": "auto | long",
+      "piEventAdded": "assistant-replace",
+      "tauriCommandsAdded": 0,
+      "databaseSchemaChanged": false,
+      "piJsonlProtocolChanged": false
+    }
+  },
+  "validation": [
+    {
+      "name": "typescript-project-build",
+      "command": "node_modules\\.bin\\tsc.CMD -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "name": "vite-production-build",
+      "command": "node_modules\\.bin\\vite.CMD build",
+      "status": "PASS",
+      "viteVersion": "6.4.3",
+      "moduleCount": 1916,
+      "notes": "existing Tauri event dynamic/static import warning only"
+    },
+    {
+      "name": "rust-default-desktop-check",
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+      "status": "PASS"
+    },
+    {
+      "name": "rust-conversation-and-stream-gate-tests",
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml -p sidera-conversation-store-test-harness -j 2 -- --nocapture",
+      "status": "PASS",
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "name": "conversation-harness-forbidden-import-scan",
+      "artifact": "src-tauri/target/debug/deps/sidera_conversation_store_test_harness-361cf983c5df1144.exe",
+      "status": "PASS",
+      "forbidden": [
+        "TaskDialogIndirect",
+        "comctl32.dll",
+        "tauri_plugin_dialog",
+        "rfd"
+      ],
+      "matchCount": 0
+    },
+    {
+      "name": "r4-r3-cache-and-streaming-audit",
+      "command": "node --experimental-strip-types scripts/sidera_agent_conversation_r4_r3_audit.mjs",
+      "status": "PASS",
+      "providerCalls": 0
+    },
+    {
+      "name": "r4-r2-r4-r1-r4-r3-r2-r1-and-dual-background-regressions",
+      "status": "PASS",
+      "providerCalls": 0,
+      "credentialsExposed": false
+    },
+    {
+      "name": "pi-basic-rpc-audit",
+      "status": "PASS",
+      "piVersion": "0.82.1",
+      "request": "get_state only",
+      "providerCalls": 0
+    },
+    {
+      "name": "project-documentation-audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS",
+      "currentStage": "M2.0b-R4-R3"
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "desktopAcceptance": {
+    "status": "UNVERIFIED",
+    "pending": [
+      "confirm legacy unmarked auto settings migrate to long without deleting project data",
+      "select compatibility mode explicitly and confirm it persists after save and restart",
+      "compare UI cacheRead/cacheWrite with the authorized real Provider records on later turns",
+      "confirm short and long answers stream continuously from the first visible characters",
+      "confirm tool preambles retract, tool process prose remains hidden and final answers continue streaming",
+      "confirm ordinary page navigation still does not stop or replay the active turn"
+    ]
+  },
+  "result": {
+    "technical": "AUTOMATED_PASS",
+    "product": "UNVERIFIED",
+    "providerCallsMade": false,
+    "databaseSchemaChanged": false,
+    "conversationDatabaseModifiedByValidation": false,
+    "piSessionFilesModifiedByValidation": false,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

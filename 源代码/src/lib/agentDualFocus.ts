@@ -3,6 +3,7 @@ import type {
   BackgroundMembership,
   ResolvedAgentGalaxyEntity,
 } from "./agentGalaxyFlowContract";
+import type { SideraFocusComposition } from "./sideraFocus";
 
 export const AGENT_DUAL_FOCUS_MAX_EVIDENCE = 5;
 export const AGENT_DUAL_FOCUS_MAX_CONTEXT = 24;
@@ -63,6 +64,7 @@ export type AgentDualFocusPresentation = {
   releasing: boolean;
   productMode?: "legacy-dynamic" | "sidera-explicit";
   side?: "left" | "right";
+  composition?: SideraFocusComposition;
   sideraPhase?: "acquiring" | "retargeting";
 };
 

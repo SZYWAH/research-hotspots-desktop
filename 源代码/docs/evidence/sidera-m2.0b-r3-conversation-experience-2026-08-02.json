@@ -1,0 +1,131 @@
+{
+  "workPackage": "M2.0b-R3",
+  "title": "Sidera conversation experience closure",
+  "date": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "scope": {
+    "implemented": [
+      "empty-session collapsed composer",
+      "valid-submit immediate fixed-reading expansion",
+      "single fixed reading layout",
+      "42px to 100px upward-growing textarea",
+      "user messages without a background, border, or shadow",
+      "typed notice lifecycle with message-id timer isolation"
+    ],
+    "removed": [
+      "compact and reading layout toggle buttons",
+      "custom dialog resizing",
+      "SideraDialogLayoutPreference",
+      "layout preference reads and writes"
+    ],
+    "excluded": [
+      "new conversation",
+      "conversation history persistence",
+      "network access",
+      "provider cache architecture",
+      "paid provider calls",
+      "commit, push, pull request, or release"
+    ]
+  },
+  "lockedMetrics": {
+    "readingWidth": "clamp(560px, 42vw, 760px)",
+    "historyMaxHeight": "min(56vh, 580px)",
+    "composerBaseHeightPx": 42,
+    "composerMaxHeightPx": 100,
+    "composerLineHeightPx": 20,
+    "composerVerticalPaddingPx": 11,
+    "composerButtonSizePx": 30,
+    "composerCenterErrorMaxPx": 1,
+    "successNoticeDurationMs": 3000,
+    "infoNoticeDurationMs": 3000,
+    "errorNoticeDuration": "sticky"
+  },
+  "compatibility": {
+    "obsoleteLayoutStorageKey": "research-agent:sidera-dialog-layout:v1",
+    "obsoleteLayoutStorageBehavior": "ignored but not deleted",
+    "tauriInterfaceChanged": false,
+    "piInterfaceChanged": false,
+    "ragInterfaceChanged": false,
+    "databaseInterfaceChanged": false
+  },
+  "validation": [
+    {
+      "name": "typescript-project-build",
+      "command": "node_modules\\.bin\\tsc.CMD -b",
+      "status": "PASS"
+    },
+    {
+      "name": "vite-production-build",
+      "command": "node_modules\\.bin\\vite.CMD build",
+      "status": "PASS",
+      "moduleCount": 1914,
+      "durationSeconds": 9.93,
+      "notes": "existing Tauri event dynamic-import warning only"
+    },
+    {
+      "name": "conversation-ui-r3-audit",
+      "command": "node scripts/sidera_agent_conversation_ui_r3_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "conversation-r1-regression",
+      "command": "node scripts/sidera_pi_conversation_evidence_ui_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "spatial-composition-r2-regression",
+      "command": "node --experimental-strip-types scripts/sidera_m2_spatial_composition_r2_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "agent-dual-background-regression",
+      "command": "node scripts/agent_dual_background_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "research-galaxy-r3-regression",
+      "command": "node scripts/sidera_galaxy_spatial_ui_r3_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "hotspot-transition-regression",
+      "command": "node --experimental-strip-types scripts/galaxy_hotspot_transition_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "project-docs-audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "desktopAcceptance": {
+    "status": "UNVERIFIED",
+    "pending": [
+      "1100, 1360, and 1920px initial composer layout",
+      "100%, 125%, and 150% display scaling",
+      "single-line optical centering and multiline upward growth",
+      "first-submit and post-collapse automatic expansion",
+      "user message surface without rectangular emphasis",
+      "absence of layout buttons and resize handle",
+      "three-second saved-settings notice",
+      "sticky and closable error notice",
+      "five collapse-and-submit cycles in normal and maximized windows"
+    ]
+  },
+  "result": {
+    "technical": "PASS",
+    "product": "UNVERIFIED",
+    "providerCallsMade": false,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

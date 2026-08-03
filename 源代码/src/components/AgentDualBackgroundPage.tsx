@@ -1,20 +1,28 @@
 import {
+  Archive,
   ArrowLeft,
   Atom,
   BookOpen,
+  Check,
   ChevronRight,
   Crosshair,
   ExternalLink,
   Eye,
+  History,
   Maximize2,
   MessageSquareText,
   Minimize2,
   MoreHorizontal,
   Orbit,
+  Pencil,
+  Plus,
   RefreshCw,
+  RotateCcw,
+  Search,
   Send,
   Sparkles,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -64,12 +72,22 @@ import {
   membershipLabel,
   normalizeSideraReferences,
   resolveSideraInitialIndex,
+  resolveSideraFocusComposition,
   type SideraAnswerEntityReference,
   type SideraAnswerResolution,
   type SideraAssistantMessage,
+  type SideraConversationTurn,
   type SideraFocusSession,
+  type SideraFocusComposition,
   type SideraResolvedReference,
 } from "../lib/sideraFocus";
+import type {
+  SideraConversationSummary,
+} from "../lib/sideraConversations";
+import type {
+  SideraSessionStats,
+  SideraToolApprovalRequest,
+} from "../lib/sideraPi";
 import type {
   AgentTheoryReturnProgressSnapshot,
   GalaxyCameraPose,
@@ -84,11 +102,13 @@ import {
   type AgentTheoryNavigationRequest,
   type AgentTheoryNavigationSnapshot,
 } from "./AgentTheoryBackgroundCanvas";
+import { SideraMarkdown } from "./SideraMarkdown";
 import "./AgentDualBackgroundPage.css";
 
 export type {
   SideraAnswerEntityReference,
   SideraAssistantMessage,
+  SideraConversationTurn,
 } from "../lib/sideraFocus";
 
 export type AgentBackgroundMode = "immersive" | "theory";
@@ -117,9 +137,21 @@ type AgentDualBackgroundPageProps = {
   navigationOpen?: boolean;
   onCloseNavigation?: () => void;
   onPromptSubmit?: (event: AgentPromptSubmitEvent) => void;
-  assistantMessages?: SideraAssistantMessage[];
+  conversationTurns?: SideraConversationTurn[];
   conversationGenerating?: boolean;
   conversationError?: string;
+  conversations?: SideraConversationSummary[];
+  activeConversationId?: string;
+  conversationLoading?: boolean;
+  sessionStats?: SideraSessionStats | null;
+  toolApproval?: SideraToolApprovalRequest | null;
+  onNewConversation?: () => void;
+  onSelectConversation?: (conversationId: string) => void;
+  onRenameConversation?: (conversationId: string, title: string) => void;
+  onArchiveConversation?: (conversationId: string) => void;
+  onRestoreConversation?: (conversationId: string) => void;
+  onDeleteConversation?: (conversationId: string) => void;
+  onDecideToolApproval?: (decision: "approved" | "rejected") => void;
   onStopGeneration?: () => void;
   onOpenSettings?: () => void;
   onOpenPaperDetail?: (paperId: string, title?: string) => void;
@@ -368,6 +400,24 @@ function referenceLabel(reference: SideraAnswerEntityReference) {
   return reference.kind === "paper" ? "论文" : "热点";
 }
 
+function assistantStatusLabel(message: SideraAssistantMessage) {
+  if (message.status === "cancelled") return "已停止";
+  if (message.status === "interrupted") return "异常退出时已中断";
+  if (message.status === "failed") return "回答失败";
+  if (message.status !== "streaming") return "回答完成";
+  switch (message.toolStage) {
+    case "reading-library-overview": return "正在读取本地文献库概况";
+    case "searching-local-papers": return "正在检索本地文献";
+    case "reading-evidence": return "正在读取证据";
+    case "reading-files": return "正在读取文件";
+    case "reading-web": return "正在读取网页";
+    case "awaiting-tool-approval": return "等待工具审批";
+    case "using-tools": return "正在使用工具";
+    case "synthesizing": return "正在组织回答";
+    default: return "回答中";
+  }
+}
+
 export function AgentDualBackgroundPage({
   settings,
   activeProject,
@@ -376,9 +426,21 @@ export function AgentDualBackgroundPage({
   navigationOpen = false,
   onCloseNavigation,
   onPromptSubmit,
-  assistantMessages = [],
+  conversationTurns = [],
   conversationGenerating = false,
   conversationError = "",
+  conversations = [],
+  activeConversationId,
+  conversationLoading = false,
+  sessionStats,
+  toolApproval,
+  onNewConversation,
+  onSelectConversation,
+  onRenameConversation,
+  onArchiveConversation,
+  onRestoreConversation,
+  onDeleteConversation,
+  onDecideToolApproval,
   onStopGeneration,
   onOpenSettings,
   onOpenPaperDetail,
@@ -474,18 +536,27 @@ export function AgentDualBackgroundPage({
   const [resetTheoryNonce, setResetTheoryNonce] = useState(0);
   const [moreOpen, setMoreOpen] = useState(false);
   const [draft, setDraft] = useState("");
-  const [submittedPrompts, setSubmittedPrompts] =
-    useState<AgentPromptSubmitEvent[]>([]);
   const [devAssistantMessages, setDevAssistantMessages] =
     useState<SideraAssistantMessage[]>(() => (
       developmentFixturesEnabled ? storedSideraSession?.devMessages ?? [] : []
     ));
-  const visibleAssistantMessages = useMemo(
+  const visibleConversationTurns = useMemo<SideraConversationTurn[]>(
     () => [
-      ...assistantMessages,
-      ...(developmentFixturesEnabled ? devAssistantMessages : []),
+      ...conversationTurns,
+      ...(developmentFixturesEnabled
+        ? devAssistantMessages.map((assistant, index) => ({
+            id: assistant.id,
+            submittedAtMs: index,
+            userText: "开发评审：聚焦指定的真实论文或热点。",
+            assistant,
+          }))
+        : []),
     ],
-    [assistantMessages, devAssistantMessages, developmentFixturesEnabled],
+    [conversationTurns, devAssistantMessages, developmentFixturesEnabled],
+  );
+  const visibleAssistantMessages = useMemo(
+    () => visibleConversationTurns.map((turn) => turn.assistant),
+    [visibleConversationTurns],
   );
   const [answerResolutions, setAnswerResolutions] =
     useState<Record<string, SideraAnswerResolution>>({});
@@ -504,7 +575,23 @@ export function AgentDualBackgroundPage({
     useState("project-default:openalex:W2582012066");
   const [focusEvidenceInput, setFocusEvidenceInput] = useState("");
   const [dialogCollapsed, setDialogCollapsed] = useState(
-    () => storedSideraSession?.dialogCollapsed ?? false,
+    () => visibleConversationTurns.length === 0
+      ? true
+      : storedSideraSession?.dialogCollapsed ?? false,
+  );
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyTab, setHistoryTab] = useState<"active" | "archived">("active");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const filteredConversations = useMemo(() => {
+    const query = historyQuery.trim().toLocaleLowerCase();
+    return conversations.filter((conversation) => (
+      conversation.status === historyTab
+      && (!query || conversation.title.toLocaleLowerCase().includes(query))
+    ));
+  }, [conversations, historyQuery, historyTab]);
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
+    [activeConversationId, conversations],
   );
   const [allObjectsMessageId, setAllObjectsMessageId] = useState("");
   const [focusPaperDetail, setFocusPaperDetail] = useState<Paper | null>(null);
@@ -542,6 +629,10 @@ export function AgentDualBackgroundPage({
   const focusRevisionRef = useRef(0);
   const focusReleaseTimerRef = useRef(0);
   const answerResolutionRevisionRef = useRef(new Map<string, number>());
+  const historyRef = useRef<HTMLDivElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const historyNearBottomRef = useRef(true);
+  const previousTurnCountRef = useRef(visibleConversationTurns.length);
   const restoredSideraSessionRef = useRef(false);
   const devMessageSequenceRef = useRef(0);
   const immersivePayloadRef = useRef(immersivePayload);
@@ -549,6 +640,12 @@ export function AgentDualBackgroundPage({
   const theoryPoseRef = useRef<GalaxyCameraPose | undefined>(
     readTheoryCameraPose(theoryPoseStorageKey),
   );
+
+  useEffect(() => {
+    setHistoryOpen(false);
+    setHistoryQuery("");
+    setDialogCollapsed(conversationTurns.length === 0);
+  }, [activeConversationId]);
   const immersiveStyleRef = useRef<AgentImmersiveStyle>(initialImmersiveStyle);
   const flowCheckpointRefs = useRef<Record<
     AgentImmersiveStyle,
@@ -570,6 +667,75 @@ export function AgentDualBackgroundPage({
   const revealTimerRef = useRef(0);
   const initialReadyReportedRef = useRef(false);
   const pageRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const evidenceCardRef = useRef<HTMLElement | null>(null);
+
+  const measureFocusComposition = useCallback((
+    preferredSide: "left" | "right" | undefined,
+    fallbackSide: "left" | "right",
+  ): SideraFocusComposition => {
+    const page = pageRef.current;
+    const dialog = dialogRef.current;
+    const pageRect = page?.getBoundingClientRect();
+    const dialogRect = dialog?.getBoundingClientRect();
+    const viewportWidth = pageRect?.width ?? window.innerWidth;
+    const viewportHeight = pageRect?.height ?? window.innerHeight;
+    const titlebarHeight = page
+      ? Number.parseFloat(
+        window.getComputedStyle(page).getPropertyValue("--sidera-titlebar-height"),
+      ) || 38
+      : 38;
+    const fallbackDialogWidth = Math.min(760, Math.max(560, viewportWidth * 0.42));
+    const fallbackDialogHeight = Math.min(720, Math.max(182, viewportHeight * 0.58));
+    const left = dialogRect
+      ? dialogRect.left - (pageRect?.left ?? 0)
+      : (viewportWidth - fallbackDialogWidth) * 0.5;
+    const top = dialogRect
+      ? dialogRect.top - (pageRect?.top ?? 0)
+      : (viewportHeight - fallbackDialogHeight) * 0.5;
+    const width = dialogRect?.width ?? fallbackDialogWidth;
+    const height = dialogRect?.height ?? fallbackDialogHeight;
+    return resolveSideraFocusComposition({
+      viewportWidth,
+      viewportHeight,
+      titlebarHeight,
+      dialogBounds: {
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+      },
+      preferredSide,
+      fallbackSide,
+    });
+  }, []);
+
+  const resizeComposerTextarea = useCallback((textarea: HTMLTextAreaElement) => {
+    textarea.style.height = "42px";
+    const nextHeight = Math.min(100, Math.max(42, textarea.scrollHeight));
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 100 ? "auto" : "hidden";
+  }, []);
+
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (textarea) resizeComposerTextarea(textarea);
+  }, [draft, resizeComposerTextarea]);
+
+  useEffect(() => {
+    const history = historyRef.current;
+    if (!history) return;
+    const turnAdded = visibleConversationTurns.length > previousTurnCountRef.current;
+    previousTurnCountRef.current = visibleConversationTurns.length;
+    if (!turnAdded && !historyNearBottomRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      history.scrollTop = history.scrollHeight;
+      historyNearBottomRef.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [visibleConversationTurns]);
 
   useEffect(() => {
     immersivePayloadRef.current = immersivePayload;
@@ -812,6 +978,7 @@ export function AgentDualBackgroundPage({
       releasing: false,
       productMode: "sidera-explicit",
       side: nextSession.side,
+      composition: nextSession.composition,
       sideraPhase: phase,
     });
     setFocusRuntime({
@@ -833,6 +1000,7 @@ export function AgentDualBackgroundPage({
     selectedEntityId?: string,
   ) => {
     if (!isSideraMessageFocusReady(message)) return;
+    setHistoryOpen(false);
     let resolution = answerResolutions[message.id];
     if (!resolution || resolution.status !== "ready") {
       setFocusRuntime({
@@ -862,12 +1030,15 @@ export function AgentDualBackgroundPage({
     const existingSide = focusSession?.messageId === message.id
       ? focusSession.side
       : undefined;
-    const side = existingSide ?? chooseSideraFallbackSide(message.id, selected);
+    const fallbackSide = chooseSideraFallbackSide(message.id, selected);
+    const composition = measureFocusComposition(existingSide, fallbackSide);
+    const side = composition.side;
     presentSideraSession({
       messageId: message.id,
       candidates,
       currentIndex: resolveSideraInitialIndex(candidates, selected),
       side,
+      composition,
       backgroundMode: preferredMode,
       phase: focusSession ? "retargeting" : "acquiring",
     }, focusSession ? "retargeting" : "acquiring");
@@ -875,9 +1046,56 @@ export function AgentDualBackgroundPage({
   }, [
     answerResolutions,
     focusSession,
+    measureFocusComposition,
     preferredMode,
     presentSideraSession,
     resolveMessageReferences,
+  ]);
+
+  useEffect(() => {
+    const messageId = focusSession?.messageId;
+    const side = focusSession?.side;
+    if (!messageId || !side) return;
+    const fallbackSide = chooseSideraFallbackSide(
+      messageId,
+      focusSession.candidates[focusSession.currentIndex]?.entity.entityId ?? messageId,
+    );
+    const updateComposition = () => {
+      const composition = measureFocusComposition(side, fallbackSide);
+      setFocusSession((current) => {
+        if (!current || current.messageId !== messageId) return current;
+        const previous = current.composition;
+        if (
+          Math.abs(previous.targetCenterPx[0] - composition.targetCenterPx[0]) < 0.25
+          && Math.abs(previous.targetCenterPx[1] - composition.targetCenterPx[1]) < 0.25
+          && Math.abs(previous.targetDiameterPx - composition.targetDiameterPx) < 0.25
+          && Math.abs(previous.dialogGapPx - composition.dialogGapPx) < 0.25
+        ) {
+          return current;
+        }
+        return { ...current, composition };
+      });
+      setFocusPresentation((current) => (
+        current ? { ...current, side: composition.side, composition } : current
+      ));
+    };
+    updateComposition();
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(updateComposition);
+    if (pageRef.current) observer?.observe(pageRef.current);
+    if (dialogRef.current) observer?.observe(dialogRef.current);
+    if (evidenceCardRef.current) observer?.observe(evidenceCardRef.current);
+    window.addEventListener("resize", updateComposition);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateComposition);
+    };
+  }, [
+    focusSession?.currentIndex,
+    focusSession?.messageId,
+    focusSession?.side,
+    measureFocusComposition,
   ]);
 
   const retargetFocus = useCallback((nextIndex: number) => {
@@ -1252,7 +1470,11 @@ export function AgentDualBackgroundPage({
     const bounded = Math.max(0, Math.min(1, amount));
     page.style.setProperty(
       "--agent-return-dialog-top",
-      `calc(${50 + bounded * 50}% - ${bounded * 42}px)`,
+      `calc(${50 + bounded * 50}% - ${bounded * 21}px)`,
+    );
+    page.style.setProperty(
+      "--agent-return-dialog-translate-y",
+      `${-50 - bounded * 50}%`,
     );
     page.style.setProperty(
       "--agent-return-dialog-width",
@@ -1268,7 +1490,7 @@ export function AgentDualBackgroundPage({
     );
     page.style.setProperty(
       "--agent-return-dialog-radius",
-      `${18 - bounded * 6}px`,
+      `${26 - bounded * 11}px`,
     );
     page.dataset.theoryReturnDialogExploreAmount = bounded.toFixed(6);
   }, []);
@@ -1429,13 +1651,13 @@ export function AgentDualBackgroundPage({
   const submitPrompt = () => {
     const text = draft.trim();
     if (!text || conversationGenerating) return;
+    setDialogCollapsed(false);
     if (focusPresentation) releaseFocus();
     const event: AgentPromptSubmitEvent = {
       text,
       backgroundMode: preferredMode,
       submittedAtMs: Date.now(),
     };
-    setSubmittedPrompts((current) => [...current, event].slice(-8));
     setDraft("");
     onPromptSubmit?.(event);
     if (preferredMode === "theory" && exploreTheory) {
@@ -1528,6 +1750,7 @@ export function AgentDualBackgroundPage({
   ]);
 
   const requestTheoryExplore = useCallback(() => {
+    setHistoryOpen(false);
     if (focusPresentation) {
       setPendingExploreAfterFocus(true);
       releaseFocus();
@@ -1560,6 +1783,7 @@ export function AgentDualBackgroundPage({
   ]);
 
   const dialogExploreVisible = exploreTheory || theoryReturnActive;
+  const dialogVisuallyCollapsed = dialogCollapsed && !dialogExploreVisible;
 
   return (
     <section
@@ -1570,6 +1794,7 @@ export function AgentDualBackgroundPage({
         exploreTheory ? "agent-dual-page--explore" : "",
         theoryReturnActive ? "agent-dual-page--returning" : "",
         focusPresentation ? "agent-dual-page--focus-active" : "",
+        historyOpen ? "agent-dual-page--history-open" : "",
       ].filter(Boolean).join(" ")}
       data-background-mode={preferredMode}
       data-mounted-mode={mountedMode ?? "none"}
@@ -1596,13 +1821,21 @@ export function AgentDualBackgroundPage({
       data-sidera-session-message={focusSession?.messageId ?? ""}
       data-sidera-session-index={focusSession?.currentIndex ?? -1}
       data-sidera-session-count={focusSession?.candidates.length ?? 0}
+      data-history-open={historyOpen ? "true" : "false"}
+      data-dialog-collapsed={dialogVisuallyCollapsed ? "true" : "false"}
       data-sidera-focus-side={focusSession?.side ?? ""}
-      data-sidera-dialog-collapsed={dialogCollapsed ? "true" : "false"}
+      data-sidera-focus-gap={focusSession?.composition.dialogGapPx ?? ""}
+      data-sidera-focus-diameter={focusSession?.composition.targetDiameterPx ?? ""}
+      data-sidera-dialog-collapsed={dialogVisuallyCollapsed ? "true" : "false"}
       style={{
         "--sidera-focus-dim": String(
           focusRuntime.backgroundDimBlend ?? 0,
         ),
-        "--sidera-focus-x": focusSession?.side === "left" ? "22%" : "78%",
+        "--sidera-focus-x": `${(
+          focusSession?.composition.normalizedAnchorX
+          ?? (focusSession?.side === "left" ? 0.22 : 0.78)
+        ) * 100}%`,
+        "--sidera-focus-diameter": `${focusSession?.composition.targetDiameterPx ?? 200}px`,
       } as CSSProperties}
     >
       <div className="agent-dual-page__background" aria-hidden="true">
@@ -2002,10 +2235,138 @@ export function AgentDualBackgroundPage({
         </aside>
       ) : null}
 
+      {!dialogExploreVisible ? (
+        <aside
+          className="agent-conversation-drawer"
+          aria-label="对话历史"
+          aria-hidden={!historyOpen}
+        >
+          <header className="agent-conversation-drawer__header">
+            <div>
+              <strong>对话历史</strong>
+              <small>{conversations.length} 个会话</small>
+            </div>
+            <button
+              type="button"
+              title="新对话"
+              disabled={conversationLoading}
+              onClick={onNewConversation}
+            >
+              <Plus size={15} />
+            </button>
+          </header>
+          <label className="agent-conversation-drawer__search">
+            <Search size={14} />
+            <input
+              value={historyQuery}
+              onChange={(event) => setHistoryQuery(event.target.value)}
+              placeholder="搜索标题"
+              aria-label="搜索对话标题"
+            />
+          </label>
+          <div className="agent-conversation-drawer__tabs" role="tablist" aria-label="对话状态">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={historyTab === "active"}
+              onClick={() => setHistoryTab("active")}
+            >
+              活动
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={historyTab === "archived"}
+              onClick={() => setHistoryTab("archived")}
+            >
+              已归档
+            </button>
+          </div>
+          <div className="agent-conversation-drawer__list" aria-busy={conversationLoading}>
+            {conversationLoading ? <p className="agent-conversation-drawer__empty">正在读取会话…</p> : null}
+            {!conversationLoading && filteredConversations.length === 0 ? (
+              <p className="agent-conversation-drawer__empty">
+                {historyQuery.trim() ? "没有匹配的会话。" : historyTab === "active" ? "暂无活动会话。" : "归档区为空。"}
+              </p>
+            ) : null}
+            {filteredConversations.map((conversation) => (
+              <article
+                key={conversation.id}
+                className={[
+                  "agent-conversation-item",
+                  conversation.id === activeConversationId ? "is-active" : "",
+                ].filter(Boolean).join(" ")}
+              >
+                <button
+                  type="button"
+                  className="agent-conversation-item__open"
+                  onClick={() => onSelectConversation?.(conversation.id)}
+                >
+                  <strong>{conversation.title}</strong>
+                  <span>
+                    {conversation.turnCount} 轮 · {new Date(conversation.updatedAtMs).toLocaleString("zh-CN", {
+                      month: "numeric",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  {!conversation.contextAvailable && conversation.turnCount > 0 ? (
+                    <small>上下文不可恢复</small>
+                  ) : null}
+                </button>
+                <div className="agent-conversation-item__actions">
+                  <button
+                    type="button"
+                    title="重命名"
+                    onClick={() => {
+                      const title = window.prompt("输入新的会话标题", conversation.title);
+                      if (title?.trim() && title.trim() !== conversation.title) {
+                        onRenameConversation?.(conversation.id, title);
+                      }
+                    }}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  {conversation.status === "active" ? (
+                    <button
+                      type="button"
+                      title="归档"
+                      onClick={() => onArchiveConversation?.(conversation.id)}
+                    >
+                      <Archive size={12} />
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        title="恢复"
+                        onClick={() => onRestoreConversation?.(conversation.id)}
+                      >
+                        <RotateCcw size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        title="永久删除"
+                        onClick={() => onDeleteConversation?.(conversation.id)}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        </aside>
+      ) : null}
+
       <main
+        ref={dialogRef}
         className={[
           "agent-dual-dialog",
-          dialogCollapsed ? "agent-dual-dialog--collapsed" : "",
+          dialogVisuallyCollapsed ? "agent-dual-dialog--collapsed" : "",
+          historyOpen ? "agent-dual-dialog--history-open" : "",
         ].filter(Boolean).join(" ")}
         aria-label="Sidera 科研 Agent 输入区"
       >
@@ -2016,65 +2377,96 @@ export function AgentDualBackgroundPage({
               <div>
                 <strong>Sidera</strong>
                 <small>
-                  科研 Agent · {preferredMode === "immersive" ? "沉浸星海" : "理论星图"}
-                </small>
+                  {activeConversation?.title ?? "科研 Agent"} · {preferredMode === "immersive" ? "沉浸星海" : "理论星图"}
+                  </small>
               </div>
-              <button
-                type="button"
-                className="agent-dual-dialog__collapse"
-                title="收起对话"
-                onClick={() => setDialogCollapsed(true)}
-              >
-                <Minimize2 size={14} />
-              </button>
+              <div className="agent-dual-dialog__header-actions">
+                <button
+                  type="button"
+                  className="agent-dual-dialog__history-toggle"
+                  title={historyOpen ? "关闭历史" : "打开历史"}
+                  aria-expanded={historyOpen}
+                  onClick={() => {
+                    if (!historyOpen && focusPresentation) releaseFocus();
+                    setHistoryOpen((current) => !current);
+                  }}
+                >
+                  <History size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="agent-dual-dialog__new"
+                  title="新对话"
+                  disabled={conversationLoading}
+                  onClick={onNewConversation}
+                >
+                  <Plus size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="agent-dual-dialog__collapse"
+                  title="收起对话"
+                  onClick={() => {
+                    setHistoryOpen(false);
+                    setDialogCollapsed(true);
+                  }}
+                >
+                  <Minimize2 size={14} />
+                </button>
+              </div>
             </header>
-            <div className="agent-dual-dialog__history" aria-live="polite">
-              {submittedPrompts.slice(-3).map((item) => (
-                <p key={`${item.submittedAtMs}-${item.text}`}>
-                  <span>你</span>
-                  {item.text}
-                </p>
-              ))}
-              {!submittedPrompts.length && !visibleAssistantMessages.length ? (
+            <div
+              ref={historyRef}
+              className="agent-dual-dialog__history"
+              aria-live="polite"
+              onScroll={(event) => {
+                const element = event.currentTarget;
+                historyNearBottomRef.current = (
+                  element.scrollHeight - element.scrollTop - element.clientHeight
+                ) <= 48;
+              }}
+            >
+              {!visibleConversationTurns.length ? (
                 <p className="agent-dual-dialog__empty">
                   在本地文献空间中提出研究问题。
                 </p>
               ) : null}
-              {visibleAssistantMessages.map((message) => {
+              {visibleConversationTurns.map((turn) => {
+                const message = turn.assistant;
                 const resolution = answerResolutions[message.id];
                 const references = normalizeSideraReferences(message.entityRefs);
                 const isActive = focusSession?.messageId === message.id;
                 const activeCount = isActive ? focusSession.candidates.length : 0;
                 return (
-                  <article
-                    key={message.id}
-                    className={[
-                      "sidera-answer",
-                      isActive ? "is-focused" : "",
-                    ].filter(Boolean).join(" ")}
-                    data-message-status={message.status}
-                    data-focus-ready={
-                      resolution?.status === "ready"
-                      && resolution.entities.length > 0
-                        ? "true"
-                        : "false"
-                    }
-                  >
+                  <section className="sidera-conversation-turn" key={turn.id} data-turn-id={turn.id}>
+                    <div className="sidera-user-record">
+                      <span>你</span>
+                      <p>{turn.userText}</p>
+                    </div>
+                    <article
+                      className={[
+                        "sidera-answer",
+                        isActive ? "is-focused" : "",
+                      ].filter(Boolean).join(" ")}
+                      data-message-status={message.status}
+                      data-focus-ready={
+                        resolution?.status === "ready"
+                        && resolution.entities.length > 0
+                          ? "true"
+                          : "false"
+                      }
+                    >
                     <header>
                       <span>Sidera</span>
                       <small>
-                        {message.status === "streaming"
-                          ? "回答中"
-                          : message.status === "cancelled"
-                            ? "已停止"
-                          : message.status === "failed"
-                            ? "回答失败"
-                            : resolution?.status === "resolving"
-                              ? "正在核验引用"
-                              : "回答完成"}
+                        {message.status === "complete" && resolution?.status === "resolving"
+                          ? "正在核验引用"
+                          : assistantStatusLabel(message)}
                       </small>
                     </header>
-                    <div className="sidera-answer__markdown">{message.markdown}</div>
+                    <div className="sidera-answer__markdown">
+                      {message.markdown ? <SideraMarkdown>{message.markdown}</SideraMarkdown> : null}
+                    </div>
                     {references.length ? (
                       <div className="sidera-answer__citations" aria-label="结构化引用">
                         {references.map((reference) => {
@@ -2167,29 +2559,89 @@ export function AgentDualBackgroundPage({
                         引用解析失败：{resolution.error}
                       </small>
                     ) : null}
-                  </article>
+                    {message.status === "complete"
+                    && message.citationStatus === "unverified" ? (
+                      <small className="sidera-answer__error">
+                        引用未通过结构化核验，当前回答不提供可点击引用或聚焦入口。
+                      </small>
+                      ) : null}
+                    {message.evidenceGateStatus === "invalid" ? (
+                      <small className="sidera-answer__error">
+                        本轮证据未通过完成核验，未生成可点击引用或聚焦入口。
+                      </small>
+                    ) : null}
+                    </article>
+                  </section>
                 );
               })}
             </div>
           </>
         ) : null}
+        {toolApproval && !dialogExploreVisible ? (
+          <section className="sidera-tool-approval" role="alert" aria-live="assertive">
+            <header>
+              <span>需要你的批准</span>
+              <small>仅对本次工具调用有效</small>
+            </header>
+            <strong>{toolApproval.summary}</strong>
+            {toolApproval.target ? <p>目标：{toolApproval.target}</p> : null}
+            {toolApproval.command ? (
+              <pre><code>{toolApproval.command}</code></pre>
+            ) : null}
+            {toolApproval.diffPreview ? (
+              <details>
+                <summary>查看差异预览</summary>
+                <pre><code>{toolApproval.diffPreview}</code></pre>
+              </details>
+            ) : null}
+            <div>
+              <button type="button" onClick={() => onDecideToolApproval?.("rejected")}>
+                <X size={13} />
+                拒绝
+              </button>
+              <button
+                type="button"
+                className="is-primary"
+                onClick={() => onDecideToolApproval?.("approved")}
+              >
+                <Check size={13} />
+                仅批准本次
+              </button>
+            </div>
+          </section>
+        ) : null}
         <div className="agent-dual-dialog__composer">
           {dialogCollapsed && !dialogExploreVisible ? (
-            <button
-              type="button"
-              className="agent-dual-dialog__restore"
-              title="展开对话"
-              onClick={() => setDialogCollapsed(false)}
-            >
-              <Eye size={14} />
-            </button>
+            <>
+              <button
+                type="button"
+                className="agent-dual-dialog__history-toggle"
+                title={historyOpen ? "关闭历史" : "打开历史"}
+                aria-expanded={historyOpen}
+                onClick={() => setHistoryOpen((current) => !current)}
+              >
+                <History size={14} />
+              </button>
+              <button
+                type="button"
+                className="agent-dual-dialog__restore"
+                title="展开对话"
+                onClick={() => setDialogCollapsed(false)}
+              >
+                <Eye size={14} />
+              </button>
+            </>
           ) : null}
           <textarea
+            ref={composerTextareaRef}
             value={draft}
-            rows={dialogExploreVisible ? 1 : 2}
+            rows={1}
             aria-label="输入研究问题"
             placeholder={dialogExploreVisible ? "在理论星图中输入问题…" : "输入研究问题，Shift + Enter 换行"}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              resizeComposerTextarea(event.currentTarget);
+            }}
             onKeyDown={handleInputKeyDown}
           />
           <button
@@ -2204,7 +2656,11 @@ export function AgentDualBackgroundPage({
         {!dialogExploreVisible && !dialogCollapsed ? (
           <footer>
             <span className={conversationError ? "is-error" : ""}>
-              {conversationError || "Pi 基础会话 · 暂未连接本地论文、文件或网页工具"}
+              {conversationError || (
+                sessionStats
+                  ? `上下文 ${sessionStats.contextUsage?.percent?.toFixed(0) ?? "—"}% · 输入 ${sessionStats.tokens.input} · 输出 ${sessionStats.tokens.output} · 缓存读取 ${sessionStats.tokens.cacheRead || "未检测到"}`
+                  : "Pi 本地 RAG · 可审计文件与 HTTPS 工具 · 变更操作逐次审批"
+              )}
             </span>
             {conversationError && onOpenSettings ? (
               <button type="button" onClick={onOpenSettings}>打开设置</button>
@@ -2217,6 +2673,7 @@ export function AgentDualBackgroundPage({
 
       {focusSession && activeResolvedReference ? (
         <aside
+          ref={evidenceCardRef}
           className={[
             "sidera-evidence-card",
             focusSession.side === "left"

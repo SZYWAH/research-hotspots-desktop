@@ -34,7 +34,7 @@ const requireText = (name, pattern, description) => {
 };
 
 for (const name of requiredDocs) {
-  requireText(name, "更新时间：2026-08-02", "current update date");
+  requireText(name, "更新时间：2026-08-03", "current update date");
 }
 
 requireText("PROJECT.md", "## 最终目标", "final goal section");
@@ -48,6 +48,11 @@ requireText("PROJECT.md", "M1.3l", "current dual immersive style package");
 requireText("PROJECT.md", "M1.3m", "current unified spatial shell package");
 requireText("PROJECT.md", "M1.3n", "current Agent run center package");
 requireText("PROJECT.md", "M2.0a Pi 基础会话链路", "current Pi basic conversation package");
+requireText("PROJECT.md", "M2.0b–R3", "completed M2.0b through R3 packages");
+requireText("PROJECT.md", "M2.0b-R4", "current conversations, tools, and Liquid Glass package");
+requireText("PROJECT.md", "M2.0b-R4-R1", "current conversation store and readiness repair package");
+requireText("PROJECT.md", "M2.0b-R4-R2", "current background continuity and optical glass repair package");
+requireText("PROJECT.md", "M2.0b-R4-R3", "current long-cache and true-streaming repair package");
 requireText("PROJECT.md", "Sidera", "Agent product working name");
 requireText("ROADMAP.md", "## 里程碑", "milestone section");
 requireText("ROADMAP.md", "M1.3e 沉浸流动与理论恒星材质修订", "M1.3e stage");
@@ -64,15 +69,16 @@ requireText("ROADMAP.md", "M1.3m 统一星空外壳与空间页面", "current M1
 requireText("ROADMAP.md", "M1.3m-R1 工作台可读性与全局控件安全区修订", "current M1.3m-R1 stage");
 requireText("ROADMAP.md", "M1.3m-R3 科研星图顶部工具化、边缘导航与详情轨道修复", "frozen M1.3m-R3 stage");
 requireText("ROADMAP.md", "已完成工作包：M1.3n Sidera Agent 运行中心", "completed M1.3n stage");
-requireText("STATUS.md", "当前分支：`codex/sidera-m2-pi-baseline`", "current branch");
+requireText("ROADMAP.md", "当前工作包：M2.0b-R4-R3 Agent 长缓存默认与真实首段流式修复", "current M2.0b-R4-R3 stage");
+requireText("STATUS.md", "当前分支：`codex/sidera-m2-rag`", "current branch");
 requireText("STATUS.md", "M1.3g 收口与 M1.3h 启动", "R10 closure and M1.3h handoff");
 requireText("STATUS.md", "IN_PROGRESS / PRODUCT UNVERIFIED", "current status");
 requireText("STATUS.md", /M1\.3k[\s\S]*桌面产品壳/, "M1.3k desktop shell status");
 requireText("STATUS.md", "M1.3l 双沉浸样式与流动知识星河（用户视觉 PASS）", "completed M1.3l status");
 requireText("STATUS.md", "## 2026-08-01 M1.3m 统一星空外壳与空间页面", "M1.3m architecture status");
 requireText("STATUS.md", "M1.3m-R3 及 M1.3m 据此记录为技术与用户视觉 `PASS`", "frozen M1.3m-R3 status");
-requireText("STATUS.md", "当前阶段：M2.0a“Pi 基础会话链路”", "current M2.0a status");
-requireText("STATUS.md", "IMPLEMENTED / TECHNICAL PASS / USER ACCEPTANCE UNVERIFIED", "current M2.0a verification state");
+requireText("STATUS.md", "当前阶段：M2.0b-R4-R3“Agent 长缓存默认与真实首段流式修复”", "current M2.0b-R4-R3 status");
+requireText("STATUS.md", "IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED", "current M2.0b-R4-R3 verification state");
 requireText("ARCHITECTURE.md", "## 现有基础", "as-built architecture section");
 requireText("DECISIONS.md", "D-033", "GPGPU flow decision");
 requireText("DECISIONS.md", "D-034", "analytic fallback decision");
@@ -140,6 +146,25 @@ requireText("DECISIONS.md", "D-107", "research-report-only creation decision");
 requireText("DECISIONS.md", "D-108", "Rust managed Pi RPC decision");
 requireText("DECISIONS.md", "D-109", "tool-free in-memory Pi stage decision");
 requireText("DECISIONS.md", "D-110", "no silent legacy chat fallback decision");
+requireText("DECISIONS.md", "D-111", "Sidera-only Pi tools decision");
+requireText("DECISIONS.md", "D-112", "hybrid E5 and LIKE retrieval decision");
+requireText("DECISIONS.md", "D-113", "turn evidence closure decision");
+requireText("DECISIONS.md", "D-114", "untrusted database content decision");
+requireText("DECISIONS.md", "D-118", "measured Agent focus composition decision");
+requireText("DECISIONS.md", "D-119", "single research-galaxy spatial timeline decision");
+requireText("DECISIONS.md", "D-120", "physical-canvas research-galaxy center decision");
+requireText("DECISIONS.md", "D-121", "canonical overview orbit pivot decision");
+requireText("DECISIONS.md", "D-122", "fixed Agent reading dialog decision");
+requireText("DECISIONS.md", "D-123", "dual UI and Pi session persistence decision");
+requireText("DECISIONS.md", "D-124", "centered history drawer composition decision");
+requireText("DECISIONS.md", "D-125", "Rust audited system tools decision");
+requireText("DECISIONS.md", "D-126", "auto and long cache policy decision");
+requireText("DECISIONS.md", "D-127", "static Liquid Glass material decision");
+requireText("DECISIONS.md", "D-128", "non-destructive conversation schema repair decision");
+requireText("DECISIONS.md", "D-129", "background Agent turn ownership decision");
+requireText("DECISIONS.md", "D-130", "clear optical glass material decision");
+requireText("DECISIONS.md", "D-131", "long cache default and one-time migration decision");
+requireText("DECISIONS.md", "D-132", "event-driven streaming gate decision");
 requireText(
   "STATUS.md",
   "agent-m1.3g-r10-single-cruise-resume-2026-07-30.json",
@@ -190,6 +215,36 @@ requireText(
   "sidera-m2.0a-pi-basic-conversation-2026-08-01.json",
   "M2.0a evidence link",
 );
+requireText(
+  "STATUS.md",
+  "sidera-m2.0b-pi-local-paper-rag-2026-08-02.json",
+  "M2.0b evidence link",
+);
+requireText(
+  "STATUS.md",
+  "sidera-m2.0b-r3-conversation-experience-2026-08-02.json",
+  "M2.0b-R3 evidence link",
+);
+requireText(
+  "STATUS.md",
+  "sidera-m2.0b-r4-agent-conversations-tools-liquid-glass-2026-08-02.json",
+  "M2.0b-R4 evidence link",
+);
+requireText(
+  "STATUS.md",
+  "sidera-m2.0b-r4-r1-conversation-store-readiness-2026-08-02.json",
+  "M2.0b-R4-R1 evidence link",
+);
+requireText(
+  "STATUS.md",
+  "sidera-m2.0b-r4-r2-background-continuity-optical-glass-2026-08-02.json",
+  "M2.0b-R4-R2 evidence link",
+);
+requireText(
+  "STATUS.md",
+  "sidera-m2.0b-r4-r3-cache-default-true-streaming-2026-08-03.json",
+  "M2.0b-R4-R3 evidence link",
+);
 addCheck(
   "M1.3m evidence exists",
   fs.existsSync(path.join(docsRoot, "evidence", "sidera-m1.3m-unified-spatial-shell-2026-08-01.json")),
@@ -219,6 +274,46 @@ addCheck(
   "M2.0a evidence exists",
   fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0a-pi-basic-conversation-2026-08-01.json")),
   "docs/evidence/sidera-m2.0a-pi-basic-conversation-2026-08-01.json",
+);
+addCheck(
+  "M2.0b evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-pi-local-paper-rag-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-pi-local-paper-rag-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R1 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r1-conversation-evidence-ui-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-r1-conversation-evidence-ui-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R2 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r2-spatial-composition-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-r2-spatial-composition-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R3 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r3-conversation-experience-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-r3-conversation-experience-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R4 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r4-agent-conversations-tools-liquid-glass-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-r4-agent-conversations-tools-liquid-glass-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R4-R1 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r4-r1-conversation-store-readiness-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-r4-r1-conversation-store-readiness-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R4-R2 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r4-r2-background-continuity-optical-glass-2026-08-02.json")),
+  "docs/evidence/sidera-m2.0b-r4-r2-background-continuity-optical-glass-2026-08-02.json",
+);
+addCheck(
+  "M2.0b-R4-R3 evidence exists",
+  fs.existsSync(path.join(docsRoot, "evidence", "sidera-m2.0b-r4-r3-cache-default-true-streaming-2026-08-03.json")),
+  "docs/evidence/sidera-m2.0b-r4-r3-cache-default-true-streaming-2026-08-03.json",
 );
 
 for (const heading of [
@@ -262,6 +357,11 @@ requireText("DEVELOPMENT.md", "M1.3n Sidera Agent 运行中心", "current Agent 
 requireText("DEVELOPMENT.md", "IMPLEMENTED / TECHNICAL PASS / PRODUCT UNVERIFIED", "current M1.3n status");
 requireText("DEVELOPMENT.md", "M2.0a Pi 基础会话链路", "current Pi conversation development package");
 requireText("DEVELOPMENT.md", "IMPLEMENTED / TECHNICAL PASS / USER ACCEPTANCE UNVERIFIED", "current M2.0a status");
+requireText("DEVELOPMENT.md", "M2.0b Pi 本地论文轻量混合 RAG", "current local paper RAG development package");
+requireText("DEVELOPMENT.md", "IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED", "current M2.0b status");
+requireText("DEVELOPMENT.md", "M2.0b-R1 对话编排、阅读面板与证据闭环", "current conversation evidence repair package");
+requireText("DEVELOPMENT.md", "M2.0b-R2 对话控件与空间构图连续性", "current spatial composition repair package");
+requireText("DEVELOPMENT.md", "当前工作包：M2.0b-R4-R3 Agent 长缓存默认与真实首段流式修复", "current long-cache and true-streaming repair package");
 
 for (const detailedDoc of [
   "RESEARCH_AGENT_PRODUCT_GOAL.md",
@@ -280,7 +380,7 @@ const result = {
   audit: "project-documentation-v1",
   generatedAt: new Date().toISOString(),
   status: failed.length === 0 ? "PASS" : "FAIL",
-  currentStage: "M2.0a",
+  currentStage: "M2.0b-R4-R3",
   requiredDocuments: requiredDocs,
   checks,
   failedChecks: failed,

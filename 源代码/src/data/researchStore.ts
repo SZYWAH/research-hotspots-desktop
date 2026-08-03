@@ -18,6 +18,10 @@ import type {
   V20HotspotSnapshot,
 } from "../types";
 import { nowIso } from "../lib/dates";
+import {
+  resolveSideraCachePolicy,
+  SIDERA_CACHE_POLICY_VERSION,
+} from "../lib/sideraCachePolicy";
 
 const DB_NAME = "research-hotspots-desktop";
 const DB_VERSION = 5;
@@ -143,6 +147,7 @@ function getDb() {
 export async function seedResearchDataIfEmpty() {
   const db = await getDb();
   const projectId = await ensureProjectState(db);
+  await migrateSideraCachePolicies(db);
   await migrateRowsToProject(db, projectId);
 
   if ((await activeCount(db, PAPER_STORE, projectId)) === 0) {
@@ -924,6 +929,8 @@ function defaultSettings(projectId = DEFAULT_PROJECT_ID): AiSettings {
     apiCredentialConfigured: false,
     temperature: 0.2,
     streamOutput: true,
+    sideraCacheRetention: "long",
+    sideraCachePolicyVersion: SIDERA_CACHE_POLICY_VERSION,
     dataDir: "",
     databaseDir: "",
     librarySetupCompleted: false,
@@ -992,6 +999,7 @@ function normalizeMysqlSettings(settings?: Partial<MysqlImportSettings>): MysqlI
 
 function normalizeSettings(settings: Partial<AiSettings>, projectId = DEFAULT_PROJECT_ID): AiSettings {
   const fallback = defaultSettings(projectId);
+  const cachePolicy = resolveSideraCachePolicy(settings);
   return {
     ...fallback,
     ...settings,
@@ -1008,10 +1016,29 @@ function normalizeSettings(settings: Partial<AiSettings>, projectId = DEFAULT_PR
     workerTempDir: settings.workerTempDir ?? "",
     backupDir: settings.backupDir ?? settings.dataDir ?? "",
     semanticEmbeddingDevice: settings.semanticEmbeddingDevice === "gpu" ? "gpu" : "cpu",
+    sideraCacheRetention: cachePolicy.sideraCacheRetention,
+    sideraCachePolicyVersion: cachePolicy.sideraCachePolicyVersion,
     cnki: normalizeCnkiSettings(settings.cnki),
     mysql: normalizeMysqlSettings(settings.mysql),
     updatedAt: settings.updatedAt ?? fallback.updatedAt,
   };
+}
+
+async function migrateSideraCachePolicies(db: IDBPDatabase<ResearchDb>) {
+  const tx = db.transaction(SETTINGS_STORE, "readwrite");
+  let cursor = await tx.store.openCursor();
+  while (cursor) {
+    const policy = resolveSideraCachePolicy(cursor.value);
+    if (policy.migrated) {
+      await cursor.update({
+        ...cursor.value,
+        sideraCacheRetention: policy.sideraCacheRetention,
+        sideraCachePolicyVersion: policy.sideraCachePolicyVersion,
+      });
+    }
+    cursor = await cursor.continue();
+  }
+  await tx.done;
 }
 
 function seedPapers(projectId: string): Paper[] {

@@ -246,6 +246,26 @@ impl SemanticEmbeddingRuntime {
             })
             .collect())
     }
+
+    /// Embed an interactive retrieval query using the E5 query prefix.
+    ///
+    /// This intentionally does not expose the underlying model outside the
+    /// runtime. Chat retrieval can reuse the same CPU model while keeping the
+    /// document embedding path and cache format unchanged.
+    pub fn embed_query(&mut self, query: &str) -> Result<Vec<f32>, String> {
+        let query = query.trim();
+        if query.is_empty() || query.chars().count() > 4_096 {
+            return Err("SEMANTIC_QUERY_INVALID".into());
+        }
+        let mut embeddings = self
+            .model
+            .embed(vec![format!("query: {query}")], Some(1))
+            .map_err(|error| format!("SEMANTIC_QUERY_INFERENCE_FAILED:{error}"))?;
+        if embeddings.len() != 1 || embeddings[0].len() != SEMANTIC_EMBEDDING_DIMENSIONS {
+            return Err("SEMANTIC_QUERY_OUTPUT_SHAPE_MISMATCH".into());
+        }
+        Ok(embeddings.remove(0))
+    }
 }
 
 pub fn resolve_embedding_records(

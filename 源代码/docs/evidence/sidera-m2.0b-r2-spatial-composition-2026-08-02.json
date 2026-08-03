@@ -1,0 +1,147 @@
+{
+  "workPackage": "M2.0b-R2",
+  "title": "Sidera dialog controls and continuous spatial composition",
+  "date": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "scope": {
+    "implemented": [
+      "42px composer control baseline with centered 30px controls",
+      "ResizeObserver-driven SideraFocusComposition",
+      "shared immersive, theory, and CSS focus anchor",
+      "tiered hotspot, paper summary, and paper reading context rail widths",
+      "physical-canvas research-galaxy center with overlay context rails",
+      "actual-rail-width paper anchors owned by the paper Journey",
+      "canonical overview orbit pivot with transient system-pose rejection",
+      "research paper focus without a separate acquisition pause"
+    ],
+    "excluded": [
+      "stellar material changes",
+      "RAG changes",
+      "database schema changes",
+      "theory coordinate changes",
+      "commit, push, pull request, or release"
+    ]
+  },
+  "lockedMetrics": {
+    "composerBaseHeightPx": 42,
+    "composerControlSizePx": 30,
+    "composerCenterErrorMaxPx": 1,
+    "focusDiameterPx": [160, 240],
+    "focusDefaultDiameterPx": 200,
+    "focusDefaultDialogGapPx": 64,
+    "focusMinimumDialogGapPx": 40,
+    "contextRailGapPx": 24,
+    "idleGalaxyViewportOffsetRatio": 0,
+    "idleGalaxyCenterErrorMaxPx": 1,
+    "displayOverviewOrbitCenter": [0, 0, -0.1],
+    "paperAnchorFormula": "-(railWidthPx + 24) / viewportWidthPx",
+    "contextRailWidths": {
+      "hotspot": "clamp(360px, 20vw, 400px)",
+      "paper-summary": "clamp(420px, 24vw, 480px)",
+      "paper-reading": "clamp(500px, 29vw, 580px)",
+      "narrow": "min(440px, calc(100vw - 32px))"
+    }
+  },
+  "validation": [
+    {
+      "name": "typescript-project-build",
+      "command": "node_modules\\.bin\\tsc.CMD -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "name": "spatial-composition-r2-audit",
+      "command": "node --experimental-strip-types scripts/sidera_m2_spatial_composition_r2_audit.mjs",
+      "status": "PASS",
+      "viewports": [1100, 1360, 1440, 1920],
+      "cameraWriter": "paper-journey with physical-canvas galaxy center",
+      "researchGalaxyComposition": {
+        "idleViewportOffsetRatio": 0,
+        "paperSummaryAnchor": "effective viewport center",
+        "paperReadingAnchor": "effective viewport center"
+      },
+      "overviewOrbitPivot": {
+        "canonicalCenter": [0, 0, -0.1],
+        "rejectedTransientCenter": [2.4, -1.2, 0.5],
+        "restoredDistance": 9.600520819205592,
+        "maximumPivotProjectionError": 4.785511361312527e-16
+      },
+      "projectionContinuity": {
+        "fixture": "1920px paper-summary rail with active camera view offset",
+        "shiftedFixtureAnchorNdcX": -0.2520833333333332,
+        "canonicalAnchorNdcX": 0,
+        "focusStartPositionError": 0,
+        "focusStartAngleErrorDegrees": 0,
+        "returnEndPositionError": 0,
+        "returnEndAngleErrorDegrees": 0.0000017075472925031877
+      }
+    },
+    {
+      "name": "vite-production-build",
+      "command": "node_modules\\.bin\\vite.CMD build",
+      "status": "PASS",
+      "moduleCount": 1913,
+      "durationSeconds": 17.39,
+      "notes": "existing Tauri event dynamic-import warning only"
+    },
+    {
+      "name": "research-galaxy-r3-regression",
+      "command": "node scripts/sidera_galaxy_spatial_ui_r3_audit.mjs",
+      "status": "PASS",
+      "automaticFitOnModeSwitch": 0,
+      "contextRailComposition": "mode-and-measured-width"
+    },
+    {
+      "name": "conversation-r1-regression",
+      "command": "node scripts/sidera_pi_conversation_evidence_ui_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "project-docs-audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "productRegression": {
+    "reported": "paper focus shifted the whole galaxy left before approach and return snapped from the left composition to center",
+    "rootCause": "the start anchor used a camera projection containing the context-rail view offset while the Journey quaternion solver used a canonical projection without that offset",
+    "previousFixtureErrorDegrees": 11.80351513780333,
+    "fix": "record Journey anchors in canonical projection space and account for the renderer view offset only in final anchor diagnostics",
+    "status": "FIXED_AWAITING_USER"
+  },
+  "visualCenterRegression": {
+    "reported": "after return, the displayed galaxy remained centered in the rail-free region instead of on the physical canvas",
+    "rootCause": "the retained hotspot rail kept a nonzero camera view offset after the Journey returned to the saved system pose",
+    "fix": "clear research-galaxy view offsets and transfer summary/reading avoidance to paper-only Journey anchors",
+    "automatedCoverage": "1100, 1360, 1440, and 1920px with <=1px idle center error",
+    "status": "FIXED_AWAITING_USER"
+  },
+  "orbitPivotRegression": {
+    "reported": "dragging the display galaxy rotated around a hotspot or another off-center point instead of the visible circle center",
+    "rootCause": "system-state hotspot pivots were published as the shared camera pose and restored over the canonical overview center during Fast Refresh or scene rebuild",
+    "fix": "bind overview Orbit to the scene canonical center, reject transient saved centers, and publish camera poses only from overview with an idle paper Journey",
+    "automaticResult": "five full-rotation samples retained the canonical display center with maximum NDC error 4.785511361312527e-16",
+    "status": "FIXED_AWAITING_USER"
+  },
+  "desktopAcceptance": {
+    "status": "UNVERIFIED",
+    "pending": [
+      "button center alignment in expanded, collapsed, and Explore layouts",
+      "focus clearance in compact, reading, and custom dialog widths",
+      "physical galaxy center while opening and closing the hotspot rail",
+      "display-galaxy dragging around the visible circle center",
+      "five research-galaxy paper focus and return cycles",
+      "100%, 125%, and 150% scaling"
+    ]
+  },
+  "result": {
+    "technical": "PASS",
+    "product": "UNVERIFIED"
+  }
+}

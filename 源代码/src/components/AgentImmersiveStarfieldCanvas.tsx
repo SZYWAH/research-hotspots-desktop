@@ -2238,7 +2238,9 @@ export function AgentImmersiveStarfieldCanvas({
         const distance = 25 * (1 - 0.12 * cameraBlend);
         const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
           * distance;
-        const desiredNdcX = activeFocusSide === "left" ? -0.56 : 0.56;
+        const desiredNdcX = presentation.composition
+          ? presentation.composition.normalizedAnchorX * 2 - 1
+          : activeFocusSide === "left" ? -0.56 : 0.56;
         const desiredNdcY = 0.16;
         focusDesiredPosition.set(
           focusDesiredTarget.x - desiredNdcX * halfHeight * camera.aspect,
@@ -2281,7 +2283,7 @@ export function AgentImmersiveStarfieldCanvas({
         }
         camera.updateMatrixWorld(true);
         focusProjectionProbe.copy(focusDesiredTarget).project(camera);
-        const expectedX = activeFocusSide === "left" ? -0.56 : 0.56;
+        const expectedX = desiredNdcX;
         const anchorErrorPx = Math.hypot(
           (focusProjectionProbe.x - expectedX) * host.clientWidth * 0.5,
           (focusProjectionProbe.y - 0.16) * host.clientHeight * 0.5,

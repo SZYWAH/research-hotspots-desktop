@@ -65,12 +65,13 @@ import {
   type GalaxyReviewCameraPreset,
   type GalaxyCameraPose,
   type GalaxySystemViewMode,
+  type GalaxyContextRailMode,
 } from "./components/App17GalaxyCanvas";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import {
   AgentDualBackgroundPage,
   type AgentPromptSubmitEvent,
-  type SideraAssistantMessage,
+  type SideraConversationTurn,
 } from "./components/AgentDualBackgroundPage";
 import { SideraSplash, type SideraBootPhase } from "./components/SideraSplash";
 import { SideraTitleBar } from "./components/SideraTitleBar";
@@ -82,13 +83,33 @@ import type {
 } from "./lib/sideraShell";
 import {
   abortSideraPiTurn,
+  decideSideraToolApproval,
   describeSideraPiError,
+  getSideraPiSessionStats,
   listenSideraPiEvents,
   startSideraPiSession,
   stopSideraPiSession,
   submitSideraPiPrompt,
   type SideraPiSessionInfo,
+  type SideraSessionStats,
+  type SideraToolApprovalRequest,
 } from "./lib/sideraPi";
+import {
+  archiveSideraConversation,
+  checkSideraAgentLocalReadiness,
+  conversationTurnsFromSnapshot,
+  createSideraConversation,
+  deleteSideraConversation,
+  listSideraConversations,
+  openRecentSideraConversation,
+  openSideraConversation,
+  renameSideraConversation,
+  restoreSideraConversation,
+  upsertSideraConversationTurn,
+  type SideraConversationSnapshot,
+  type SideraConversationSummary,
+  type SideraAgentLocalReadiness,
+} from "./lib/sideraConversations";
 
 const threeConsole = (THREE as unknown as {
   setConsoleFunction?: (handler: ((type: string, message: string, ...args: unknown[]) => void) | null) => void;
@@ -315,6 +336,51 @@ type SearchFocusIntent = {
   timestamp: number;
 };
 
+type AppNoticeKind = "success" | "info" | "error";
+
+type AppNotice = {
+  id: number;
+  message: string;
+  kind: AppNoticeKind;
+};
+
+type AppNoticeHandler = (message: string, kind?: AppNoticeKind) => void;
+
+type SideraAgentActivityStatus =
+  | "idle"
+  | "generating"
+  | "awaiting-approval"
+  | "complete"
+  | "failed";
+
+type SideraAgentTerminalActivity = Extract<SideraAgentActivityStatus, "complete" | "failed"> | null;
+
+type SideraAgentActivity = {
+  status: SideraAgentActivityStatus;
+  label: string;
+  canStop: boolean;
+};
+
+function resolveSideraAgentActivity(input: {
+  generating: boolean;
+  toolApproval: SideraToolApprovalRequest | null;
+  terminal: SideraAgentTerminalActivity;
+}): SideraAgentActivity {
+  if (input.toolApproval) {
+    return { status: "awaiting-approval", label: "Agent 等待工具审批", canStop: false };
+  }
+  if (input.generating) {
+    return { status: "generating", label: "Agent 正在回答", canStop: true };
+  }
+  if (input.terminal === "complete") {
+    return { status: "complete", label: "Agent 回答已完成", canStop: false };
+  }
+  if (input.terminal === "failed") {
+    return { status: "failed", label: "Agent 回答失败", canStop: false };
+  }
+  return { status: "idle", label: "", canStop: false };
+}
+
 type HotspotFocusIntent = {
   hotspotId: string;
   timestamp: number;
@@ -411,14 +477,21 @@ export default function App() {
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
   const [allTaskLogs, setAllTaskLogs] = useState<TaskLog[]>([]);
   const [settings, setSettings] = useState<AiSettings | null>(null);
-  const [piAssistantMessages, setPiAssistantMessages] = useState<SideraAssistantMessage[]>([]);
+  const [piConversationTurns, setPiConversationTurns] = useState<SideraConversationTurn[]>([]);
+  const [piConversations, setPiConversations] = useState<SideraConversationSummary[]>([]);
+  const [piActiveConversation, setPiActiveConversation] = useState<SideraConversationSummary | null>(null);
+  const [piConversationLoading, setPiConversationLoading] = useState(false);
+  const [piSessionStats, setPiSessionStats] = useState<SideraSessionStats | null>(null);
+  const [piToolApproval, setPiToolApproval] = useState<SideraToolApprovalRequest | null>(null);
   const [piGenerating, setPiGenerating] = useState(false);
   const [piConversationError, setPiConversationError] = useState("");
+  const [piAgentTerminalActivity, setPiAgentTerminalActivity] =
+    useState<SideraAgentTerminalActivity>(null);
   const [searchFocusIntent, setSearchFocusIntent] = useState<SearchFocusIntent | null>(null);
   const [hotspotFocusIntent, setHotspotFocusIntent] =
     useState<HotspotFocusIntent | null>(null);
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<AppNotice | null>(null);
   const [agentNavigationOpen, setAgentNavigationOpen] = useState(false);
   const [edgeNavigationPhase, setEdgeNavigationPhase] = useState<"idle" | "arming" | "open">("idle");
   const [edgeNavigationOpenedBy, setEdgeNavigationOpenedBy] = useState<"edge" | "keyboard" | null>(null);
@@ -448,10 +521,147 @@ export default function App() {
   const galaxyRequestsRef = useRef(new Map<string, Promise<void>>());
   const refreshRequestSequenceRef = useRef(0);
   const piSessionRef = useRef<SideraPiSessionInfo | null>(null);
+  const piActiveConversationRef = useRef<SideraConversationSummary | null>(null);
+  const piConversationTurnsRef = useRef<SideraConversationTurn[]>([]);
+  const piCheckpointTimerRef = useRef(0);
+  const piPendingCheckpointIdsRef = useRef(new Set<string>());
+  const piConversationScopeRevisionRef = useRef(0);
   const piActiveTurnRef = useRef<{ sessionId: string; messageId: string; revision: number } | null>(null);
+  const piTurnSettledWaitersRef = useRef(new Set<() => void>());
   const piLastEventSequenceRef = useRef(0);
   const piConfigKeyRef = useRef("");
+  const activeViewRef = useRef(activeView);
+  const piAgentActivityTimerRef = useRef(0);
+  const noticeSequenceRef = useRef(0);
   const [, refreshGalaxySessions] = useState(0);
+
+  const showNotice = useCallback<AppNoticeHandler>((message, kind = "info") => {
+    noticeSequenceRef.current += 1;
+    setNotice({
+      id: noticeSequenceRef.current,
+      message,
+      kind,
+    });
+  }, []);
+
+  activeViewRef.current = activeView;
+
+  const publishPiAgentTerminalActivity = useCallback((status: Exclude<SideraAgentTerminalActivity, null>) => {
+    window.clearTimeout(piAgentActivityTimerRef.current);
+    setPiAgentTerminalActivity(status);
+    if (status === "complete") {
+      piAgentActivityTimerRef.current = window.setTimeout(() => {
+        setPiAgentTerminalActivity((current) => current === "complete" ? null : current);
+      }, 3_000);
+    }
+  }, []);
+
+  const replacePiConversationTurns = useCallback((turns: SideraConversationTurn[]) => {
+    piConversationTurnsRef.current = turns;
+    setPiConversationTurns(turns);
+  }, []);
+
+  const applyPiConversationSnapshot = useCallback((snapshot: SideraConversationSnapshot) => {
+    piActiveConversationRef.current = snapshot.conversation;
+    setPiActiveConversation(snapshot.conversation);
+    replacePiConversationTurns(conversationTurnsFromSnapshot(snapshot));
+    setPiConversationError(
+      snapshot.conversation.contextAvailable
+        ? ""
+        : "该会话的 Pi 上下文文件不可用；历史仍可阅读，请新建对话后继续。",
+    );
+    setPiSessionStats(null);
+    piSessionRef.current = null;
+  }, [replacePiConversationTurns]);
+
+  const refreshPiConversationList = useCallback(async () => {
+    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    const rows = await listSideraConversations({
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+      status: "all",
+    });
+    setPiConversations(rows);
+    const active = piActiveConversationRef.current;
+    if (active) {
+      const refreshed = rows.find((row) => row.id === active.id);
+      if (refreshed) {
+        piActiveConversationRef.current = refreshed;
+        setPiActiveConversation(refreshed);
+      }
+    }
+  }, [activeProject, settings]);
+
+  const persistPiTurn = useCallback(async (turn: SideraConversationTurn) => {
+    const conversation = piActiveConversationRef.current;
+    if (!settings || !activeProject || !conversation || !isDesktopRuntime()) return;
+    await upsertSideraConversationTurn({
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+      conversationId: conversation.id,
+      id: turn.id,
+      submittedAtMs: turn.submittedAtMs,
+      userText: turn.userText,
+      assistantStatus: turn.assistant.status,
+      assistantMarkdown: turn.assistant.markdown,
+      entityRefs: turn.assistant.entityRefs,
+      retrievalMode: turn.assistant.retrievalMode,
+      citationStatus: turn.assistant.citationStatus,
+      evidenceGateStatus: turn.assistant.evidenceGateStatus,
+      usage: turn.assistant.usage,
+    });
+  }, [activeProject, settings]);
+
+  const flushPiTurnCheckpoints = useCallback(async () => {
+    window.clearTimeout(piCheckpointTimerRef.current);
+    piCheckpointTimerRef.current = 0;
+    const ids = Array.from(piPendingCheckpointIdsRef.current);
+    piPendingCheckpointIdsRef.current.clear();
+    const turns = piConversationTurnsRef.current.filter((turn) => ids.includes(turn.id));
+    try {
+      await Promise.all(turns.map(persistPiTurn));
+    } catch (error) {
+      setPiConversationError(`对话保存失败：${describeSideraPiError(error)}`);
+    }
+  }, [persistPiTurn]);
+
+  const checkpointPiTurn = useCallback((turnId: string, immediate = false) => {
+    piPendingCheckpointIdsRef.current.add(turnId);
+    window.clearTimeout(piCheckpointTimerRef.current);
+    if (immediate) {
+      void flushPiTurnCheckpoints();
+    } else {
+      piCheckpointTimerRef.current = window.setTimeout(() => {
+        void flushPiTurnCheckpoints();
+      }, 500);
+    }
+  }, [flushPiTurnCheckpoints]);
+
+  const updatePiConversationTurn = useCallback((
+    messageId: string,
+    updater: (turn: SideraConversationTurn) => SideraConversationTurn,
+    immediate = false,
+  ) => {
+    const next = piConversationTurnsRef.current.map((turn) => (
+      turn.assistant.id === messageId ? updater(turn) : turn
+    ));
+    replacePiConversationTurns(next);
+    checkpointPiTurn(messageId, immediate);
+  }, [checkpointPiTurn, replacePiConversationTurns]);
+
+  const notifyPiTurnSettled = useCallback(() => {
+    for (const resolve of piTurnSettledWaitersRef.current) resolve();
+    piTurnSettledWaitersRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    if (!notice || notice.kind === "error") return undefined;
+    const noticeId = notice.id;
+    const timer = window.setTimeout(() => {
+      setNotice((current) => current?.id === noticeId ? null : current);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   function updateGalaxySession(key: string, next: GalaxySessionState) {
     galaxySessionsRef.current.set(key, next);
@@ -667,7 +877,7 @@ export default function App() {
       } catch (error) {
         if (!mounted) return;
         const message = error instanceof Error ? error.message : "桌面端初始化失败。";
-        setNotice(message);
+        showNotice(message, "error");
         if (!bypassSideraBoot) {
           setSideraBootError(message);
           setSideraBootPhase("failed");
@@ -680,7 +890,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, [bypassSideraBoot, sideraBootRevision]);
+  }, [bypassSideraBoot, showNotice, sideraBootRevision]);
 
   useEffect(() => {
     sideraSplashMountedRef.current = sideraSplashMounted;
@@ -724,6 +934,63 @@ export default function App() {
   }, [activeView]);
 
   useEffect(() => {
+    if (!settings || !activeProject || !isDesktopRuntime() || !settings.databaseDir.trim()) return;
+    const revision = piConversationScopeRevisionRef.current + 1;
+    piConversationScopeRevisionRef.current = revision;
+    let disposed = false;
+    setPiConversationLoading(true);
+    setPiToolApproval(null);
+    piSessionRef.current = null;
+    piActiveTurnRef.current = null;
+    setPiGenerating(false);
+    void stopSideraPiSession().catch(() => undefined);
+    void (async () => {
+      try {
+        let snapshot = await openRecentSideraConversation({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+        });
+        if (!snapshot) {
+          snapshot = await createSideraConversation({
+            databaseDir: settings.databaseDir,
+            projectId: activeProject.id,
+            conversationId: globalThis.crypto?.randomUUID?.(),
+            provider: settings.provider,
+            model: settings.model,
+          });
+        }
+        const conversations = await listSideraConversations({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          status: "all",
+        });
+        if (disposed || revision !== piConversationScopeRevisionRef.current) return;
+        applyPiConversationSnapshot(snapshot);
+        setPiConversations(conversations);
+      } catch (error) {
+        if (!disposed) setPiConversationError(`对话历史初始化失败：${describeSideraPiError(error)}`);
+      } finally {
+        if (!disposed) setPiConversationLoading(false);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [
+    activeProject?.id,
+    applyPiConversationSnapshot,
+    settings?.databaseDir,
+    settings?.model,
+    settings?.provider,
+  ]);
+
+  useEffect(() => () => {
+    window.clearTimeout(piCheckpointTimerRef.current);
+    window.clearTimeout(piAgentActivityTimerRef.current);
+    void flushPiTurnCheckpoints();
+  }, [flushPiTurnCheckpoints]);
+
+  useEffect(() => {
     if (!isDesktopRuntime()) return undefined;
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -742,10 +1009,25 @@ export default function App() {
         return;
       }
 
+      if (event.type === "tool-approval-requested") {
+        setPiAgentTerminalActivity(null);
+        setPiToolApproval(event.request);
+        return;
+      }
+
+      if (event.type === "tool-approval-resolved") {
+        setPiToolApproval((current) => (
+          current?.approvalId === event.approvalId ? null : current
+        ));
+        return;
+      }
+
       const currentSessionId = piSessionRef.current?.sessionId;
-      if (event.sessionId && currentSessionId && event.sessionId !== currentSessionId) return;
+      if ("sessionId" in event && event.sessionId && currentSessionId && event.sessionId !== currentSessionId) return;
 
       if (event.type === "turn-start") {
+        window.clearTimeout(piAgentActivityTimerRef.current);
+        setPiAgentTerminalActivity(null);
         piActiveTurnRef.current = {
           sessionId: event.sessionId,
           messageId: event.messageId,
@@ -758,11 +1040,38 @@ export default function App() {
       if (event.type === "assistant-delta") {
         const active = piActiveTurnRef.current;
         if (!active || active.messageId !== event.messageId || event.revision < active.revision) return;
-        setPiAssistantMessages((messages) => messages.map((message) => (
-          message.id === event.messageId
-            ? { ...message, status: "streaming", markdown: message.markdown + event.delta }
-            : message
-        )));
+        updatePiConversationTurn(event.messageId, (turn) => ({
+          ...turn,
+          assistant: {
+            ...turn.assistant,
+            status: "streaming",
+            markdown: turn.assistant.markdown + event.delta,
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "assistant-replace") {
+        const active = piActiveTurnRef.current;
+        if (!active || active.messageId !== event.messageId || event.revision !== active.revision) return;
+        updatePiConversationTurn(event.messageId, (turn) => ({
+          ...turn,
+          assistant: {
+            ...turn.assistant,
+            status: "streaming",
+            markdown: event.markdown,
+          },
+        }), true);
+        return;
+      }
+
+      if (event.type === "tool-stage") {
+        const active = piActiveTurnRef.current;
+        if (!active || active.messageId !== event.messageId || event.revision < active.revision) return;
+        updatePiConversationTurn(event.messageId, (turn) => ({
+          ...turn,
+          assistant: { ...turn.assistant, status: "streaming", toolStage: event.stage },
+        }));
         return;
       }
 
@@ -770,11 +1079,38 @@ export default function App() {
         const active = piActiveTurnRef.current;
         if (!active || active.messageId !== event.messageId || event.revision < active.revision) return;
         const status = event.type === "turn-cancelled" ? "cancelled" : "complete";
-        setPiAssistantMessages((messages) => messages.map((message) => (
-          message.id === event.messageId ? { ...message, status } : message
-        )));
+        updatePiConversationTurn(event.messageId, (turn) => (
+          event.type === "turn-complete"
+            ? {
+                ...turn,
+                assistant: {
+                  ...turn.assistant,
+                  status,
+                  toolStage: undefined,
+                  entityRefs: event.entityRefs,
+                  retrievalMode: event.retrievalMode,
+                  citationStatus: event.citationStatus,
+                  evidenceGateStatus: event.evidenceGateStatus,
+                  usage: event.usage,
+                },
+              }
+            : {
+                ...turn,
+                assistant: { ...turn.assistant, status, toolStage: undefined },
+              }
+        ), true);
         piActiveTurnRef.current = null;
+        notifyPiTurnSettled();
         setPiGenerating(false);
+        setPiToolApproval(null);
+        if (event.type === "turn-complete") {
+          publishPiAgentTerminalActivity("complete");
+        } else {
+          window.clearTimeout(piAgentActivityTimerRef.current);
+          setPiAgentTerminalActivity(null);
+        }
+        void getSideraPiSessionStats().then(setPiSessionStats).catch(() => undefined);
+        void refreshPiConversationList().catch(() => undefined);
         return;
       }
 
@@ -782,31 +1118,39 @@ export default function App() {
         const message = describeSideraPiError(new Error(`${event.code}:${event.message}`));
         const active = piActiveTurnRef.current;
         if (active) {
-          setPiAssistantMessages((messages) => messages.map((candidate) => (
-            candidate.id === active.messageId
-              ? {
-                  ...candidate,
-                  status: "failed",
-                  markdown: candidate.markdown || "本轮回答未能完成。",
-                }
-              : candidate
-          )));
+          updatePiConversationTurn(active.messageId, (turn) => ({
+            ...turn,
+            assistant: {
+              ...turn.assistant,
+              status: "failed",
+              markdown: turn.assistant.markdown || "本轮回答未能完成。",
+            },
+          }), true);
         }
         piActiveTurnRef.current = null;
+        notifyPiTurnSettled();
         setPiGenerating(false);
+        setPiToolApproval(null);
         setPiConversationError(message);
+        publishPiAgentTerminalActivity("failed");
+        if (activeViewRef.current !== "agent") showNotice(message, "error");
       }
     }).then((dispose) => {
       if (disposed) dispose();
       else unlisten = dispose;
     }).catch((error) => {
-      if (!disposed) setPiConversationError(describeSideraPiError(error));
+      if (!disposed) {
+        const message = describeSideraPiError(error);
+        setPiConversationError(message);
+        publishPiAgentTerminalActivity("failed");
+        if (activeViewRef.current !== "agent") showNotice(message, "error");
+      }
     });
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [notifyPiTurnSettled, publishPiAgentTerminalActivity, refreshPiConversationList, showNotice, updatePiConversationTurn]);
 
   const piConfigKey = settings && activeProject
     ? [
@@ -814,6 +1158,7 @@ export default function App() {
         settings.provider,
         settings.baseUrl.trim(),
         settings.model.trim(),
+        settings.sideraCacheRetention,
         settings.useEnvKey ? "env" : "keyring",
       ].join("\u0000")
     : "";
@@ -825,50 +1170,60 @@ export default function App() {
     if (!previous || previous === piConfigKey || !piSessionRef.current) return;
     const active = piActiveTurnRef.current;
     if (active) {
-      setPiAssistantMessages((messages) => messages.map((message) => (
-        message.id === active.messageId ? { ...message, status: "cancelled" } : message
-      )));
+      updatePiConversationTurn(active.messageId, (turn) => ({
+        ...turn,
+        assistant: { ...turn.assistant, status: "cancelled" },
+      }), true);
     }
     piActiveTurnRef.current = null;
+    notifyPiTurnSettled();
     piSessionRef.current = null;
     setPiGenerating(false);
     setPiConversationError("模型或项目设置已变化，下一条问题将开始新的 Pi 会话。");
     void stopSideraPiSession().catch(() => undefined);
-  }, [piConfigKey]);
-
-  useEffect(() => {
-    if (activeView === "agent") return;
-    const active = piActiveTurnRef.current;
-    if (!active) return;
-    void abortSideraPiTurn({
-      sessionId: active.sessionId,
-      messageId: active.messageId,
-    }).catch((error) => setPiConversationError(describeSideraPiError(error)));
-  }, [activeView]);
+  }, [notifyPiTurnSettled, piConfigKey, updatePiConversationTurn]);
 
   const submitSideraPrompt = useCallback(async (event: AgentPromptSubmitEvent) => {
     const messageId = globalThis.crypto?.randomUUID?.()
       ?? `sidera-pi-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setPiAssistantMessages((messages) => [
-      ...messages,
-      { id: messageId, status: "streaming", markdown: "", entityRefs: [] },
-    ]);
+    let conversation = piActiveConversationRef.current;
+    if (!conversation && settings && activeProject) {
+      try {
+        const snapshot = await createSideraConversation({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          conversationId: globalThis.crypto?.randomUUID?.(),
+          provider: settings.provider,
+          model: settings.model,
+        });
+        applyPiConversationSnapshot(snapshot);
+        conversation = snapshot.conversation;
+      } catch (error) {
+        setPiConversationError(`新对话创建失败：${describeSideraPiError(error)}`);
+        return;
+      }
+    }
+    const nextTurn: SideraConversationTurn = {
+      id: messageId,
+      submittedAtMs: event.submittedAtMs,
+      userText: event.text,
+      assistant: { id: messageId, status: "streaming", markdown: "", entityRefs: [] },
+    };
+    replacePiConversationTurns([...piConversationTurnsRef.current, nextTurn]);
     setPiConversationError("");
     if (!settings || !activeProject) {
-      setPiAssistantMessages((messages) => messages.map((message) => (
-        message.id === messageId
-          ? { ...message, status: "failed", markdown: "本轮回答未能开始。" }
-          : message
-      )));
+      updatePiConversationTurn(messageId, (turn) => ({
+        ...turn,
+        assistant: { ...turn.assistant, status: "failed", markdown: "本轮回答未能开始。" },
+      }), true);
       setPiConversationError("当前项目或模型设置尚未就绪，请先打开设置完成配置。");
       return;
     }
     if (piGenerating) {
-      setPiAssistantMessages((messages) => messages.map((message) => (
-        message.id === messageId
-          ? { ...message, status: "failed", markdown: "上一轮回答仍在结束中。" }
-          : message
-      )));
+      updatePiConversationTurn(messageId, (turn) => ({
+        ...turn,
+        assistant: { ...turn.assistant, status: "failed", markdown: "上一轮回答仍在结束中。" },
+      }), true);
       setPiConversationError("上一轮回答仍在结束中，请稍后再试。");
       return;
     }
@@ -877,14 +1232,23 @@ export default function App() {
     // stale ref here and let the Rust singleton remain the authoritative guard
     // against a genuinely concurrent turn.
     piActiveTurnRef.current = null;
+    window.clearTimeout(piAgentActivityTimerRef.current);
+    setPiAgentTerminalActivity(null);
     setPiGenerating(true);
     try {
+      if (conversation && !conversation.contextAvailable && conversation.turnCount > 0) {
+        throw new Error("该会话的 Pi 上下文不可恢复，请新建对话后继续。");
+      }
+      await persistPiTurn(nextTurn);
       const session = await startSideraPiSession({
         projectId: activeProject.id,
+        conversationId: conversation!.id,
+        databaseDir: settings.databaseDir,
         provider: settings.provider,
         baseUrl: settings.baseUrl,
         model: settings.model,
         useEnvKey: settings.useEnvKey,
+        cacheRetention: settings.sideraCacheRetention,
       });
       piSessionRef.current = session;
       piActiveTurnRef.current = {
@@ -898,16 +1262,28 @@ export default function App() {
         prompt: event.text,
       });
     } catch (error) {
+      const message = describeSideraPiError(error);
       piActiveTurnRef.current = null;
       setPiGenerating(false);
-      setPiAssistantMessages((messages) => messages.map((message) => (
-        message.id === messageId
-          ? { ...message, status: "failed", markdown: "本轮回答未能开始。" }
-          : message
-      )));
-      setPiConversationError(describeSideraPiError(error));
+      updatePiConversationTurn(messageId, (turn) => ({
+        ...turn,
+        assistant: { ...turn.assistant, status: "failed", markdown: "本轮回答未能开始。" },
+      }), true);
+      setPiConversationError(message);
+      publishPiAgentTerminalActivity("failed");
+      if (activeViewRef.current !== "agent") showNotice(message, "error");
     }
-  }, [activeProject, piGenerating, settings]);
+  }, [
+    activeProject,
+    applyPiConversationSnapshot,
+    persistPiTurn,
+    piGenerating,
+    publishPiAgentTerminalActivity,
+    replacePiConversationTurns,
+    settings,
+    showNotice,
+    updatePiConversationTurn,
+  ]);
 
   const stopSideraGeneration = useCallback(() => {
     const active = piActiveTurnRef.current;
@@ -918,8 +1294,220 @@ export default function App() {
     void abortSideraPiTurn({
       sessionId: active.sessionId,
       messageId: active.messageId,
-    }).catch((error) => setPiConversationError(describeSideraPiError(error)));
-  }, []);
+    }).catch((error) => {
+      const message = describeSideraPiError(error);
+      setPiConversationError(message);
+      publishPiAgentTerminalActivity("failed");
+      if (activeViewRef.current !== "agent") showNotice(message, "error");
+    });
+  }, [publishPiAgentTerminalActivity, showNotice]);
+
+  const preparePiConversationChange = useCallback(async (reason: string) => {
+    const activeTurn = piActiveTurnRef.current;
+    if (activeTurn) {
+      if (!window.confirm(`当前回答仍在生成。${reason}会先停止本轮且不会自动重试，是否继续？`)) {
+        return false;
+      }
+      let cancelSettledWait = () => undefined;
+      const settled = new Promise<void>((resolve, reject) => {
+        let timer = 0;
+        const finish = () => {
+          window.clearTimeout(timer);
+          piTurnSettledWaitersRef.current.delete(finish);
+          resolve();
+        };
+        cancelSettledWait = () => {
+          window.clearTimeout(timer);
+          piTurnSettledWaitersRef.current.delete(finish);
+        };
+        piTurnSettledWaitersRef.current.add(finish);
+        timer = window.setTimeout(() => {
+          piTurnSettledWaitersRef.current.delete(finish);
+          reject(new Error("等待当前回答停止超时；会话未切换。"));
+        }, 10_000);
+      });
+      try {
+        await abortSideraPiTurn({
+          sessionId: activeTurn.sessionId,
+          messageId: activeTurn.messageId,
+        });
+        await settled;
+      } catch (error) {
+        cancelSettledWait();
+        setPiConversationError(describeSideraPiError(error));
+        return false;
+      }
+    }
+    try {
+      await flushPiTurnCheckpoints();
+      await stopSideraPiSession();
+    } catch (error) {
+      setPiConversationError(describeSideraPiError(error));
+      return false;
+    }
+    piSessionRef.current = null;
+    piActiveTurnRef.current = null;
+    setPiGenerating(false);
+    setPiToolApproval(null);
+    return true;
+  }, [flushPiTurnCheckpoints]);
+
+  const createNewPiConversation = useCallback(async () => {
+    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!await preparePiConversationChange("新建对话")) return;
+    setPiConversationLoading(true);
+    try {
+      const snapshot = await createSideraConversation({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        conversationId: globalThis.crypto?.randomUUID?.(),
+        provider: settings.provider,
+        model: settings.model,
+      });
+      applyPiConversationSnapshot(snapshot);
+      await refreshPiConversationList();
+    } catch (error) {
+      setPiConversationError(`新对话创建失败：${describeSideraPiError(error)}`);
+    } finally {
+      setPiConversationLoading(false);
+    }
+  }, [activeProject, applyPiConversationSnapshot, preparePiConversationChange, refreshPiConversationList, settings]);
+
+  const openPiConversationById = useCallback(async (conversationId: string) => {
+    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (piActiveConversationRef.current?.id === conversationId) return;
+    if (!await preparePiConversationChange("切换对话")) return;
+    setPiConversationLoading(true);
+    try {
+      const snapshot = await openSideraConversation({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        conversationId,
+      });
+      applyPiConversationSnapshot(snapshot);
+      await refreshPiConversationList();
+    } catch (error) {
+      setPiConversationError(`对话打开失败：${describeSideraPiError(error)}`);
+    } finally {
+      setPiConversationLoading(false);
+    }
+  }, [activeProject, applyPiConversationSnapshot, preparePiConversationChange, refreshPiConversationList, settings]);
+
+  const renamePiConversationById = useCallback(async (conversationId: string, title: string) => {
+    if (!settings || !activeProject || !title.trim() || !isDesktopRuntime()) return;
+    try {
+      const summary = await renameSideraConversation({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        conversationId,
+        title: title.trim(),
+      });
+      setPiConversations((rows) => rows.map((row) => row.id === summary.id ? summary : row));
+      if (piActiveConversationRef.current?.id === summary.id) {
+        piActiveConversationRef.current = summary;
+        setPiActiveConversation(summary);
+      }
+    } catch (error) {
+      setPiConversationError(`重命名失败：${describeSideraPiError(error)}`);
+    }
+  }, [activeProject, settings]);
+
+  const archivePiConversationById = useCallback(async (conversationId: string) => {
+    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    const isCurrent = piActiveConversationRef.current?.id === conversationId;
+    if (isCurrent && !await preparePiConversationChange("归档当前对话")) return;
+    setPiConversationLoading(true);
+    try {
+      await archiveSideraConversation({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        conversationId,
+      });
+      if (isCurrent) {
+        let snapshot = await openRecentSideraConversation({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+        });
+        if (!snapshot) {
+          snapshot = await createSideraConversation({
+            databaseDir: settings.databaseDir,
+            projectId: activeProject.id,
+            conversationId: globalThis.crypto?.randomUUID?.(),
+            provider: settings.provider,
+            model: settings.model,
+          });
+        }
+        applyPiConversationSnapshot(snapshot);
+      }
+      await refreshPiConversationList();
+    } catch (error) {
+      setPiConversationError(`归档失败：${describeSideraPiError(error)}`);
+    } finally {
+      setPiConversationLoading(false);
+    }
+  }, [activeProject, applyPiConversationSnapshot, preparePiConversationChange, refreshPiConversationList, settings]);
+
+  const restorePiConversationById = useCallback(async (conversationId: string) => {
+    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    try {
+      await restoreSideraConversation({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        conversationId,
+      });
+      await refreshPiConversationList();
+    } catch (error) {
+      setPiConversationError(`恢复失败：${describeSideraPiError(error)}`);
+    }
+  }, [activeProject, refreshPiConversationList, settings]);
+
+  const deletePiConversationById = useCallback(async (conversationId: string) => {
+    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    const row = piConversations.find((conversation) => conversation.id === conversationId);
+    if (!row || row.status !== "archived") return;
+    if (!window.confirm(`永久删除“${row.title}”？该操作会同时删除对应的 Pi 上下文文件，且无法恢复。`)) return;
+    const isCurrent = piActiveConversationRef.current?.id === conversationId;
+    if (isCurrent && !await preparePiConversationChange("删除当前归档对话")) return;
+    setPiConversationLoading(true);
+    try {
+      await deleteSideraConversation({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        conversationId,
+      });
+      if (isCurrent) {
+        let snapshot = await openRecentSideraConversation({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+        });
+        if (!snapshot) {
+          snapshot = await createSideraConversation({
+            databaseDir: settings.databaseDir,
+            projectId: activeProject.id,
+            conversationId: globalThis.crypto?.randomUUID?.(),
+            provider: settings.provider,
+            model: settings.model,
+          });
+        }
+        applyPiConversationSnapshot(snapshot);
+      }
+      await refreshPiConversationList();
+    } catch (error) {
+      setPiConversationError(`永久删除失败：${describeSideraPiError(error)}`);
+    } finally {
+      setPiConversationLoading(false);
+    }
+  }, [activeProject, applyPiConversationSnapshot, piConversations, preparePiConversationChange, refreshPiConversationList, settings]);
+
+  const decidePiToolApproval = useCallback(async (decision: "approved" | "rejected") => {
+    const approval = piToolApproval;
+    if (!approval) return;
+    try {
+      await decideSideraToolApproval({ approvalId: approval.approvalId, decision });
+    } catch (error) {
+      setPiConversationError(describeSideraPiError(error));
+    }
+  }, [piToolApproval]);
 
   const cancelEdgeNavigationArm = useCallback(() => {
     if (edgeNavigationTimerRef.current !== null) {
@@ -1077,7 +1665,7 @@ export default function App() {
                 await refreshAll();
                 setLibrarySetupRequired(false);
                 setLibrarySetupState(null);
-                setNotice(result.summary);
+                showNotice(result.summary, "success");
                 setSideraBootPhase("mounting-agent");
               } finally {
                 setLoading(false);
@@ -1158,6 +1746,11 @@ export default function App() {
   const navigationLayout: SideraNavigationLayout = shellScene === "workbench"
     ? "workbench-reserve"
     : "spatial-overlay";
+  const piAgentActivity = resolveSideraAgentActivity({
+    generating: piGenerating,
+    toolApproval: piToolApproval,
+    terminal: piAgentTerminalActivity,
+  });
 
   return (
     <main
@@ -1168,6 +1761,41 @@ export default function App() {
       data-navigation-opened-by={edgeNavigationOpenedBy ?? "none"}
     >
       <SideraTitleBar variant="transparent" toolsHostRef={setTitleBarToolsHost} />
+      {activeView !== "agent" && titleBarToolsHost && piAgentActivity.status !== "idle" ? createPortal(
+        <div
+          className="sidera-agent-activity"
+          data-status={piAgentActivity.status}
+          role={piAgentActivity.status === "failed" ? "alert" : "status"}
+          aria-live={piAgentActivity.status === "failed" ? "assertive" : "polite"}
+        >
+          <button
+            type="button"
+            className="sidera-agent-activity__return"
+            title="返回研究 Agent"
+            onClick={() => {
+              setPiAgentTerminalActivity(null);
+              setActiveView("agent");
+            }}
+          >
+            {piAgentActivity.status === "generating" ? <Loader2 className="sidera-agent-activity__spinner" size={12} /> : null}
+            {piAgentActivity.status === "awaiting-approval" || piAgentActivity.status === "failed" ? <AlertTriangle size={12} /> : null}
+            {piAgentActivity.status === "complete" ? <Check size={12} /> : null}
+            <span>{piAgentActivity.label}</span>
+          </button>
+          {piAgentActivity.canStop ? (
+            <button
+              type="button"
+              className="sidera-agent-activity__stop"
+              title="停止当前回答"
+              aria-label="停止当前 Agent 回答"
+              onClick={stopSideraGeneration}
+            >
+              <Square size={10} fill="currentColor" />
+            </button>
+          ) : null}
+        </div>,
+        titleBarToolsHost,
+      ) : null}
       <div
         className="sidera-edge-navigation-hotzone"
         data-phase={edgeNavigationPhase}
@@ -1211,9 +1839,21 @@ export default function App() {
               navigationOpen={agentNavigationOpen}
               onCloseNavigation={closeAgentNavigation}
               onPromptSubmit={(event) => void submitSideraPrompt(event)}
-              assistantMessages={piAssistantMessages}
+              conversationTurns={piConversationTurns}
               conversationGenerating={piGenerating}
               conversationError={piConversationError}
+              conversations={piConversations}
+              activeConversationId={piActiveConversation?.id}
+              conversationLoading={piConversationLoading}
+              sessionStats={piSessionStats}
+              toolApproval={piToolApproval}
+              onNewConversation={() => void createNewPiConversation()}
+              onSelectConversation={(conversationId) => void openPiConversationById(conversationId)}
+              onRenameConversation={(conversationId, title) => void renamePiConversationById(conversationId, title)}
+              onArchiveConversation={(conversationId) => void archivePiConversationById(conversationId)}
+              onRestoreConversation={(conversationId) => void restorePiConversationById(conversationId)}
+              onDeleteConversation={(conversationId) => void deletePiConversationById(conversationId)}
+              onDecideToolApproval={(decision) => void decidePiToolApproval(decision)}
               onStopGeneration={stopSideraGeneration}
               onOpenSettings={() => setActiveView("settings")}
               onInitialReady={handleAgentInitialReady}
@@ -1246,10 +1886,10 @@ export default function App() {
               setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
               setActiveView("search");
             }}
-            onNotice={setNotice}
+            onNotice={showNotice}
           />
         )}
-        {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={showNotice} />}
         {(activeView === "galaxy" || galaxyVisited) && settings && activeProject && (
           <div className={activeView === "galaxy" ? "contents" : "hidden"} aria-hidden={activeView !== "galaxy"}>
             <GalaxyView
@@ -1281,13 +1921,13 @@ export default function App() {
             />
           </div>
         )}
-        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} focusIntent={hotspotFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} onSpatialStateChange={setPipelineSpatialState} />}
-        {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={setNotice} />}
-        {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "hotspots" && settings && activeProject && <HotspotLibrary hotspots={hotspots} settings={settings} activeProject={activeProject} focusIntent={hotspotFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={showNotice} />}
+        {activeView === "reports" && <ReportLibrary reports={reports} papers={papers} settings={settings} activeProject={activeProject} onRefresh={refreshAll} onNotice={showNotice} />}
+        {activeView === "pipeline" && settings && activeProject && <PipelineView jobs={jobs} taskLogs={taskLogs} papers={papers} hotspots={hotspots} settings={settings} activeProject={activeProject} libraryMutationStatus={libraryMutationStatus} libraryStatus={libraryStatus} v20Snapshot={v20Snapshot} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={showNotice} onSpatialStateChange={setPipelineSpatialState} />}
+        {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={showNotice} />}
+        {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={showNotice} />}
         {activeView === "about" && <AboutView settings={settings} libraryStatus={libraryStatus} hotspots={hotspots} reports={reports} />}
-        {activeView === "settings" && settings && <SettingsView settings={settings} onSave={saveSettings} onRefresh={refreshAll} onNotice={setNotice} />}
+        {activeView === "settings" && settings && <SettingsView settings={settings} onSave={saveSettings} onRefresh={refreshAll} onNotice={showNotice} />}
       </section>
 
       {loading && !sideraSplashMounted && (
@@ -1303,8 +1943,21 @@ export default function App() {
       )}
 
       {notice && (
-        <div className="toast" onClick={() => setNotice("")}>
-          {notice}
+        <div
+          className={`toast toast--${notice.kind}`}
+          role={notice.kind === "error" ? "alert" : "status"}
+          aria-live={notice.kind === "error" ? "assertive" : "polite"}
+          tabIndex={0}
+          title="点击关闭"
+          onClick={() => setNotice(null)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
+              event.preventDefault();
+              setNotice(null);
+            }
+          }}
+        >
+          {notice.message}
         </div>
       )}
       {sideraSplash}
@@ -1312,6 +1965,18 @@ export default function App() {
   );
 
   async function saveSettings(next: AiSettings) {
+    const changesPiSession = Boolean(settings && (
+      next.provider !== settings.provider
+      || next.baseUrl.trim() !== settings.baseUrl.trim()
+      || next.model.trim() !== settings.model.trim()
+      || next.useEnvKey !== settings.useEnvKey
+      || next.sideraCacheRetention !== settings.sideraCacheRetention
+      || next.databaseDir.trim() !== settings.databaseDir.trim()
+    ));
+    if (changesPiSession && !await preparePiConversationChange("修改 Agent 配置")) {
+      showNotice("已保留当前 Agent 回答，设置未保存。", "info");
+      return;
+    }
     let effectiveSettings = next;
     if (activeProject && isDesktopRuntime()) {
       const apiCredentialConfigured = next.manualApiKey.trim()
@@ -1358,21 +2023,23 @@ export default function App() {
     }
     await saveAiSettings(effectiveSettings);
     await refreshAll();
-    setNotice("设置已保存。");
+    showNotice("设置已保存。", "success");
   }
 
   async function switchProject(projectId: string) {
+    if (!await preparePiConversationChange("切换项目")) return;
     await activateProject(projectId);
     await refreshAll();
-    setNotice("项目已切换。");
+    showNotice("项目已切换。", "success");
   }
 
   async function createNewProject() {
     const name = window.prompt("新项目名称", "新的科研课题");
     if (name === null) return;
+    if (!await preparePiConversationChange("创建并切换项目")) return;
     await createProject(name);
     await refreshAll();
-    setNotice("项目已创建并切换。");
+    showNotice("项目已创建并切换。", "success");
   }
 
   async function renameActiveProject() {
@@ -1381,18 +2048,19 @@ export default function App() {
     if (name === null) return;
     await renameProject(activeProject.id, name);
     await refreshAll();
-    setNotice("项目已重命名。");
+    showNotice("项目已重命名。", "success");
   }
 
   async function deleteActiveProject() {
     if (!activeProject) return;
     if (!window.confirm(`确认删除项目“${activeProject.name}”？该项目下的文献、热点、报告和日志都会删除。`)) return;
+    if (!await preparePiConversationChange("删除当前项目")) return;
     try {
       await deleteProject(activeProject.id);
       await refreshAll();
-      setNotice("项目已删除。");
+      showNotice("项目已删除。", "success");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "项目删除失败。");
+      showNotice(error instanceof Error ? error.message : "项目删除失败。", "error");
     }
   }
 }
@@ -2144,7 +2812,7 @@ function SearchWorkspace({
   searchFocusIntent: SearchFocusIntent | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
-  onNotice: (value: string) => void;
+  onNotice: AppNoticeHandler;
 }) {
   const [query, setQuery] = useState("verifiable scientific agents");
   const [discipline, setDiscipline] = useState<string>(DISCIPLINES[2]);
@@ -2405,7 +3073,18 @@ function SearchWorkspace({
             });
             await onRefresh();
             if (mounted) {
-              onNotice(payload.status === "done" ? "大文件直导完成。" : payload.status === "cancelled" ? "大文件直导已取消。" : payload.message);
+              onNotice(
+                payload.status === "done"
+                  ? "大文件直导完成。"
+                  : payload.status === "cancelled"
+                    ? "大文件直导已取消。"
+                    : payload.message,
+                payload.status === "failed"
+                  ? "error"
+                  : payload.status === "done"
+                    ? "success"
+                    : "info",
+              );
             }
             desktopImportTaskIdRef.current = "";
           })();
@@ -2440,7 +3119,7 @@ function SearchWorkspace({
       const nextPageCount = Math.max(1, Math.ceil(nextPage.total / pageSize));
       if (page > nextPageCount) setPage(nextPageCount);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "文献库分页查询失败。");
+      onNotice(error instanceof Error ? error.message : "文献库分页查询失败。", "error");
     } finally {
       setLibraryLoading(false);
     }
@@ -2478,9 +3157,9 @@ function SearchWorkspace({
       setSelectedIds((current) => Array.from(new Set([...current, ...savedRows.map((paper) => paper.id)])));
       await loadLibraryPage();
       await onRefresh();
-      onNotice(`检索完成：${rows.length} 篇文献已入库。`);
+      onNotice(`检索完成：${rows.length} 篇文献已入库。`, "success");
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "检索失败。");
+      onNotice(error instanceof Error ? error.message : "检索失败。", "error");
     } finally {
       setBusy("");
     }
@@ -2496,7 +3175,7 @@ function SearchWorkspace({
       setImportJob(null);
       onNotice("导入预览已生成，请确认后入库。");
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "本地文件解析失败。");
+      onNotice(error instanceof Error ? error.message : "本地文件解析失败。", "error");
     } finally {
       setBusy("");
       if (importInputRef.current) importInputRef.current.value = "";
@@ -2530,7 +3209,7 @@ function SearchWorkspace({
     } catch (error) {
       setBusy("");
       setImportProgress("");
-      onNotice(error instanceof Error ? error.message : "大文件直导启动失败。");
+      onNotice(error instanceof Error ? error.message : "大文件直导启动失败。", "error");
     }
   }
 
@@ -2560,7 +3239,7 @@ function SearchWorkspace({
     } catch (error) {
       setBusy("");
       setImportProgress("");
-      onNotice(error instanceof Error ? error.message : "演示数据导入启动失败。");
+      onNotice(error instanceof Error ? error.message : "演示数据导入启动失败。", "error");
     }
   }
 
@@ -2600,7 +3279,7 @@ function SearchWorkspace({
     } catch (error) {
       setBusy("");
       setImportProgress("");
-      onNotice(error instanceof Error ? error.message : "MySQL 导入启动失败。");
+      onNotice(error instanceof Error ? error.message : "MySQL 导入启动失败。", "error");
     }
   }
 
@@ -2650,7 +3329,7 @@ function SearchWorkspace({
       setImportPreview(null);
       setImportProgress("");
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "导入入库失败。");
+      onNotice(error instanceof Error ? error.message : "导入入库失败。", "error");
     } finally {
       setBusy("");
     }
@@ -2695,7 +3374,7 @@ function SearchWorkspace({
       await onRefresh();
       onNotice(`已删除 ${count} 篇文献。`);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "删除失败。");
+      onNotice(error instanceof Error ? error.message : "删除失败。", "error");
     } finally {
       setBusy("");
     }
@@ -2738,7 +3417,7 @@ function SearchWorkspace({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(error instanceof Error ? error.message : "报告生成失败。");
+      onNotice(error instanceof Error ? error.message : "报告生成失败。", "error");
     } finally {
       setBusy("");
     }
@@ -2770,7 +3449,7 @@ function SearchWorkspace({
       await onRefresh();
       onNotice("修订版已保存。");
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "修订失败。");
+      onNotice(error instanceof Error ? error.message : "修订失败。", "error");
     } finally {
       setBusy("");
     }
@@ -3127,7 +3806,7 @@ function SearchWorkspace({
                     await onRefresh();
                     onNotice("文献详情已保存。");
                   } catch (error) {
-                    onNotice(error instanceof Error ? error.message : "文献保存失败。");
+                    onNotice(error instanceof Error ? error.message : "文献保存失败。", "error");
                     throw error;
                   }
                 }}
@@ -4452,7 +5131,7 @@ function GalaxyView({
                 reviewCameraPreset={visualReviewIntent?.preset}
                 initialCameraPose={galaxyCameraPose}
                 onCameraPoseChange={setGalaxyCameraPose}
-                viewportOffsetRatio={galaxyInspectorOpen ? 0.08 : 0}
+                contextRailMode={galaxyContextRailMode as GalaxyContextRailMode}
                 command={cameraCommand}
                 representativePapers={representativeGalaxyPapers}
                 selectedPaperId={selectedGalaxyPaperId}
@@ -4485,7 +5164,11 @@ function GalaxyView({
                 onPaperFocusStateChange={(state, paperId) => {
                   setGalaxyPaperFocusState(state);
                   setGalaxyFocusedPaperId(paperId);
-                  if (state === "idle") {
+                  if (state === "entering" && selected && paperId) {
+                    setGalaxyContextRailState({ mode: "paper-reading", hotspotId: selected.id, paperId });
+                  } else if (state === "exiting" && selected) {
+                    setGalaxyContextRailState({ mode: "hotspot", hotspotId: selected.id });
+                  } else if (state === "idle") {
                     setGalaxyPaperInspectionMode("none");
                     setGalaxyPaperPanelState("hidden");
                     setGalaxyContextRailState(selected
@@ -4503,7 +5186,12 @@ function GalaxyView({
                 }}
                 onPaperPanelStateChange={(state) => {
                   setGalaxyPaperPanelState(state);
-                  if (state !== "hidden" && galaxyPaperInspectionMode !== "centered" && selected && selectedGalaxyPaperId) {
+                  if (
+                    (state === "entering" || state === "visible")
+                    && galaxyPaperInspectionMode !== "centered"
+                    && selected
+                    && selectedGalaxyPaperId
+                  ) {
                     setGalaxyContextRailState({ mode: "paper-reading", hotspotId: selected.id, paperId: selectedGalaxyPaperId });
                   }
                 }}
@@ -5269,7 +5957,7 @@ function HotspotLibrary({
   focusIntent?: HotspotFocusIntent | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
-  onNotice: (value: string) => void;
+  onNotice: AppNoticeHandler;
 }) {
   const [selectedId, setSelectedId] = useState(hotspots[0]?.id ?? "");
   const [hotspotQuery, setHotspotQuery] = useState("");
@@ -5494,7 +6182,14 @@ function HotspotLibrary({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(cancelled ? "AI 报告任务已取消。" : error instanceof Error ? error.message : "热点综述生成失败。");
+      onNotice(
+        cancelled
+          ? "AI 报告任务已取消。"
+          : error instanceof Error
+            ? error.message
+            : "热点综述生成失败。",
+        cancelled ? "info" : "error",
+      );
     } finally {
       setActiveAiTaskKey("");
       setBusy("");
@@ -5547,7 +6242,7 @@ function HotspotLibrary({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(message);
+      onNotice(message, "error");
     } finally {
       setBusy("");
     }
@@ -5599,7 +6294,7 @@ function HotspotLibrary({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(message);
+      onNotice(message, "error");
     } finally {
       setBusy("");
     }
@@ -5907,7 +6602,7 @@ function HotspotLibrary({
   );
 }
 
-function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, onNotice }: { reports: ResearchReport[]; papers: Paper[]; settings: AiSettings | null; activeProject: Project | null; onRefresh: () => Promise<void>; onNotice: (value: string) => void }) {
+function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, onNotice }: { reports: ResearchReport[]; papers: Paper[]; settings: AiSettings | null; activeProject: Project | null; onRefresh: () => Promise<void>; onNotice: AppNoticeHandler }) {
   const [selectedId, setSelectedId] = useState(reports[0]?.id ?? "");
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<ResearchReport["mode"] | "all">("all");
@@ -5995,7 +6690,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
         if (cancelled) return;
         setSelectedPapers([]);
         setMissingPaperIds(paperIds);
-        onNotice(error instanceof Error ? error.message : "报告绑定文献加载失败。");
+        onNotice(error instanceof Error ? error.message : "报告绑定文献加载失败。", "error");
       } finally {
         if (!cancelled) setBindingLoading(false);
       }
@@ -6065,7 +6760,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
       await onRefresh();
       onNotice("指定章节重写版已保存为修订报告。");
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "章节重写失败。");
+      onNotice(error instanceof Error ? error.message : "章节重写失败。", "error");
     } finally {
       setBusy(false);
     }
@@ -6079,7 +6774,7 @@ function ReportLibrary({ reports, papers, settings, activeProject, onRefresh, on
       await onRefresh();
       onNotice(`历史 Markdown 报告导入完成：新增 ${count} 份。`);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "历史报告导入失败。");
+      onNotice(error instanceof Error ? error.message : "历史报告导入失败。", "error");
     } finally {
       setBusy(false);
     }
@@ -6328,7 +7023,7 @@ function PipelineView({
   v20Snapshot: V20HotspotSnapshot | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
-  onNotice: (value: string) => void;
+  onNotice: AppNoticeHandler;
   onSpatialStateChange?: (state: SideraPipelineSpatialState) => void;
 }) {
   const [busyStage, setBusyStage] = useState<string>("");
@@ -6465,7 +7160,7 @@ function PipelineView({
             : "热点建模将在安全边界取消。",
       );
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "无法控制当前热点建模任务。");
+      onNotice(error instanceof Error ? error.message : "无法控制当前热点建模任务。", "error");
     }
   }
 
@@ -6710,7 +7405,7 @@ function LogsView({
   papers: Paper[];
   settings: AiSettings;
   onRefresh: () => Promise<void>;
-  onNotice: (value: string) => void;
+  onNotice: AppNoticeHandler;
 }) {
   const [selectedId, setSelectedId] = useState(taskLogs[0]?.id ?? "");
   const [projectFilter, setProjectFilter] = useState("current");
@@ -6894,7 +7589,7 @@ function LogsView({
       }
     } catch (error) {
       rerunSnapshotRef.current = null;
-      onNotice(error instanceof Error ? error.message : "任务重跑失败。");
+      onNotice(error instanceof Error ? error.message : "任务重跑失败。", "error");
     } finally {
       setBusy(false);
     }
@@ -7106,7 +7801,7 @@ function HealthView({
   libraryStatus: PaperLibraryStatus | null;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
-  onNotice: (value: string) => void;
+  onNotice: AppNoticeHandler;
 }) {
   const [checking, setChecking] = useState(false);
   const [pressureTesting, setPressureTesting] = useState(false);
@@ -7137,12 +7832,15 @@ function HealthView({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(next.errors.length === 0 ? "健康检查通过。" : "健康检查发现问题，请查看详情。");
+      onNotice(
+        next.errors.length === 0 ? "健康检查通过。" : "健康检查发现问题，请查看详情。",
+        next.errors.length === 0 ? "success" : "error",
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "健康检查失败。";
       setCheckError(message);
       setLastCheckedAt(nowIso());
-      onNotice(message);
+      onNotice(message, "error");
     } finally {
       setChecking(false);
     }
@@ -7180,7 +7878,7 @@ function HealthView({
         durationMs: Math.round(performance.now() - started),
       });
       await onRefresh();
-      onNotice(message);
+      onNotice(message, "error");
     } finally {
       setPressureTesting(false);
     }
@@ -7449,11 +8147,18 @@ function HealthView({
   );
 }
 
-function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiSettings; onSave: (settings: AiSettings) => Promise<void>; onRefresh: () => Promise<void>; onNotice: (value: string) => void }) {
+type SettingsAgentReadiness = {
+  provider: { status: "pass" | "fail"; detail: string };
+  local: SideraAgentLocalReadiness;
+  ready: boolean;
+};
+
+function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiSettings; onSave: (settings: AiSettings) => Promise<void>; onRefresh: () => Promise<void>; onNotice: AppNoticeHandler }) {
   const [draft, setDraft] = useState(settings);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [agentReadiness, setAgentReadiness] = useState<SettingsAgentReadiness>();
   const [semanticCapabilities, setSemanticCapabilities] = useState<SemanticEmbeddingCapabilities>();
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -7481,16 +8186,66 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
   async function test() {
     setTesting(true);
     setMessage("");
+    setAgentReadiness(undefined);
+    let effective = draft;
     try {
-      let effective = draft;
       if (draft.manualApiKey.trim() && draft.projectId && isDesktopRuntime()) {
         const status = await setAppCredential(draft.projectId, `ai-${draft.provider}`, draft.manualApiKey);
         effective = { ...draft, manualApiKey: "", apiCredentialConfigured: status.configured };
         setDraft(effective);
       }
-      setMessage(await testAiConnection(effective));
+      const [provider, local] = await Promise.all([
+        testAiConnection(effective)
+          .then((detail) => ({ status: "pass" as const, detail }))
+          .catch((error) => ({
+            status: "fail" as const,
+            detail: error instanceof Error ? error.message : "Provider 连接失败。",
+          })),
+        checkSideraAgentLocalReadiness({
+          databaseDir: effective.databaseDir,
+          projectId: effective.projectId || "project-default",
+        }).catch((error): SideraAgentLocalReadiness => {
+          const detail = error instanceof Error ? error.message : "Agent 本地检测失败。";
+          return {
+            conversationStore: {
+              status: "fail",
+              code: "SIDERA_AGENT_LOCAL_READINESS_FAILED",
+              detail,
+              repaired: false,
+            },
+            piRuntime: {
+              status: "fail",
+              code: "SIDERA_AGENT_LOCAL_READINESS_FAILED",
+              detail,
+            },
+          };
+        }),
+      ]);
+      const ready = provider.status === "pass"
+        && local.conversationStore.status !== "fail"
+        && local.piRuntime.status === "pass";
+      setAgentReadiness({ provider, local, ready });
+      setMessage(ready ? "Agent 可以对话。" : "Agent 尚未就绪，请查看失败项。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "连接失败。");
+      const detail = error instanceof Error ? error.message : "Agent 本地检测失败。";
+      setMessage("Agent 尚未就绪，请查看失败项。");
+      setAgentReadiness({
+        provider: { status: "fail", detail: "Provider 尚未完成检测。" },
+        local: {
+          conversationStore: {
+            status: "fail",
+            code: "SIDERA_AGENT_LOCAL_READINESS_FAILED",
+            detail,
+            repaired: false,
+          },
+          piRuntime: {
+            status: "fail",
+            code: "SIDERA_AGENT_LOCAL_READINESS_FAILED",
+            detail,
+          },
+        },
+        ready: false,
+      });
     } finally {
       setTesting(false);
     }
@@ -7506,7 +8261,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     try {
       await onSave(draft);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "设置保存失败。");
+      onNotice(error instanceof Error ? error.message : "设置保存失败。", "error");
     } finally {
       setSaving(false);
     }
@@ -7544,7 +8299,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
       const errorMessage = error instanceof Error ? error.message : "备份导出失败。";
       await saveTaskLog({ stage: "backup", title: "IndexedDB JSON 备份", status: "failed", inputSummary: "导出 IndexedDB 备份。", outputSummary: "", error: errorMessage, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
-      onNotice(errorMessage);
+      onNotice(errorMessage, "error");
     }
   }
 
@@ -7567,7 +8322,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
       const errorMessage = error instanceof Error ? error.message : "SQLite 论文库备份失败。";
       await saveTaskLog({ stage: "backup", title: "SQLite 论文库备份", status: "failed", inputSummary: draft.databaseDir || "默认 SQLite 目录", outputSummary: "", error: errorMessage, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
-      onNotice(errorMessage);
+      onNotice(errorMessage, "error");
     }
   }
 
@@ -7603,7 +8358,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
       const errorMessage = rawMessage.includes("LIBRARY_BUSY") ? "论文库正在执行导入、清洗或聚类，请任务完成后再恢复。" : rawMessage;
       await saveTaskLog({ stage: "restore", title: "SQLite 论文库恢复", status: "failed", inputSummary: backupPath, outputSummary: "", error: errorMessage, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
-      onNotice(errorMessage);
+      onNotice(errorMessage, "error");
     }
   }
 
@@ -7640,7 +8395,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
       const errorMessage = error instanceof Error ? error.message : "备份恢复失败。";
       await saveTaskLog({ stage: "restore", title: "IndexedDB JSON 恢复", status: "failed", inputSummary: file.name, outputSummary: "", error: errorMessage, durationMs: Math.round(performance.now() - started) });
       await onRefresh();
-      onNotice(errorMessage);
+      onNotice(errorMessage, "error");
     } finally {
       if (restoreInputRef.current) restoreInputRef.current.value = "";
     }
@@ -7673,7 +8428,7 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
               </div>
               <button className="secondary-action h-9 gap-2" onClick={() => void test()} disabled={testing}>
                 {testing ? <Loader2 className="animate-spin" size={15} /> : <Play size={15} />}
-                测试连接
+                {testing ? "正在检测" : "检测 Agent"}
               </button>
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -7687,12 +8442,59 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
                 />
               </label>
               <label className="field-label">模型名称<input className="field-control h-11 px-3" value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label>
-              <label className="field-label lg:col-span-2">服务地址（Base URL）<input className="field-control h-11 px-3" value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /></label>
+              <label className="field-label">
+                Pi 提示缓存
+                <SelectControl
+                  className="h-11 text-sm"
+                  value={draft.sideraCacheRetention}
+                  options={[
+                    { value: "long", label: "长缓存（默认，推荐）" },
+                    { value: "auto", label: "兼容模式（上游不支持长缓存时使用）" },
+                  ]}
+                  onChange={(value) => setDraft({ ...draft, sideraCacheRetention: value === "long" ? "long" : "auto" })}
+                />
+              </label>
+              <label className="field-label">服务地址（Base URL）<input className="field-control h-11 px-3" value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /></label>
               <label className="field-label lg:col-span-2">API 密钥<input className="field-control h-11 px-3" type="password" value={draft.manualApiKey} onChange={(event) => setDraft({ ...draft, manualApiKey: event.target.value })} placeholder={draft.apiCredentialConfigured ? "已安全保存到 Windows 凭据管理器；输入新值可替换" : "输入后保存到 Windows 凭据管理器"} /></label>
               <label className="field-label">生成温度<input className="field-control h-11 px-3" type="number" step={0.05} min={0} max={1} value={draft.temperature} onChange={(event) => setDraft({ ...draft, temperature: Number(event.target.value) })} /></label>
               <label className="settings-toggle-row"><input type="checkbox" checked={draft.useEnvKey} onChange={(event) => setDraft({ ...draft, useEnvKey: event.target.checked })} />允许后端开发环境读取 DEEPSEEK_API_KEY</label>
             </div>
-            {message && <div className="settings-connection-message" aria-live="polite">{message}</div>}
+            {message && (
+              <div
+                className={`settings-connection-message ${agentReadiness?.ready ? "is-ready" : "is-failed"}`}
+                role={agentReadiness?.ready ? "status" : "alert"}
+              >
+                <strong>{message}</strong>
+              </div>
+            )}
+            {agentReadiness ? (
+              <div className="settings-agent-readiness" aria-label="Agent 可用性检测结果">
+                <AgentReadinessRow
+                  label="Provider"
+                  status={agentReadiness.provider.status}
+                  summary={agentReadiness.provider.status === "pass" ? "连接正常" : "连接失败"}
+                  detail={agentReadiness.provider.detail}
+                />
+                <AgentReadinessRow
+                  label="会话存储"
+                  status={agentReadiness.local.conversationStore.status}
+                  summary={agentReadiness.local.conversationStore.status === "repaired"
+                    ? "已原地修复"
+                    : agentReadiness.local.conversationStore.status === "pass"
+                      ? "可用"
+                      : "不可用"}
+                  detail={agentReadiness.local.conversationStore.detail}
+                  code={agentReadiness.local.conversationStore.code}
+                />
+                <AgentReadinessRow
+                  label="Pi 运行时"
+                  status={agentReadiness.local.piRuntime.status}
+                  summary={agentReadiness.local.piRuntime.status === "pass" ? "可用" : "不可用"}
+                  detail={agentReadiness.local.piRuntime.detail}
+                  code={agentReadiness.local.piRuntime.code}
+                />
+              </div>
+            ) : null}
           </section>
 
           <section className="panel-card settings-section">
@@ -7817,6 +8619,41 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
           </div>
           <p className="settings-summary-note">设置按当前项目保存在本机；数据库、导出和备份目录建议优先放在 D 盘。</p>
         </aside>
+      </div>
+    </div>
+  );
+}
+
+function AgentReadinessRow({
+  label,
+  status,
+  summary,
+  detail,
+  code,
+}: {
+  label: string;
+  status: "pass" | "repaired" | "fail";
+  summary: string;
+  detail: string;
+  code?: string;
+}) {
+  const successful = status !== "fail";
+  return (
+    <div className="settings-agent-readiness__row" data-status={status}>
+      <span className="settings-agent-readiness__icon" aria-hidden="true">
+        {successful ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+      </span>
+      <div>
+        <span>{label}</span>
+        <strong>{summary}</strong>
+        {code ? (
+          <details>
+            <summary>技术详情 · {code}</summary>
+            <pre>{detail}</pre>
+          </details>
+        ) : (
+          <small>{detail}</small>
+        )}
       </div>
     </div>
   );
@@ -7973,7 +8810,7 @@ function AboutView({
   );
 }
 
-async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], settings: AiSettings, onRefresh: () => Promise<void>, onNotice: (value: string) => void, setBusyStage: (value: string) => void, activeProject?: Project) {
+async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], settings: AiSettings, onRefresh: () => Promise<void>, onNotice: AppNoticeHandler, setBusyStage: (value: string) => void, activeProject?: Project) {
   const started = performance.now();
   const isLibraryTask = Boolean(activeProject);
   const inputSummary = isLibraryTask
@@ -8066,7 +8903,7 @@ async function runLoggedWorker(stage: "clean" | "cluster", papers: Paper[], sett
     });
     await saveTaskLog({ stage, title: stage === "clean" ? (activeProject ? "SQLite 大库清洗去重" : "清洗去重 worker") : (activeProject ? "SQLite 大库热点聚类" : "热点聚类 worker"), status: "failed", inputSummary, outputSummary: "", rawInput: rawInputForLog, error: message, durationMs: Math.round(performance.now() - started) });
     await onRefresh();
-    onNotice(message);
+    onNotice(message, "error");
   } finally {
     setBusyStage("");
   }

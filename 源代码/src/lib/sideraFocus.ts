@@ -17,9 +17,21 @@ export type SideraAnswerEntityReference = {
 
 export type SideraAssistantMessage = {
   id: string;
-  status: "streaming" | "complete" | "cancelled" | "failed";
+  status: "streaming" | "complete" | "cancelled" | "failed" | "interrupted";
   markdown: string;
   entityRefs: SideraAnswerEntityReference[];
+  toolStage?: import("./sideraPi").SideraPiToolStage;
+  retrievalMode?: import("./sideraPi").SideraPiRetrievalMode;
+  citationStatus?: "verified" | "unverified";
+  evidenceGateStatus?: import("./sideraPi").SideraEvidenceGateStatus;
+  usage?: import("./sideraPi").PiUsage;
+};
+
+export type SideraConversationTurn = {
+  id: string;
+  submittedAtMs: number;
+  userText: string;
+  assistant: SideraAssistantMessage;
 };
 
 export type SideraFocusPhase =
@@ -45,11 +57,38 @@ export type SideraResolvedReference = {
   entity: ResolvedAgentGalaxyEntity;
 };
 
+export type SideraFocusComposition = {
+  side: "left" | "right";
+  targetCenterPx: [number, number];
+  targetDiameterPx: number;
+  dialogGapPx: number;
+  normalizedAnchorX: number;
+};
+
+export type SideraFocusCompositionBounds = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+};
+
+export type SideraFocusCompositionInput = {
+  viewportWidth: number;
+  viewportHeight: number;
+  titlebarHeight: number;
+  dialogBounds: SideraFocusCompositionBounds;
+  preferredSide?: "left" | "right";
+  fallbackSide: "left" | "right";
+};
+
 export type SideraFocusSession = {
   messageId: string;
   candidates: SideraResolvedReference[];
   currentIndex: number;
   side: "left" | "right";
+  composition: SideraFocusComposition;
   backgroundMode: "immersive" | "theory";
   phase: SideraFocusPhase;
 };
@@ -74,6 +113,54 @@ export type SideraFocusTimelineSample = {
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+export function resolveSideraFocusComposition(
+  input: SideraFocusCompositionInput,
+): SideraFocusComposition {
+  const viewportWidth = Math.max(1, input.viewportWidth);
+  const viewportHeight = Math.max(1, input.viewportHeight);
+  const safeLeft = 24;
+  const safeRight = viewportWidth - 24;
+  const safeTop = Math.max(24, input.titlebarHeight + 20);
+  const safeBottom = viewportHeight - 24;
+  const leftCapacity = Math.max(0, input.dialogBounds.left - safeLeft);
+  const rightCapacity = Math.max(0, safeRight - input.dialogBounds.right);
+  const minimumRequired = 160 + 40;
+  let side = input.preferredSide;
+  if (!side) {
+    const leftFits = leftCapacity >= minimumRequired;
+    const rightFits = rightCapacity >= minimumRequired;
+    if (leftFits !== rightFits) {
+      side = leftFits ? "left" : "right";
+    } else if (Math.abs(leftCapacity - rightCapacity) > 1) {
+      side = leftCapacity > rightCapacity ? "left" : "right";
+    } else {
+      side = input.fallbackSide;
+    }
+  }
+
+  const capacity = side === "left" ? leftCapacity : rightCapacity;
+  const targetDiameterPx = clamp(Math.min(200, Math.max(160, capacity - 64)), 160, 240);
+  const dialogGapPx = clamp(capacity - targetDiameterPx, 40, 64);
+  const radius = targetDiameterPx * 0.5;
+  const desiredCenterX = side === "left"
+    ? input.dialogBounds.left - dialogGapPx - radius
+    : input.dialogBounds.right + dialogGapPx + radius;
+  const centerX = clamp(desiredCenterX, safeLeft + radius, safeRight - radius);
+  const centerY = clamp(viewportHeight * 0.42, safeTop + radius, safeBottom - radius);
+
+  return {
+    side,
+    targetCenterPx: [centerX, centerY],
+    targetDiameterPx,
+    dialogGapPx,
+    normalizedAnchorX: clamp(centerX / viewportWidth, 0, 1),
+  };
 }
 
 export function sideraSmootherstep(value: number) {

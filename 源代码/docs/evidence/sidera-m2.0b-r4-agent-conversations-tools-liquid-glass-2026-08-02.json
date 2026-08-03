@@ -1,0 +1,209 @@
+{
+  "workPackage": "M2.0b-R4",
+  "title": "Sidera conversations, audited tools, cache stats, and Liquid Glass",
+  "date": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "storage": {
+    "uiHistory": "<selected-library>/Sidera/conversations-v1.sqlite",
+    "piContext": "<selected-library>/Sidera/pi-sessions/project-<sha256-prefix>/",
+    "paperDatabaseSchemaChanged": false,
+    "streamCheckpointMs": 500,
+    "crashRecoveryStatus": "interrupted",
+    "automaticProviderReplay": false
+  },
+  "conversationCapabilities": [
+    "restore most recently opened active conversation per project",
+    "create and open",
+    "local first-prompt title and manual rename",
+    "search active or archived history",
+    "archive and restore",
+    "permanent delete only after archive and second confirmation",
+    "read saved UI history when Pi context is unavailable"
+  ],
+  "toolBoundary": {
+    "piBuiltinTools": "disabled",
+    "direct": [
+      "directory listing",
+      "bounded text file read",
+      "bounded file-name search",
+      "bounded HTTPS GET"
+    ],
+    "oneShotApproval": [
+      "file write",
+      "exact file edit",
+      "file or directory delete",
+      "PowerShell"
+    ],
+    "approvalBinding": [
+      "sessionId",
+      "messageId",
+      "tool",
+      "toolCallId",
+      "parameterHash",
+      "epoch",
+      "revision"
+    ],
+    "shellEnvironment": "env_clear plus minimal Windows/proxy allowlist",
+    "sensitiveOutputRedaction": true,
+    "maximumShellSeconds": 120,
+    "turnAbortCancelsActiveShell": true,
+    "httpsDowngradeRedirectRejected": true,
+    "automaticApprovalFromToolOutput": false
+  },
+  "cache": {
+    "choices": [
+      "auto",
+      "long"
+    ],
+    "default": "auto",
+    "longActivation": "next Pi process open",
+    "silentFallback": false,
+    "stats": [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "cost",
+      "contextUsage"
+    ],
+    "zeroCacheLabel": "not detected"
+  },
+  "composition": {
+    "dialogWidth": "clamp(560px, 42vw, 760px)",
+    "historyWidth": "clamp(272px, 20vw, 320px)",
+    "gapPx": 16,
+    "wideLayout": "drawer and dialog centered as one assembly",
+    "narrowBreakpointPx": 960,
+    "narrowLayout": "history overlay"
+  },
+  "material": {
+    "style": "Apple-near-native static dark Liquid Glass without proprietary assets",
+    "blurPx": 28,
+    "assistantSurface": "smoked glass",
+    "dynamicNoise": false,
+    "perFrameFilter": false,
+    "fallbacks": [
+      "prefers-reduced-motion",
+      "prefers-reduced-transparency",
+      "prefers-contrast",
+      "forced-colors",
+      "no-backdrop-filter solid surface"
+    ]
+  },
+  "validation": [
+    {
+      "name": "typescript-project-build",
+      "command": "node_modules\\.bin\\tsc.CMD -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "name": "vite-production-build",
+      "command": "pnpm build",
+      "status": "PASS",
+      "viteVersion": "6.4.3",
+      "moduleCount": 1915,
+      "notes": "existing Tauri event dynamic/static import warning only"
+    },
+    {
+      "name": "rust-incremental-check",
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+      "status": "PASS"
+    },
+    {
+      "name": "r4-conversation-tools-glass-audit",
+      "command": "node scripts/sidera_agent_conversation_r4_audit.mjs",
+      "status": "PASS",
+      "providerCalls": 0
+    },
+    {
+      "name": "agent-dual-background-regression",
+      "command": "node scripts/agent_dual_background_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "research-galaxy-spatial-ui-regression",
+      "command": "node scripts/sidera_galaxy_spatial_ui_r3_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "hotspot-transition-regression",
+      "command": "node --experimental-strip-types scripts/galaxy_hotspot_transition_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "r3-conversation-regression",
+      "command": "node scripts/sidera_agent_conversation_ui_r3_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "r1-evidence-ui-regression",
+      "command": "node scripts/sidera_pi_conversation_evidence_ui_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "r2-spatial-composition-regression",
+      "command": "node --experimental-strip-types scripts/sidera_m2_spatial_composition_r2_audit.mjs",
+      "status": "PASS"
+    },
+    {
+      "name": "pi-rpc-no-provider-smoke",
+      "command": "node scripts/sidera_pi_basic_conversation_audit.mjs",
+      "status": "PASS",
+      "rpc": "get_state",
+      "providerCalls": 0
+    },
+    {
+      "name": "rust-conversation-unit-tests",
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml sidera_conversations::tests --lib -j 2 -- --nocapture",
+      "status": "BLOCKED",
+      "notes": "test target compiled; Windows lib test executable hung before test-harness output and was terminated by the 120-second command gate, matching the previously recorded R1 environment issue"
+    },
+    {
+      "name": "project-documentation-audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS",
+      "currentStage": "M2.0b-R4"
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "status": "PASS",
+      "notes": "line-ending conversion warnings only"
+    }
+  ],
+  "implementationDeviation": {
+    "requested": "same-process Pi new_session and switch_session RPC",
+    "implemented": "Pi native SessionManager via --session-dir and --session-id, with controlled process restart on conversation switch",
+    "reason": "preserves deterministic conversation-id to JSONL identity and hard epoch isolation without exposing generic RPC to React",
+    "effect": "context persistence and auto compaction are retained; process-local switching is not claimed"
+  },
+  "desktopAcceptance": {
+    "status": "FAIL",
+    "observedFailures": [
+      "conversation schema SQL lost whitespace across Rust line continuations, leaving a user_version=0 partial store and preventing new conversation creation",
+      "the Rust lib-test executable failed at process entry on TaskDialogIndirect before the test harness could run"
+    ],
+    "pending": [
+      "restart and project switch restore",
+      "five send, collapse, drawer, and conversation-switch cycles",
+      "rename, archive, restore, and archived permanent delete",
+      "direct read tools and one-shot mutation rejection/approval",
+      "wide centered assembly and under-960px overlay",
+      "normal and maximized windows at 100%, 125%, and 150% scaling",
+      "Liquid Glass contrast and all accessibility fallbacks",
+      "real-provider context continuity, compaction, and cache usage comparison"
+    ]
+  },
+  "result": {
+    "technical": "PASS_WITH_PRODUCT_FAILURE",
+    "product": "FAIL",
+    "supersededBy": "M2.0b-R4-R1",
+    "providerCallsMade": false,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

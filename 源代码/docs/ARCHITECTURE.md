@@ -2,7 +2,7 @@
 
 状态：权威架构入口
 
-更新时间：2026-08-02
+更新时间：2026-08-03
 
 ## 现有基础
 
@@ -42,6 +42,23 @@ AgentImmersiveBackgroundPayloadV2（身份、颜色、年份；无 XYZ）
 M1.3m 将 M1.3l-R1 的透明界面扩展为根级空间外壳。`SideraTitleBar(transparent)` 与 `agent-navigation-drawer` 成为所有页面唯一的标题栏和导航；普通工作页不再挂载永久 `sidebar-surface`。M1.3m-R1 将导航布局显式拆为两类：Agent、科研星图等空间页面使用 `spatial-overlay`，导航只覆盖 DOM；总览、文献、热点、报告和设置等密集工作页使用 `workbench-reserve`，导航展开时只改变工作表面的左右边界，背景画布及其 WebGL 尺寸保持不变。
 
 M1.3m-R2 将科研星图内部进一步拆为持久的 Renderer/Camera 生命周期与可替换 Scene Layer 生命周期。展示/理论模式只替换热点、论文、标签和模式材质层；当前相机姿态按源/目标场景尺度映射后在同一帧应用，模式变化不能再触发页面级 `fit`。科研星图 HUD 使用左侧折叠区、顶部工具条和单一 `GalaxyContextRail` 三个互斥安全区；详情轨道通过相机投影偏移让位，不能移动 DOM 画布或修改世界坐标。
+
+M2.0b-R2 将“面板避让”和“相机飞行”收敛为可测量的空间构图。Agent 侧由 `ResizeObserver` 读取对话框、证据卡、标题栏与视口边界，生成唯一 `SideraFocusComposition`；沉浸相机、理论近景与 CSS 强调不再各自维护固定锚点。科研星图侧由 `GalaxyContextRailMode → resolveGalaxyContextRailWidth() → effectiveViewport` 计算投影构图，并由论文 Journey 的同一个 `focusBlend` 同步推进轨道、投影锚点和相机距离：
+
+```text
+Agent DOM bounds → SideraFocusComposition → immersive/theory focus + CSS optical cue
+
+GalaxyContextRailMode → measured rail width + 24px gap
+  → effective viewport
+  → paper journey focusBlend
+      ├─ projection composition
+      ├─ paper anchor
+      ├─ camera distance
+      └─ rail content/width
+  → atomic Orbit handoff
+```
+
+研究星图不再使用固定 `viewportOffsetRatio=0.08`，论文飞近也不再具有独立 acquisition 停顿。返回系统时在交回 Orbit 前先同步最终相机、投影和热点轨道状态，防止锚点清零与相机接管跨帧发生。
 
 ```text
 SideraShell
@@ -667,9 +684,138 @@ SideraAgentStage
 - 每个应用会话使用隔离缓存目录和私有 `models.json`。真实 API Key 只通过子进程环境变量提供，配置文件仅包含环境变量引用；全局 `~/.pi/agent` 不可读写。
 - 当前能力是纯文本多轮会话。全部 Pi 工具、扩展、技能、模板和上下文文件关闭；本地论文库、文件、Shell、网页、结构化引用和星图聚焦不进入该链路。
 - Pi 会话只保存在内存中。离开 Agent 会中止正在生成的回合但不销毁进程上下文；进程崩溃后不自动重放请求，下次显式提交建立新会话。
-- `SideraPiRuntimeState` 只接受 `start_session / submit_prompt / abort_turn / get_status / stop_session` 五个窄命令。原始 RPC 响应和 `message_update` 不进入 React；Rust 将其规范化为带单调 `sequence/revision` 的 `session-ready / turn-start / assistant-delta / turn-complete / turn-cancelled / runtime-error`。
+- `SideraPiRuntimeState` 只接受受控窄命令。原始 RPC 响应和 `message_update` 不进入 React；Rust 将其规范化为带单调 `sequence/revision` 的 `session-ready / turn-start / assistant-delta / assistant-replace / turn-complete / turn-cancelled / runtime-error`。
 - 子进程 stdout 只按 LF 分帧，CR 只允许作为行尾剥离；单条记录、提示词、累计回答与 stderr 诊断均有上限。Pi 崩溃或模型设置变化时销毁旧 epoch，旧事件不能写回当前消息，问题也不会自动重放。
 - 正式 Sidera 对话控制器在根级维护本次应用运行的用户消息、单条流式回答和活动回合引用；背景模式切换不拥有对话会话。开发回答夹具只在显式视觉评审参数下启用，普通启动不再混入模拟回答。
+
+## M2.0b Pi 本地论文轻量混合 RAG
+
+```text
+Pi tool call
+  → session extension (exactly four Sidera tools)
+  → extension_ui_request
+  → Rust nonce / epoch / revision / toolCallId gate
+  → read-only SideraRagRuntime
+       ├─ existing LIKE search Top-20
+       ├─ CPU E5 query + active-snapshot cosine Top-40
+       ├─ deterministic weighted RRF Top-12
+       ├─ read-only project library overview
+       ├─ evidence read Top-6
+       └─ verified citation closure
+  → extension_ui_response
+  → Pi synthesis
+  → normalized turn-complete entityRefs
+  → existing explicit focus UI
+```
+
+- Pi 内置工具全部关闭；会话专用扩展是唯一工具注册入口，且只暴露搜索、按 ID 读取、引用收口和无参数库概况。Rust 不提供通用 RPC、任意 SQL、文件、Shell、网页或项目选择接口。
+- `SideraRagRuntime` 只以 SQLite read-only flags 打开当前项目数据库。活动快照、模型 ID、模型 revision、384 维和 `float16-le` 编码必须同时匹配；缺失或版本不匹配时在加载 E5 之前退回 LIKE。
+- E5 查询使用 `query:` 前缀和 CPU runtime。语义扫描与工具执行进入 Tauri blocking task，不占用 UI 线程；Embedding runtime 在进程内懒加载复用，不修改数据库缓存。
+- RRF 排序使用语义权重 `0.55`、关键词权重 `0.45`、`k=60`，论文 ID 作为最终稳定次序键。相同问题、快照和库修订产生相同结果。
+- 每回合 `SideraRagTurnState` 保存工具预算、已搜索 ID、已读取 ID、retrieval mode 和通过核验的 refs。`finalize` 不能引用未读取或跨项目实体；旧 epoch、停止后的迟到工具结果不能恢复到新回合。
+- 前端只接收标准化的工具阶段和最终引用，不接触原始工具参数、摘要正文或模型推理。引用仍走 M1.3j 的用户显式聚焦，不允许回答流式阶段自动操控背景。
+
+M2.0b-R1 已将根级事实模型由独立用户数组和回答数组收敛为 `SideraConversationTurn[]`。Pi 增量、完成、停止和错误事件只按 `turnId`更新所属轮次；页面按用户记录、工具状态、回答、引用和聚焦顺序渲染。
+
+工具白名单现为四项，无参数库概况从 Rust 注入项目的只读 SQLite 读取论文、学科、热点和活动快照规模。证据回合在工具开始时清除过程旁白；读取成功后，宿主在同一回合最多发送一次内部 steer，只有 `finalize_evidence`完成闭包后才发布正式正文。搜索有命中但未读取、读取后未收口或引用非法均进入 `invalid`，不生成可点击引用或聚焦入口。
+
+回答正文经锁定版本的 `react-markdown`与`remark-gfm`渲染，原始 HTML、图片和危险协议被禁用。结构化引用不从 Markdown 推导，继续只信任 Rust 核验后的 `entityRefs`。
+
+## M2.0b-R4 持久会话、审计工具与玻璃工作区
+
+```text
+AgentDualBackgroundPage
+  ├─ fixed reading dialog
+  ├─ left conversation drawer
+  └─ one-shot tool approval card
+        ↓ typed callbacks
+App conversation controller
+  ├─ 500ms UI-turn checkpoint
+  ├─ abort-and-wait switch gate
+  └─ normalized Pi event / stats stream
+        ↓ Tauri narrow commands
+SideraConversationStore                 SideraPiRuntimeState
+  ├─ Sidera/conversations-v1.sqlite       ├─ --session-dir project-<hash>
+  ├─ conversations / turns / state         ├─ --session-id conversation-id
+  └─ Pi JSONL existence + cascade delete   ├─ native auto compaction / stats
+                                            └─ audited extension bridge
+                                                 ├─ local RAG (4)
+                                                 ├─ read/list/search/HTTPS (4)
+                                                 └─ write/edit/delete/Shell (4, approval)
+```
+
+- 会话元数据和完整 UI 轮次属于 `conversations-v1.sqlite`；Pi 原生上下文属于项目哈希目录内的 JSONL。论文库 `research-hotspots-v7.sqlite`及其 Schema 不参与会话迁移。`project_state`只记录最近打开会话，归档会清除当前指针，永久删除只接受归档会话并同时删除匹配的 Pi JSONL。
+- React 不访问 SQLite、Pi RPC 或 JSONL。用户提交先写 UI 轮次，再启动/打开以 conversation ID 命名的 Pi 原生 session；流式增量以 500ms 合并保存，终态强制保存。启动时任何残留 `streaming`轮次转为`interrupted`，不会触发 Provider 请求。
+- 会话切换以进程 epoch 作为隔离门：若有活动轮次，必须先得到用户确认、发送 abort 并等待终止事件；随后冲刷检查点、停止受控子进程并以目标 `--session-id`重新打开同一 JSONL。该重启式切换故意不向 React 暴露 `new_session / switch_session / get_messages`通用 RPC；Pi session manager 与自动压缩仍是上下文事实来源。
+- 工具扩展仍只用 `extension_ui_request`作为传输层。Rust 对 nonce、epoch、revision、活动 `toolCallId`和工具名做联合校验；文件/网页/命令内容是不可信数据，不能修改权限或批准后续操作。一次性审批还绑定 session、message、tool、toolCallId 和参数哈希，消费后从 pending slot 移除。
+- 目录、文本读取、文件名搜索和 HTTPS GET 可直接执行；写入、精确替换、删除和 PowerShell 一律审批。Shell 子进程 `env_clear()`后只恢复 Windows 运行、临时目录和代理所需变量；stdout/stderr 分流限量，最长 120 秒，轮次 abort 通过原子取消标记终止正在运行的已审批 Shell；HTTPS 最终 URL 仍须为 HTTPS。敏感字段统一脱敏，模型 API Key只存在于 Pi 主子进程的私有环境，不进入 Shell。
+- 缓存策略 v2 默认使用 `long`，只在新/重开进程时注入 `PI_CACHE_RETENTION=long`；显式兼容模式 `auto`不覆盖 Pi 原生策略。`get_session_stats`映射 input/output/cacheRead/cacheWrite/cost/contextUsage；零缓存值只表示当前统计未检测到缓存用量。
+- 对话框与抽屉不改变 WebGL 所有权。宽屏时抽屉和对话框通过互补 transform 形成几何居中的组合；小于 960px 时抽屉覆盖。Liquid Glass 完全由静态 CSS 材质实现，助手正文使用高不透明烟熏层；reduced motion/transparency、forced colors 和无 backdrop-filter 环境均有纯色降级。
+
+## M2.0b-R4-R1 会话 Schema 恢复与 Agent readiness
+
+```text
+Settings "检测 Agent"
+  ├─ Provider probe (existing request path)
+  └─ sidera_agent_local_readiness (no Provider request)
+       ├─ conversation store
+       │    ├─ PRAGMA foreign_keys / WAL
+       │    ├─ transaction: schema SQL + validation
+       │    └─ user_version = 1
+       └─ Pi runtime
+            ├─ Pi 0.82.1 entrypoint
+            ├─ Sidera extension protocol marker
+            ├─ Node runtime
+            └─ required local database/session paths
+```
+
+- 会话 v1 DDL 位于 `sidera_conversations_schema.sql`，Rust 通过 `include_str!`按原始换行执行；查询、更新和 UPSERT 使用原始多行字符串，禁止以 `\`续行吞掉 SQL 词间空格。
+- 打开存储先设置外键、WAL 与同步模式，再检查 `user_version`和既有对象。兼容的 v0 部分库在同一事务内补齐表、索引与 `turns → conversations ON DELETE CASCADE`外键，验证成功后才写 `user_version=1`；既有会话行不会删除或迁移重写。
+- 发现更高版本、缺列、列主键约束不符或同名对象结构不兼容时返回安全错误码，禁止破坏性自愈。React 显示简短持久错误，原始 SQLite 详情只存在于设置页可展开诊断区。
+- `sidera_agent_local_readiness`是只读/幂等本地预检：会话存储返回 `pass / repaired / fail`与 Schema 版本，Pi 返回入口、扩展、Node 和必要路径状态。Provider 检测仍是独立现有链路，三项成功才形成“Agent 可以对话”的产品结论。
+- 会话存储测试由独立 workspace harness 直接编译同一 Rust 源文件，不依赖 `tauri-runtime-wry`、`tauri-plugin-dialog`或 rfd。正式桌面默认仍启用 `desktop-dialog`；测试目标因此既能真实执行 SQLite 用例，也不会导入 `TaskDialogIndirect`。
+
+## M2.0b-R4-R2 后台轮次所有权与清透光学工作区
+
+```text
+App conversation controller
+  ├─ active Pi turn + 500ms checkpoints
+  ├─ activeView changes: presentation only
+  ├─ explicit stop / project / config / conversation gates
+  └─ Agent activity resolver
+       └─ SideraTitleBar tools host
+            ├─ generating → return + stop
+            ├─ awaiting approval → return only
+            ├─ complete → 3s terminal state
+            └─ failed → persistent error surface
+```
+
+- `AgentDualBackgroundPage`在普通页面下仍由根组件挂载，Pi 事件监听、活动 turn ref、SQLite UI轮次和检查点不依赖 Agent 可见性。`activeView`只选择前景工作页与背景 presentation，不再拥有 abort 权限。
+- 等待工具审批时 Pi 活动状态优先于普通生成状态。标题栏只提供返回入口，批准与拒绝仍由原审批卡及 `approvalId`一次性绑定完成；因此全局状态不会扩大权限面。
+- 项目切换、项目创建/删除、影响 Provider/模型/缓存/论文库路径的设置保存和当前会话生命周期操作复用 abort-and-wait 门。终止事件到达前不得切换上下文，也不得自动重放请求。
+- 光学变量提升到全局设计令牌供标题栏状态和 Agent 工作区共享。外壳使用 18px静态 backdrop blur、115%饱和度和约 34%深色填充；历史区是单一 58%烟熏阅读平面，回答项透明。边缘强调由窄线性内反射与短顶部高光构成，不使用大面积左上径向光。
+- 主 Tauri lib 设置 `test=false`，标准会话存储测试只通过 workspace harness 运行。旧 `target`中的 lib-test EXE不是运行时或测试入口，不自动删除；harness 不链接 Tauri/rfd且生成物不得导入 TaskDialog符号。
+
+## M2.0b-R4-R3 缓存策略迁移与事件驱动流式门
+
+```text
+IndexedDB project settings
+  → cache policy resolver v2
+       ├─ legacy auto / long / missing → long + v2 marker
+       └─ v2 auto / long → preserve explicit selection
+
+Pi message_update
+  → pure stream gate
+       ├─ direct text_delta → assistant-delta immediately
+       ├─ toolcall_start → hidden + assistant-replace("")
+       ├─ system tool end → release final text
+       └─ RAG overview / no-result / finalize → release verified text
+```
+
+- 启动迁移遍历全部项目设置。未带 v2 标记的旧值只迁移一次；带 v2 标记的显式 `auto`不会在后续启动或新版备份恢复时再次改写。新项目、缺失值和旧格式备份统一解析为 `long`。
+- 流式门是独立于 Tauri 的纯 Rust 状态机。普通回答从首个文本增量开始可见；工具调用开始只改变显示状态，并以 `assistant-replace`精确撤回此前尚未核验的前言。该事件沿用 session、message、revision、sequence 隔离并触发立即检查点。
+- `toolcall_start`不参与授权。真正执行仍必须通过 `tool_execution_start`的工具白名单、nonce、epoch、revision、`toolCallId`和审批参数哈希校验；显示门不能扩大工具权限。
+- 普通回答停止时保留已显示文本，隐藏态旁白不会在终态补发。证据核验失败以替换事件写入固定失败说明；论文数据库、会话 SQLite、Pi JSONL与现有审批协议均不改变。
 
 ## Sidera 桌面壳与冷启动门
 

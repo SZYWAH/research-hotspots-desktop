@@ -1,0 +1,110 @@
+{
+  "workPackage": "M2.0b Pi 本地论文轻量混合 RAG",
+  "recordedAt": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineHead": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty-worktree-uncommitted",
+  "pi": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "0.82.1",
+    "maximumProcessesPerApp": 1,
+    "maximumSessionsPerApp": 1,
+    "maximumActiveTurns": 1,
+    "builtInToolsEnabled": false,
+    "genericExtensionDiscoveryEnabled": false,
+    "sessionExtensionEnabled": true,
+    "registeredTools": [
+      "sidera_search_local_papers",
+      "sidera_get_papers_by_ids",
+      "sidera_finalize_evidence"
+    ]
+  },
+  "toolBridge": {
+    "protocol": "sidera-pi-tool-bridge-v1",
+    "checks": [
+      "session-nonce",
+      "process-epoch",
+      "turn-revision",
+      "active-tool-call-id",
+      "exact-tool-whitelist",
+      "host-injected-project-id",
+      "host-injected-read-only-database"
+    ],
+    "maximumToolCallsPerTurn": 6,
+    "maximumSearchCallsPerTurn": 3,
+    "maximumReadCallsPerTurn": 2,
+    "maximumFinalizeCallsPerTurn": 1,
+    "maximumToolResultBytesPerTurn": 131072
+  },
+  "retrieval": {
+    "semanticModel": "intfloat/multilingual-e5-small",
+    "semanticDevice": "CPU",
+    "queryPrefix": "query:",
+    "dimensions": 384,
+    "semanticTopK": 40,
+    "lexicalTopK": 20,
+    "candidateLimit": 12,
+    "rrf": {
+      "semanticWeight": 0.55,
+      "lexicalWeight": 0.45,
+      "k": 60
+    },
+    "databaseReadOnly": true,
+    "databaseMigrationAdded": false,
+    "vectorRebuildInChatPath": false,
+    "fallback": "lexical-fallback"
+  },
+  "evidence": {
+    "maximumPapers": 6,
+    "maximumAbstractCharactersPerPaper": 4000,
+    "maximumEvidenceResultBytes": 65536,
+    "databaseContentTrustedAsInstructions": false,
+    "referencesRequireSuccessfulReadInSameTurn": true,
+    "invalidReferencesCreateClickableCitation": false
+  },
+  "realDatabaseAudits": {
+    "defaultReleaseLibrary": {
+      "retrievalMode": "hybrid-e5-like",
+      "candidateCount": 12,
+      "evidenceCount": 6,
+      "verifiedReferenceCount": 1,
+      "forbiddenToolBlocked": true,
+      "status": "PASS"
+    },
+    "legacyLibraryWithoutSemanticCache": {
+      "retrievalMode": "lexical-fallback",
+      "forbiddenToolBlocked": true,
+      "status": "PASS"
+    }
+  },
+  "verification": {
+    "typescript": "PASS",
+    "viteProductionBuild": "PASS",
+    "sideraPiBasicRegression": "PASS",
+    "sideraPiRagAudit": "PASS",
+    "cargoCheckJ2": "PASS",
+    "rustTargetedUnitTests": "BLOCKED_WINDOWS_NATIVE_TEST_LOADER_0xC0000139",
+    "rustExecutableDatabaseAudit": "PASS",
+    "projectDocumentationAudit": "PASS",
+    "gitDiffCheck": "PASS",
+    "nativeTauriRagAcceptance": "UNVERIFIED",
+    "productStatus": "UNVERIFIED"
+  },
+  "boundaries": {
+    "hotspotRetrievalAdded": false,
+    "fullTextRetrievalAdded": false,
+    "fts5Added": false,
+    "vectorDatabaseAdded": false,
+    "fileToolsAdded": false,
+    "shellToolsAdded": false,
+    "webToolsAdded": false,
+    "campusLibraryAdded": false,
+    "conversationPersistenceAdded": false,
+    "agentRunCenterBridged": false,
+    "databaseSchemaChanged": false,
+    "committed": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

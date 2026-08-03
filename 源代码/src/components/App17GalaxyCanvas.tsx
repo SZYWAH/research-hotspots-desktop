@@ -87,18 +87,39 @@ import {
 } from "../lib/galaxyTheoryView";
 import {
   App17PaperJourneyController,
+  projectGalaxyPaperTargetToNdc,
   resolveGalaxyPaperReadingPose,
   type GalaxyPaperJourneyFrame,
   type GalaxyPaperJourneyPanelState,
   type GalaxyPaperJourneyPathMode,
   type GalaxyPaperJourneyState,
 } from "./App17PaperJourneyController";
+import {
+  resolveGalaxyContextRailWidth,
+  resolveGalaxyOverviewCameraPose,
+  resolveResearchGalaxyContextComposition,
+  type GalaxyContextRailMode,
+} from "./App17GalaxySpatialComposition";
+
+export {
+  resolveGalaxyContextRailWidth,
+  resolveGalaxyOverviewCameraPose,
+  resolveResearchGalaxyContextComposition,
+} from "./App17GalaxySpatialComposition";
+export type {
+  GalaxyContextRailMode,
+  GalaxyOverviewCameraPose,
+  GalaxyOverviewPoseResolution,
+  GalaxyOverviewSceneFrame,
+  ResearchGalaxyContextComposition,
+} from "./App17GalaxySpatialComposition";
 
 export type App17GalaxyCommand = {
   kind: "reset" | "fit" | "top" | "enter-system" | "exit-system" | "reset-system" | "focus-paper" | "return-system-center" | "toggle-paper-inspection" | "agent-focus-overview" | "agent-restore-pose";
   nonce: number;
   focusMode?: "signal" | "soft-focus" | "full-focus";
   focusSide?: "left" | "right";
+  focusAnchorNdcX?: number;
   cameraPose?: GalaxyCameraPose;
 };
 
@@ -120,6 +141,8 @@ export type AgentTheoryFocusVisualState = {
   blend: number;
   productMode?: "legacy-dynamic" | "sidera-explicit";
   side?: "left" | "right";
+  normalizedAnchorX?: number;
+  targetDiameterPx?: number;
 };
 
 export type AgentTheoryCruiseGuidanceMode =
@@ -726,7 +749,7 @@ type App17GalaxyCanvasProps = {
   interactionMode?: GalaxyInteractionMode;
   labelsVisible?: boolean;
   initialCameraPose?: GalaxyCameraPose;
-  viewportOffsetRatio?: number;
+  contextRailMode?: GalaxyContextRailMode;
   agentTheoryDepthProfile?: AgentTheoryDepthProfileV1;
   agentTheoryPerimeterProfile?: AgentTheoryPerimeterProfileV1;
   agentTheoryQuality?: AgentTheoryQuality;
@@ -742,6 +765,22 @@ type App17GalaxyCanvasProps = {
   onCameraPoseChange?: (pose: GalaxyCameraPose) => void;
   onReady?: () => void;
   onRuntimeError?: (message: string) => void;
+};
+
+export type GalaxySpatialComposition = {
+  railMode: GalaxyContextRailMode;
+  railWidthPx: number;
+  effectiveViewport: [number, number, number, number];
+  cameraPose: GalaxyCameraPose;
+  paperAnchorNdcX: number;
+};
+
+export type GalaxySpatialTransition = {
+  phase: "idle" | "focusing-paper" | "returning-system" | "rail-only";
+  progress: number;
+  from: GalaxySpatialComposition;
+  to: GalaxySpatialComposition;
+  cameraWriter: "orbit" | "spatial-transition";
 };
 
 type App17RenderPoint = {
@@ -1594,7 +1633,7 @@ export function App17GalaxyCanvas({
   interactionMode = "explore",
   labelsVisible = true,
   initialCameraPose,
-  viewportOffsetRatio = 0,
+  contextRailMode = "closed",
   agentTheoryDepthProfile,
   agentTheoryPerimeterProfile,
   agentTheoryQuality = "balanced",
@@ -1631,7 +1670,7 @@ export function App17GalaxyCanvas({
   const interactionModeRef = useRef(interactionMode);
   const labelsVisibleRef = useRef(labelsVisible);
   const initialCameraPoseRef = useRef(initialCameraPose);
-  const viewportOffsetRatioRef = useRef(viewportOffsetRatio);
+  const contextRailModeRef = useRef<GalaxyContextRailMode>(contextRailMode);
   const onAgentTheoryCruiseCheckpointChangeRef = useRef(
     onAgentTheoryCruiseCheckpointChange,
   );
@@ -1654,7 +1693,7 @@ export function App17GalaxyCanvas({
   const inspectionMetadataControllerRef = useRef<(() => void) | null>(null);
   const agentTheoryFocusVisualControllerRef =
     useRef<((state: AgentTheoryFocusVisualState | null) => void) | null>(null);
-  const viewportOffsetControllerRef = useRef<((ratio: number) => void) | null>(null);
+  const viewportOffsetControllerRef = useRef<((mode: GalaxyContextRailMode) => void) | null>(null);
   const viewportOffsetCurrentRef = useRef(0);
   const persistentRenderCoreRef = useRef<{
     scene: THREE.Scene;
@@ -1685,9 +1724,9 @@ export function App17GalaxyCanvas({
   }, [selectedId]);
 
   useEffect(() => {
-    viewportOffsetRatioRef.current = viewportOffsetRatio;
-    viewportOffsetControllerRef.current?.(viewportOffsetRatio);
-  }, [viewportOffsetRatio]);
+    contextRailModeRef.current = contextRailMode;
+    viewportOffsetControllerRef.current?.(contextRailMode);
+  }, [contextRailMode]);
 
   useEffect(() => {
     if (initialCameraPose) initialCameraPoseRef.current = initialCameraPose;
@@ -1852,38 +1891,33 @@ export function App17GalaxyCanvas({
       distance: Math.max(0.001, cameraPreset.distance),
     };
     const restoredPose = initialCameraPoseRef.current;
-    if (
-      restoredPose
-      && restoredPose.center.every(Number.isFinite)
-      && Number.isFinite(restoredPose.distance)
-      && Number.isFinite(restoredPose.azimuth)
-      && Number.isFinite(restoredPose.elevation)
-    ) {
-      const previousSceneFrame = persistentSceneFrameRef.current;
-      const restoredCenter = new THREE.Vector3(...restoredPose.center);
-      if (previousSceneFrame && previousSceneFrame.mode !== visualMode) {
-        const scale = targetSceneFrame.distance / Math.max(0.001, previousSceneFrame.distance);
-        restoredCenter
-          .sub(previousSceneFrame.center)
-          .multiplyScalar(scale)
-          .add(targetSceneFrame.center);
-      }
-      cameraPreset.center.copy(restoredCenter);
-      const inheritedDistance = previousSceneFrame && previousSceneFrame.mode !== visualMode
-        ? restoredPose.distance * (targetSceneFrame.distance / Math.max(0.001, previousSceneFrame.distance))
-        : restoredPose.distance;
-      cameraPreset.distance = THREE.MathUtils.clamp(
-        inheritedDistance,
-        cameraPreset.minDistance,
-        cameraPreset.maxDistance,
-      );
-      cameraPreset.azimuth = restoredPose.azimuth;
-      cameraPreset.elevation = THREE.MathUtils.clamp(
-        restoredPose.elevation,
-        cameraPreset.minElevation,
-        cameraPreset.maxElevation,
-      );
-    }
+    const previousSceneFrame = persistentSceneFrameRef.current;
+    const overviewPose = resolveGalaxyOverviewCameraPose({
+      mode: visualMode,
+      canonicalPose: {
+        center: cameraPreset.center.toArray(),
+        distance: cameraPreset.distance,
+        azimuth: cameraPreset.azimuth,
+        elevation: cameraPreset.elevation,
+      },
+      restoredPose,
+      previousSceneFrame: previousSceneFrame
+        ? {
+            mode: previousSceneFrame.mode,
+            center: previousSceneFrame.center.toArray(),
+            distance: previousSceneFrame.distance,
+          }
+        : undefined,
+      minimumDistance: cameraPreset.minDistance,
+      maximumDistance: cameraPreset.maxDistance,
+      minimumElevation: cameraPreset.minElevation,
+      maximumElevation: cameraPreset.maxElevation,
+    });
+    cameraPreset.center.fromArray(overviewPose.center);
+    cameraPreset.distance = overviewPose.distance;
+    cameraPreset.azimuth = overviewPose.azimuth;
+    cameraPreset.elevation = overviewPose.elevation;
+    renderer.domElement.dataset.overviewPoseRestoration = overviewPose.restoration;
     persistentSceneFrameRef.current = targetSceneFrame;
     const fixedSystemReview = import.meta.env.DEV
       && Boolean(reviewCameraPreset?.startsWith("system-"));
@@ -2046,6 +2080,7 @@ export function App17GalaxyCanvas({
       viewMode: "overview",
     };
     const publishCameraPose = () => {
+      if (exploration.state !== "overview" || paperJourney.getState() !== "idle") return;
       const callback = onCameraPoseChangeRef.current;
       if (
         visualProfile === "agent-theory"
@@ -2094,6 +2129,12 @@ export function App17GalaxyCanvas({
       entryFocusDistance: APP17_SYSTEM_DISTANCE,
       canonicalRebased: false,
     };
+    // The Three.js runtime can be rebuilt independently of the parent React
+    // state (for example after Vite Fast Refresh or a scene-data replacement).
+    // Its fresh state is always overview, so publish that state immediately;
+    // otherwise the parent can remain in `system` while the canvas has already
+    // returned to overview, disabling hotspot controls and making exit a no-op.
+    onExplorationStateChangeRef.current?.("overview");
     const paperPresentation: GalaxyPaperJourneyPresentationRuntime = {
       mode: "none",
       visualType: "none",
@@ -2607,29 +2648,44 @@ export function App17GalaxyCanvas({
     let width = 1;
     let height = 1;
     let disposed = false;
-    let viewportOffsetCurrent = viewportOffsetCurrentRef.current;
+    let viewportOffsetCurrent = visualProfile === "analysis"
+      ? 0
+      : viewportOffsetCurrentRef.current;
+    if (visualProfile === "analysis") {
+      viewportOffsetCurrentRef.current = 0;
+      camera.clearViewOffset();
+      camera.updateProjectionMatrix();
+    }
     let viewportOffsetTransition: {
       from: number;
       to: number;
       startedAt: number;
+      phase: "rail-only" | "focusing-paper" | "returning-system";
     } | null = null;
 
-    const normalizedViewportOffset = (ratio: number) => {
-      const responsiveMaximum = width > 1 && width < 1200 ? 0.05 : 0.08;
-      return THREE.MathUtils.clamp(ratio, 0, responsiveMaximum);
+    const viewportOffsetForRail = (mode: GalaxyContextRailMode) => {
+      if (visualProfile === "analysis") {
+        return resolveResearchGalaxyContextComposition(mode, width).viewportOffsetRatio;
+      }
+      const railWidth = resolveGalaxyContextRailWidth(mode, width);
+      return railWidth <= 0 ? 0 : (railWidth + 24) / Math.max(2, width * 2);
     };
 
     const applyViewportComposition = (now: number, force = false) => {
       if (viewportOffsetTransition) {
-        const progress = THREE.MathUtils.clamp(
-          (now - viewportOffsetTransition.startedAt) / 320,
-          0,
-          1,
-        );
+        const progress = viewportOffsetTransition.phase === "focusing-paper"
+          ? paperJourneyFrame.focusBlend
+          : viewportOffsetTransition.phase === "returning-system"
+            ? 1 - paperJourneyFrame.focusBlend
+            : THREE.MathUtils.clamp(
+                (now - viewportOffsetTransition.startedAt) / 320,
+                0,
+                1,
+              );
         viewportOffsetCurrent = THREE.MathUtils.lerp(
           viewportOffsetTransition.from,
           viewportOffsetTransition.to,
-          smootherStep(progress),
+          viewportOffsetTransition.phase === "rail-only" ? smootherStep(progress) : progress,
         );
         if (progress >= 1) viewportOffsetTransition = null;
       }
@@ -2641,17 +2697,24 @@ export function App17GalaxyCanvas({
       return Boolean(viewportOffsetTransition);
     };
 
-    viewportOffsetControllerRef.current = (ratio) => {
-      const target = normalizedViewportOffset(ratio);
+    viewportOffsetControllerRef.current = (mode) => {
+      const target = viewportOffsetForRail(mode);
       if (Math.abs(target - viewportOffsetCurrent) < 0.00001) return;
+      const journeyState = paperJourney.getState();
+      const phase = mode === "paper-reading" && (journeyState === "acquiring" || journeyState === "flying-in")
+        ? "focusing-paper"
+        : mode === "hotspot" && (journeyState === "flying-out" || journeyState === "releasing")
+          ? "returning-system"
+          : "rail-only";
       viewportOffsetTransition = {
         from: viewportOffsetCurrent,
         to: target,
         startedAt: performance.now(),
+        phase,
       };
       invalidateRef.current?.();
     };
-    viewportOffsetControllerRef.current(viewportOffsetRatioRef.current);
+    viewportOffsetControllerRef.current(contextRailModeRef.current);
     let runtimeActive = active;
     let renderRequested = true;
     let readyReported = false;
@@ -6565,7 +6628,9 @@ export function App17GalaxyCanvas({
       camera.aspect = width / height;
       updateTheoryCameraFraming(camera.aspect);
       camera.updateProjectionMatrix();
-      applyViewportComposition(performance.now(), true);
+      const resizeNow = performance.now();
+      viewportOffsetControllerRef.current?.(contextRailModeRef.current);
+      applyViewportComposition(resizeNow, true);
       if (paperJourney.getState() === "reading") {
         paperJourney.reprojectReading({
           fovDegrees: camera.fov,
@@ -6573,7 +6638,11 @@ export function App17GalaxyCanvas({
           zoom: camera.zoom,
           up: camera.up.clone(),
         });
-        paperJourneyFrame = paperJourney.advance(performance.now());
+        const readingRailMode = paperPresentation.mode === "centered"
+          ? "paper-summary"
+          : "paper-reading";
+        paperJourney.setReadingAnchor(paperRailAnchorNdcX(readingRailMode), resizeNow);
+        paperJourneyFrame = paperJourney.advance(resizeNow);
         paperFocusWorldPosition = paperJourneyFrame.targetWorldPosition?.clone() ?? null;
       }
       labelCanvas.width = Math.max(1, Math.floor(width * idlePixelRatio));
@@ -6667,16 +6736,19 @@ export function App17GalaxyCanvas({
       paperPresentation.panelState = state;
       onPaperPanelStateChangeRef.current?.(state, paperId);
     };
-    const paperReadingAnchorNdcX = () => {
+    const paperRailAnchorNdcX = (railMode: "paper-summary" | "paper-reading") => {
       const explicitSide = agentTheoryFocusVisualRef.current?.productMode
         === "sidera-explicit"
         ? agentTheoryFocusVisualRef.current.side
         : undefined;
-      if (visualProfile === "agent-theory" && explicitSide) {
-        return explicitSide === "left" ? -0.56 : 0.56;
+      if (visualProfile === "agent-theory") {
+        if (!explicitSide) return 0;
+        const normalizedAnchorX = agentTheoryFocusVisualRef.current?.normalizedAnchorX;
+        return normalizedAnchorX === undefined
+          ? explicitSide === "left" ? -0.56 : 0.56
+          : THREE.MathUtils.clamp(normalizedAnchorX * 2 - 1, -0.92, 0.92);
       }
-      if (fullscreenRef.current) return -0.5;
-      return window.innerWidth >= 1280 ? -0.46 : 0;
+      return resolveResearchGalaxyContextComposition(railMode, width).paperAnchorNdcX;
     };
     const setPaperCameraWriter = (writer: GalaxyPaperCameraWriter) => {
       if (paperComposition.cameraWriter === writer) return;
@@ -9414,12 +9486,22 @@ export function App17GalaxyCanvas({
           * visibleWorldHeight
           / Math.max(1, height),
       );
-      const opticalProfile = resolvePaperReadingOpticalProfile(
+      const resolvedOpticalProfile = resolvePaperReadingOpticalProfile(
         representativeInspection,
         height,
         visualProfile,
       );
-      const targetAnchorNdcX = paperReadingAnchorNdcX();
+      const explicitTargetDiameter = agentTheoryFocusVisualRef.current?.productMode === "sidera-explicit"
+        ? agentTheoryFocusVisualRef.current.targetDiameterPx
+        : undefined;
+      const opticalProfile = explicitTargetDiameter === undefined
+        ? resolvedOpticalProfile
+        : {
+            ...resolvedOpticalProfile,
+            targetBodyDiameterPx: THREE.MathUtils.clamp(explicitTargetDiameter, 160, 240),
+            targetProjectedDiameterPx: THREE.MathUtils.clamp(explicitTargetDiameter, 160, 240),
+          };
+      const targetAnchorNdcX = paperRailAnchorNdcX("paper-reading");
       const targetDistance = paperInspectionTargetDistance(
         camera,
         opticalProfile.targetProjectedDiameterPx / Math.max(1, height),
@@ -9435,7 +9517,15 @@ export function App17GalaxyCanvas({
       const starSafeRadius = starWorldRadius * APP17_PAPER_FLIGHT_STAR_CLEARANCE;
       const startPose = captureCameraPose();
       const projection = paperJourneyProjection();
-      const startProjection = worldPosition.clone().project(camera);
+      // Keep Journey anchors in the same canonical projection used by its
+      // quaternion solver. The live camera includes the context-rail
+      // `setViewOffset`; feeding that shifted projection back into the solver
+      // bakes the rail displacement into the pose and applies it twice.
+      const startProjection = projectGalaxyPaperTargetToNdc(
+        worldPosition,
+        startPose,
+        projection,
+      );
       const startAnchorNdcX = THREE.MathUtils.clamp(startProjection.x, -0.96, 0.96);
       const startAnchorNdcY = THREE.MathUtils.clamp(startProjection.y, -0.96, 0.96);
       const resolvedReadingPose = resolveGalaxyPaperReadingPose({
@@ -9490,6 +9580,7 @@ export function App17GalaxyCanvas({
         durationMs: retargeting
           ? APP17_SYSTEM_PAPER_RETARGET_TRANSITION_MS
           : APP17_SYSTEM_PAPER_FOCUS_TRANSITION_MS,
+        acquireDurationMs: visualProfile === "agent-theory" ? undefined : 0,
         retargeting,
         projection,
         starCenter,
@@ -9657,7 +9748,10 @@ export function App17GalaxyCanvas({
       if (exploration.state !== "system" || paperJourney.getState() !== "reading" || paperJourneyFrame.visualOwnerOpacity < 0.98) return;
       const nextMode: GalaxyPaperInspectionMode = paperPresentation.mode === "centered" ? "docked" : "centered";
       setPaperInspectionMode(nextMode);
-      paperJourney.setReadingAnchor(nextMode === "docked" ? paperReadingAnchorNdcX() : 0);
+      paperJourney.setReadingAnchor(
+        paperRailAnchorNdcX(nextMode === "docked" ? "paper-reading" : "paper-summary"),
+        now,
+      );
       paperJourney.setReadingPanelVisible(nextMode === "docked", now);
       paperJourneyFrame = paperJourney.advance(now);
       paperFocusWorldPosition = paperJourneyFrame.targetWorldPosition?.clone() ?? null;
@@ -10494,11 +10588,12 @@ export function App17GalaxyCanvas({
               camera.near * 4,
               camera.position.distanceTo(target),
             );
-            const targetNdcX = commandRef.current.focusSide === "left"
-              ? -0.56
-              : commandRef.current.focusSide === "right"
-                ? 0.56
-                : 0;
+            const targetNdcX = commandRef.current.focusAnchorNdcX
+              ?? (commandRef.current.focusSide === "left"
+                ? -0.56
+                : commandRef.current.focusSide === "right"
+                  ? 0.56
+                  : 0);
             const halfVisibleWidth = targetDistance
               * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
               * camera.aspect;
@@ -11101,6 +11196,7 @@ export function App17GalaxyCanvas({
         || ambientChanged
         || agentTheoryCameraTransitioningBefore
         || projectionChanged
+        || viewportCompositionChanged
         || orbit.dragging
         || selectionPendingFrameRef.current;
 
@@ -11302,8 +11398,10 @@ export function App17GalaxyCanvas({
               ? Math.abs(inspectionProjection.x - lastPaperProjectionX) * width * 0.5
               : 0;
             lastPaperProjectionX = inspectionProjection.x;
+            const effectiveAnchorNdcX = paperComposition.currentAnchorNdcX
+              - viewportOffsetCurrent * 2;
             paperComposition.anchorErrorPx = Math.abs(
-              inspectionProjection.x - paperComposition.currentAnchorNdcX,
+              inspectionProjection.x - effectiveAnchorNdcX,
             ) * width * 0.5;
           } else {
             paperComposition.anchorErrorPx = 0;
@@ -11472,6 +11570,8 @@ export function App17GalaxyCanvas({
         }
         if (
           onCameraPoseChangeRef.current
+          && exploration.state === "overview"
+          && paperJourney.getState() === "idle"
           && (
             visualProfile !== "agent-theory"
             || (

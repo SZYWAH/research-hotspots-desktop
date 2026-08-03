@@ -1,0 +1,123 @@
+{
+  "workPackage": "M2.0b-R4-R2",
+  "title": "Sidera background turn continuity and clear optical glass repair",
+  "date": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "changes": {
+    "navigationOwnership": "ordinary activeView changes no longer abort the active Pi turn",
+    "explicitStopBoundaries": [
+      "user stop",
+      "project create, switch or delete",
+      "Provider, model, cache or library configuration change",
+      "current conversation create, switch, archive or delete"
+    ],
+    "titlebarActivity": [
+      "generating: return and stop",
+      "awaiting approval: return only",
+      "complete: three-second terminal state",
+      "failed: persistent error surface"
+    ],
+    "approvalBoundary": "approval remains available only in the Agent panel",
+    "opticalMaterial": {
+      "shellFillAlpha": 0.34,
+      "backdropBlurPx": 18,
+      "backdropSaturationPercent": 115,
+      "readingSmokeAlpha": 0.58,
+      "dialogRadiusPx": 26,
+      "drawerRadiusPx": 24,
+      "composerRadiusPx": 15,
+      "assistantTurnSurface": "transparent inside one continuous smoked reading plane",
+      "broadTopLeftRadialWash": false,
+      "perFrameFilter": false,
+      "webglAdded": false
+    },
+    "conversationTestEntry": "test:sidera-conversation-store uses the Tauri-free workspace harness",
+    "legacyLibTestArtifactDeleted": false
+  },
+  "validation": [
+    {
+      "name": "typescript-project-build",
+      "command": "node_modules\\.bin\\tsc.CMD -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "name": "vite-production-build",
+      "command": "node_modules\\.bin\\vite.CMD build",
+      "status": "PASS",
+      "viteVersion": "6.4.3",
+      "moduleCount": 1915,
+      "notes": "existing Tauri event dynamic/static import warning only"
+    },
+    {
+      "name": "rust-default-desktop-check",
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+      "status": "PASS"
+    },
+    {
+      "name": "rust-conversation-store-tests",
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml -p sidera-conversation-store-test-harness -j 2 -- --nocapture",
+      "status": "PASS",
+      "passed": 4,
+      "failed": 0,
+      "durationSeconds": 0.10
+    },
+    {
+      "name": "conversation-harness-forbidden-import-scan",
+      "status": "PASS",
+      "forbidden": [
+        "TaskDialogIndirect",
+        "comctl32.dll",
+        "tauri_plugin_dialog",
+        "rfd"
+      ],
+      "matchCount": 0
+    },
+    {
+      "name": "r4-r2-background-and-optical-glass-audit",
+      "command": "node scripts/sidera_agent_conversation_r4_r2_audit.mjs",
+      "status": "PASS",
+      "providerCalls": 0
+    },
+    {
+      "name": "r4-r1-r4-r3-r2-r1-dual-background-and-pi-regressions",
+      "status": "PASS",
+      "providerCalls": 0,
+      "credentialsExposed": false
+    },
+    {
+      "name": "project-documentation-audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS",
+      "currentStage": "M2.0b-R4-R2"
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "desktopAcceptance": {
+    "status": "UNVERIFIED",
+    "pending": [
+      "stream a real answer while navigating through literature, hotspots, galaxy, settings and run center",
+      "return to the same live turn without replay or context loss",
+      "show titlebar activity alongside galaxy tools at 1100px without overlap",
+      "return from an off-page tool approval indicator and reject without execution",
+      "inspect optical glass at 1100, 1360 and 1920px with 100, 125 and 150 percent scaling",
+      "repeat normal and maximized window navigation for five turns"
+    ]
+  },
+  "result": {
+    "technical": "AUTOMATED_PASS",
+    "product": "UNVERIFIED",
+    "providerCallsMade": false,
+    "databaseSchemaChanged": false,
+    "legacyBuildArtifactDeleted": false,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

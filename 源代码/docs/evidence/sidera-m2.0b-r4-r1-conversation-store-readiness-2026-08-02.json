@@ -1,0 +1,146 @@
+{
+  "workPackage": "M2.0b-R4-R1",
+  "title": "Sidera conversation store recovery and Agent readiness repair",
+  "date": "2026-08-02",
+  "branch": "codex/sidera-m2-rag",
+  "baselineCommit": "d6e044af8d15fe04039bb1184a71ee5a0b159665",
+  "worktree": "dirty",
+  "rootCause": {
+    "conversationStore": "Rust backslash line continuations removed line breaks without preserving SQL token whitespace",
+    "misleadingReadiness": "the legacy settings connection test exercised only the Provider and never opened the conversation store or Pi runtime",
+    "windowsTest": "the Tauri test executable referenced Common Controls TaskDialogIndirect before a compatible process manifest was available"
+  },
+  "repair": {
+    "schemaSource": "src-tauri/src/sidera_conversations_schema.sql",
+    "openPhases": [
+      "foreign_keys, WAL, synchronous pragmas",
+      "transactional schema creation, column/index/foreign-key validation, user_version=1"
+    ],
+    "partialV0": "idempotent in-place completion with existing conversation rows retained",
+    "incompatibleSchema": "SIDERA_CONVERSATION_SCHEMA_INCOMPATIBLE without delete or rebuild",
+    "readinessComponents": [
+      "Provider",
+      "conversationStore",
+      "piRuntime"
+    ],
+    "overallReadyRule": "all three components pass; repaired conversation stores are accepted after successful validation",
+    "dialogTestBoundary": "production desktop-dialog remains enabled by default; conversation tests run in a Tauri-free workspace harness"
+  },
+  "validation": [
+    {
+      "name": "typescript-project-build",
+      "command": "node_modules\\.bin\\tsc.CMD -b --pretty false",
+      "status": "PASS"
+    },
+    {
+      "name": "vite-production-build",
+      "command": "pnpm build",
+      "status": "PASS",
+      "viteVersion": "6.4.3",
+      "moduleCount": 1915,
+      "notes": "existing Tauri event dynamic/static import warning only"
+    },
+    {
+      "name": "rust-default-desktop-check",
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+      "status": "PASS"
+    },
+    {
+      "name": "rust-conversation-store-tests",
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml -p sidera-conversation-store-test-harness -j 2 -- --nocapture",
+      "status": "PASS",
+      "passed": 4,
+      "failed": 0,
+      "durationSeconds": 0.11,
+      "coverage": [
+        "fresh v1 store and CRUD/search",
+        "partial v0 in-place repair and existing row retention",
+        "indexes and cascading foreign key",
+        "archive, restore, permanent delete and interrupted turns",
+        "cross-project isolation",
+        "incompatible partial store rejection"
+      ]
+    },
+    {
+      "name": "conversation-test-executable-import-scan",
+      "command": "rg -a TaskDialogIndirect|comctl32.dll|tauri_plugin_dialog|rfd <test-exe>",
+      "status": "PASS",
+      "matchCount": 0
+    },
+    {
+      "name": "r4-r1-readiness-audit",
+      "command": "node scripts/sidera_agent_conversation_r4_r1_audit.mjs",
+      "status": "PASS",
+      "providerCalls": 0
+    },
+    {
+      "name": "r4-r3-r2-r1-and-spatial-regressions",
+      "status": "PASS",
+      "providerCalls": 0
+    },
+    {
+      "name": "pi-rpc-no-provider-smoke",
+      "command": "node scripts/sidera_pi_basic_conversation_audit.mjs",
+      "status": "PASS",
+      "providerCalls": 0,
+      "credentialsExposed": false
+    },
+    {
+      "name": "project-documentation-audit",
+      "command": "node scripts/project_documentation_audit.mjs",
+      "status": "PASS",
+      "currentStage": "M2.0b-R4-R1"
+    },
+    {
+      "name": "native-partial-v0-in-place-repair",
+      "status": "PASS",
+      "databaseDeleted": false,
+      "before": "user_version=0 with conversations only",
+      "after": {
+        "userVersion": 1,
+        "tables": ["conversations", "project_state", "turns"],
+        "indexes": [
+          "idx_sidera_conversations_project_status_updated",
+          "idx_sidera_turns_conversation_time"
+        ],
+        "turnForeignKeyDelete": "CASCADE",
+        "preservedConversationCount": 1
+      },
+      "visibleWindow": "Sidera",
+      "settingsEntry": "检测 Agent",
+      "taskDialogPopup": false,
+      "providerCalls": 0
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "desktopAcceptance": {
+    "status": "PARTIAL_PASS",
+    "completed": [
+      "original partial conversations-v1.sqlite repaired in place without deletion",
+      "existing conversation row retained",
+      "latest native Sidera window visible and responsive",
+      "settings page exposes the Agent readiness action",
+      "no Windows TaskDialogIndirect entry-point popup"
+    ],
+    "pending": [
+      "show accurate Provider, conversation store and Pi runtime readiness rows",
+      "create and send the first real conversation turn",
+      "restart and restore the latest conversation plus history CRUD"
+    ]
+  },
+  "result": {
+    "technical": "AUTOMATED_PASS",
+    "product": "UNVERIFIED",
+    "providerCallsMade": false,
+    "existingConversationDatabaseDeleted": false,
+    "piSessionDeleted": false,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "released": false
+  }
+}

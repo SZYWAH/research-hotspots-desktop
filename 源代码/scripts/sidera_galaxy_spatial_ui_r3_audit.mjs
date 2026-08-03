@@ -42,7 +42,10 @@ assert.doesNotMatch(
   "display/theory mode switching must not enqueue an automatic fit",
 );
 assert.match(canvas, /persistentRenderCoreRef/);
-assert.match(canvas, /viewportOffsetRatio\?: number/);
+assert.match(canvas, /contextRailMode\?: GalaxyContextRailMode/);
+assert.match(canvas, /resolveGalaxyContextRailWidth/);
+assert.match(canvas, /const viewportOffsetForRail = \(mode: GalaxyContextRailMode/);
+assert.doesNotMatch(canvas, /viewportOffsetRatio\?: number/);
 
 console.log(JSON.stringify({
   audit: "sidera-galaxy-spatial-ui-r3",
@@ -53,4 +56,5 @@ console.log(JSON.stringify({
   contextRailStateOwnerCount: 1,
   legacyContextRailSetterCount: 0,
   automaticFitOnModeSwitch: 0,
+  contextRailComposition: "mode-and-measured-width",
 }, null, 2));
