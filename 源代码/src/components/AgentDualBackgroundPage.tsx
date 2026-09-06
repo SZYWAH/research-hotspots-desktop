@@ -28,12 +28,18 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type CSSProperties,
 } from "react";
+
+import {
+  resolveSideraComposerHeight,
+  SIDERA_COMPOSER_TEXTAREA_MIN_HEIGHT_PX,
+} from "../lib/sideraComposerLayout";
 
 import type {
   AgentImmersiveBackgroundPayloadV2,
@@ -113,6 +119,12 @@ export type {
 
 export type AgentBackgroundMode = "immersive" | "theory";
 
+export type TheoryAvailabilityState =
+  | "idle"
+  | "checking"
+  | "not-ready"
+  | "failed";
+
 export type AgentBackgroundSessionState = {
   mode: AgentBackgroundMode;
   immersiveSeed: string;
@@ -125,6 +137,7 @@ export type AgentPromptSubmitEvent = {
   text: string;
   backgroundMode: AgentBackgroundMode;
   submittedAtMs: number;
+  readingContext?: import("../lib/documentReaderContract").SideraReadingContextScope;
 };
 
 export type SideraShellPresentation = "agent" | "workbench" | "suspended";
@@ -134,6 +147,7 @@ type AgentDualBackgroundPageProps = {
   activeProject: Project;
   hotspots?: Hotspot[];
   onOpenRunCenter?: () => void;
+  onOpenPipeline?: () => void;
   navigationOpen?: boolean;
   onCloseNavigation?: () => void;
   onPromptSubmit?: (event: AgentPromptSubmitEvent) => void;
@@ -156,16 +170,96 @@ type AgentDualBackgroundPageProps = {
   onOpenSettings?: () => void;
   onOpenPaperDetail?: (paperId: string, title?: string) => void;
   onOpenHotspotDetail?: (hotspotId: string) => void;
+  onOpenDocumentEvidence?: (reference: SideraAnswerEntityReference) => void;
   onInitialReady?: () => void;
   onInitialError?: (message: string) => void;
   forceStaticBackground?: boolean;
   shellPresentation?: SideraShellPresentation;
+  windowGeometryTransitionActive?: boolean;
 };
 
 const MODE_STORAGE_KEY = "research-agent:background-mode:v2";
 const IMMERSIVE_STYLE_STORAGE_KEY = "research-agent:immersive-style:v1";
 const SESSION_SEED_STORAGE_KEY = "research-agent:immersive-session-seed:v2";
 const SIDERA_SESSION_STORAGE_PREFIX = "research-agent:sidera-session:v1";
+const SIDERA_DIALOG_FADE_OUT_MS = 140;
+const SIDERA_DIALOG_GEOMETRY_FALLBACK_MS = 500;
+const SIDERA_DIALOG_FADE_IN_MS = 180;
+const SIDERA_WINDOW_RESIZE_QUIET_MS = 120;
+const SIDERA_WINDOW_RESIZE_FALLBACK_MS = 900;
+const SIDERA_BACKGROUND_PAYLOAD_DEADLINE_MS = 15_000;
+const SIDERA_WORKBENCH_RENDER_BUDGET_FPS = 24;
+
+class TheoryBackgroundNotReadyError extends Error {}
+
+class AgentBackgroundPayloadStaleError extends Error {}
+
+type TheoryAvailability = {
+  state: TheoryAvailabilityState;
+  message: string;
+};
+
+type AgentBackgroundFailure = {
+  mode: AgentBackgroundMode;
+  stage: "payload" | "renderer";
+  message: string;
+};
+
+type AgentPayloadProjectIdentity = Readonly<{
+  projectKey: string;
+  generation: number;
+}>;
+
+async function waitForBackgroundPayload<T>(
+  mode: AgentBackgroundMode,
+  operation: Promise<T>,
+) {
+  let deadlineTimer = 0;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        deadlineTimer = window.setTimeout(() => {
+          reject(new Error(
+            `SIDERA_AGENT_BACKGROUND_PAYLOAD_TIMEOUT:${mode}:${SIDERA_BACKGROUND_PAYLOAD_DEADLINE_MS}ms`,
+          ));
+        }, SIDERA_BACKGROUND_PAYLOAD_DEADLINE_MS);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(deadlineTimer);
+  }
+}
+
+type SideraDialogMotionPhase =
+  | "visible"
+  | "fading-out"
+  | "geometry"
+  | "settling"
+  | "fading-in";
+
+function sideraPrefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function waitForSideraDelay(milliseconds: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
+}
+
+function waitForSideraPaintFrames(count: number) {
+  return new Promise<void>((resolve) => {
+    const step = (remaining: number) => {
+      if (remaining <= 0) {
+        resolve();
+        return;
+      }
+      window.requestAnimationFrame(() => step(remaining - 1));
+    };
+    step(count);
+  });
+}
 
 function readBackgroundMode(): AgentBackgroundMode {
   try {
@@ -326,12 +420,6 @@ function readTheoryCameraPose(key: string): GalaxyCameraPose | undefined {
   }
 }
 
-function nextAnimationFrame() {
-  return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => resolve());
-  });
-}
-
 function delay(milliseconds: number) {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, milliseconds);
@@ -397,6 +485,11 @@ function compactText(value: string | undefined, maximumLength: number) {
 }
 
 function referenceLabel(reference: SideraAnswerEntityReference) {
+  if (reference.kind === "document-anchor") {
+    return reference.pageIndex === undefined
+      ? "文档"
+      : `第 ${reference.pageIndex + 1} 页`;
+  }
   return reference.kind === "paper" ? "论文" : "热点";
 }
 
@@ -423,6 +516,7 @@ export function AgentDualBackgroundPage({
   activeProject,
   hotspots = [],
   onOpenRunCenter,
+  onOpenPipeline,
   navigationOpen = false,
   onCloseNavigation,
   onPromptSubmit,
@@ -445,10 +539,12 @@ export function AgentDualBackgroundPage({
   onOpenSettings,
   onOpenPaperDetail,
   onOpenHotspotDetail,
+  onOpenDocumentEvidence,
   onInitialReady,
   onInitialError,
   forceStaticBackground = false,
   shellPresentation = "agent",
+  windowGeometryTransitionActive = false,
 }: AgentDualBackgroundPageProps) {
   const developmentFixturesEnabled = useMemo(() => {
     if (!import.meta.env.DEV) return false;
@@ -515,7 +611,13 @@ export function AgentDualBackgroundPage({
     useState<AgentImmersiveFlowMetrics | null>(null);
   const [maskVisible, setMaskVisible] = useState(true);
   const [switching, setSwitching] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [backgroundFailure, setBackgroundFailure] =
+    useState<AgentBackgroundFailure | null>(null);
+  const [theoryAvailability, setTheoryAvailability] =
+    useState<TheoryAvailability>({ state: "idle", message: "" });
+  const theoryAvailabilityVisible = theoryAvailability.state === "not-ready"
+    || theoryAvailability.state === "failed";
+  const [dynamicFallbackNotice, setDynamicFallbackNotice] = useState("");
   const [exploreTheory, setExploreTheory] = useState(false);
   const [theoryReturnActive, setTheoryReturnActive] = useState(false);
   const [theoryReturnPhase, setTheoryReturnPhase] = useState<
@@ -579,6 +681,9 @@ export function AgentDualBackgroundPage({
       ? true
       : storedSideraSession?.dialogCollapsed ?? false,
   );
+  const [dialogMotionPhase, setDialogMotionPhase] =
+    useState<SideraDialogMotionPhase>("visible");
+  const [passiveWindowResizeActive, setPassiveWindowResizeActive] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyTab, setHistoryTab] = useState<"active" | "archived">("active");
   const [historyQuery, setHistoryQuery] = useState("");
@@ -633,15 +738,36 @@ export function AgentDualBackgroundPage({
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const historyNearBottomRef = useRef(true);
   const previousTurnCountRef = useRef(visibleConversationTurns.length);
+  const dialogMotionEpochRef = useRef(0);
+  const dialogMotionPhaseRef = useRef<SideraDialogMotionPhase>("visible");
+  const dialogMotionCleanupRef = useRef<() => void>(() => undefined);
   const restoredSideraSessionRef = useRef(false);
   const devMessageSequenceRef = useRef(0);
   const immersivePayloadRef = useRef(immersivePayload);
   const theoryPayloadRef = useRef(theoryPayload);
+  const payloadProjectIdentityRef = useRef<AgentPayloadProjectIdentity>({
+    projectKey,
+    generation: 0,
+  });
+  const immersivePayloadIdentityRef = useRef<AgentPayloadProjectIdentity | null>(null);
+  const theoryPayloadIdentityRef = useRef<AgentPayloadProjectIdentity | null>(null);
   const theoryPoseRef = useRef<GalaxyCameraPose | undefined>(
     readTheoryCameraPose(theoryPoseStorageKey),
   );
 
+  useLayoutEffect(() => {
+    if (payloadProjectIdentityRef.current.projectKey === projectKey) return;
+    payloadProjectIdentityRef.current = {
+      projectKey,
+      generation: payloadProjectIdentityRef.current.generation + 1,
+    };
+  }, [projectKey]);
+
   useEffect(() => {
+    dialogMotionEpochRef.current += 1;
+    dialogMotionCleanupRef.current();
+    dialogMotionPhaseRef.current = "visible";
+    setDialogMotionPhase("visible");
     setHistoryOpen(false);
     setHistoryQuery("");
     setDialogCollapsed(conversationTurns.length === 0);
@@ -666,9 +792,144 @@ export function AgentDualBackgroundPage({
   const switchTokenRef = useRef(0);
   const revealTimerRef = useRef(0);
   const initialReadyReportedRef = useRef(false);
+  const theoryAvailabilityTriggerRef = useRef<HTMLElement | null>(null);
+  const theoryAvailabilityContinueRef = useRef<HTMLButtonElement | null>(null);
   const pageRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const evidenceCardRef = useRef<HTMLElement | null>(null);
+
+  const updateDialogMotionPhase = useCallback((phase: SideraDialogMotionPhase) => {
+    dialogMotionPhaseRef.current = phase;
+    setDialogMotionPhase(phase);
+  }, []);
+
+  const waitForDialogGeometry = useCallback(() => (
+    new Promise<void>((resolve) => {
+      const dialog = dialogRef.current;
+      if (!dialog || sideraPrefersReducedMotion()) {
+        resolve();
+        return;
+      }
+
+      let completed = false;
+      let fallbackTimer = 0;
+      let handleTransitionEnd: (event: TransitionEvent) => void;
+      const finish = () => {
+        if (completed) return;
+        completed = true;
+        window.clearTimeout(fallbackTimer);
+        dialog.removeEventListener("transitionend", handleTransitionEnd);
+        if (dialogMotionCleanupRef.current === finish) {
+          dialogMotionCleanupRef.current = () => undefined;
+        }
+        resolve();
+      };
+      handleTransitionEnd = (event: TransitionEvent) => {
+        if (
+          event.target === dialog
+          && ["top", "transform", "width"].includes(event.propertyName)
+        ) {
+          finish();
+        }
+      };
+      fallbackTimer = window.setTimeout(finish, SIDERA_DIALOG_GEOMETRY_FALLBACK_MS);
+      dialog.addEventListener("transitionend", handleTransitionEnd);
+      dialogMotionCleanupRef.current = finish;
+    })
+  ), []);
+
+  const runDialogGeometryTransition = useCallback(async (
+    applyGeometryChange: () => void,
+    skipFadeOut = false,
+  ) => {
+    if (dialogMotionPhaseRef.current !== "visible") return;
+
+    const epoch = dialogMotionEpochRef.current + 1;
+    dialogMotionEpochRef.current = epoch;
+    dialogMotionCleanupRef.current();
+
+    if (!skipFadeOut && !sideraPrefersReducedMotion()) {
+      updateDialogMotionPhase("fading-out");
+      await waitForSideraDelay(SIDERA_DIALOG_FADE_OUT_MS);
+      if (dialogMotionEpochRef.current !== epoch) return;
+    }
+
+    updateDialogMotionPhase("geometry");
+    const geometryComplete = waitForDialogGeometry();
+    applyGeometryChange();
+    await geometryComplete;
+    if (dialogMotionEpochRef.current !== epoch) return;
+
+    updateDialogMotionPhase("settling");
+    await waitForSideraPaintFrames(sideraPrefersReducedMotion() ? 1 : 2);
+    if (dialogMotionEpochRef.current !== epoch) return;
+
+    updateDialogMotionPhase("fading-in");
+    if (!sideraPrefersReducedMotion()) {
+      await waitForSideraDelay(SIDERA_DIALOG_FADE_IN_MS);
+      if (dialogMotionEpochRef.current !== epoch) return;
+    }
+    updateDialogMotionPhase("visible");
+  }, [updateDialogMotionPhase, waitForDialogGeometry]);
+
+  const requestDialogCollapsed = useCallback((
+    nextCollapsed: boolean,
+    skipFadeOut = false,
+  ) => {
+    if (nextCollapsed === dialogCollapsed) return Promise.resolve();
+    return runDialogGeometryTransition(() => {
+      if (nextCollapsed) setHistoryOpen(false);
+      setDialogCollapsed(nextCollapsed);
+    }, skipFadeOut);
+  }, [dialogCollapsed, runDialogGeometryTransition]);
+
+  useEffect(() => () => {
+    dialogMotionEpochRef.current += 1;
+    dialogMotionCleanupRef.current();
+  }, []);
+
+  useEffect(() => {
+    if (shellPresentation !== "agent") {
+      setPassiveWindowResizeActive(false);
+      return undefined;
+    }
+
+    let resizeEpoch = 0;
+    let quietTimer = 0;
+    let fallbackTimer = 0;
+    const clearTimers = () => {
+      window.clearTimeout(quietTimer);
+      window.clearTimeout(fallbackTimer);
+    };
+    const finishResize = (epoch: number) => {
+      if (epoch !== resizeEpoch) return;
+      clearTimers();
+      void waitForSideraPaintFrames(sideraPrefersReducedMotion() ? 1 : 2).then(() => {
+        if (epoch === resizeEpoch) setPassiveWindowResizeActive(false);
+      });
+    };
+    const handleResize = () => {
+      resizeEpoch += 1;
+      const epoch = resizeEpoch;
+      setPassiveWindowResizeActive(true);
+      clearTimers();
+      quietTimer = window.setTimeout(
+        () => finishResize(epoch),
+        SIDERA_WINDOW_RESIZE_QUIET_MS,
+      );
+      fallbackTimer = window.setTimeout(
+        () => finishResize(epoch),
+        SIDERA_WINDOW_RESIZE_FALLBACK_MS,
+      );
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      resizeEpoch += 1;
+      clearTimers();
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [shellPresentation]);
 
   const measureFocusComposition = useCallback((
     preferredSide: "left" | "right" | undefined,
@@ -713,16 +974,31 @@ export function AgentDualBackgroundPage({
   }, []);
 
   const resizeComposerTextarea = useCallback((textarea: HTMLTextAreaElement) => {
-    textarea.style.height = "42px";
-    const nextHeight = Math.min(100, Math.max(42, textarea.scrollHeight));
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > 100 ? "auto" : "hidden";
+    textarea.style.height = `${SIDERA_COMPOSER_TEXTAREA_MIN_HEIGHT_PX}px`;
+    const resolution = resolveSideraComposerHeight(textarea.value, textarea.scrollHeight);
+    textarea.style.height = `${resolution.textareaHeightPx}px`;
+    textarea.style.overflowY = resolution.overflowY;
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (
+      windowGeometryTransitionActive
+      || passiveWindowResizeActive
+      || dialogMotionPhase === "fading-out"
+      || dialogMotionPhase === "geometry"
+    ) return;
     const textarea = composerTextareaRef.current;
     if (textarea) resizeComposerTextarea(textarea);
-  }, [draft, resizeComposerTextarea]);
+  }, [
+    dialogCollapsed,
+    dialogMotionPhase,
+    draft,
+    exploreTheory,
+    passiveWindowResizeActive,
+    resizeComposerTextarea,
+    theoryReturnActive,
+    windowGeometryTransitionActive,
+  ]);
 
   useEffect(() => {
     const history = historyRef.current;
@@ -792,38 +1068,68 @@ export function AgentDualBackgroundPage({
   }, [flowFallbackStorageKey]);
 
   const ensurePayload = useCallback(async (mode: AgentBackgroundMode) => {
+    const requestedIdentity = payloadProjectIdentityRef.current;
+    const assertCurrentIdentity = () => {
+      if (payloadProjectIdentityRef.current !== requestedIdentity) {
+        throw new AgentBackgroundPayloadStaleError(
+          `SIDERA_AGENT_BACKGROUND_PAYLOAD_STALE:${mode}`,
+        );
+      }
+    };
     if (mode === "immersive") {
       const cached = immersivePayloadRef.current;
-      if (cached?.sessionSeed === sessionSeed) return cached;
-      const payload = await loadAgentImmersiveBackground({
-        databaseDir: settings.databaseDir,
-        projectId: activeProject.id,
-        sessionSeed,
-        paperCount: 6_000,
-      });
+      if (
+        immersivePayloadIdentityRef.current === requestedIdentity
+        && cached?.sessionSeed === sessionSeed
+      ) return cached;
+      const payload = await waitForBackgroundPayload(
+        mode,
+        loadAgentImmersiveBackground({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          sessionSeed,
+          paperCount: 6_000,
+        }),
+      );
+      assertCurrentIdentity();
+      immersivePayloadIdentityRef.current = requestedIdentity;
       immersivePayloadRef.current = payload;
       setImmersivePayload(payload);
       return payload;
     }
     const cached = theoryPayloadRef.current;
-    if (cached?.ready) return cached;
-    const payload = await getV20GalaxyPayload({
-      databaseDir: settings.databaseDir,
-      projectId: activeProject.id,
-      mode: "galaxy",
-    });
+    if (
+      theoryPayloadIdentityRef.current === requestedIdentity
+      && cached?.ready
+    ) return cached;
+    const payload = await waitForBackgroundPayload(
+      mode,
+      getV20GalaxyPayload({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        mode: "galaxy",
+      }),
+    );
+    assertCurrentIdentity();
     if (!payload.ready) {
-      throw new Error(payload.message || "理论星图快照尚未就绪。");
+      throw new TheoryBackgroundNotReadyError(
+        payload.message || "理论星图快照尚未就绪。",
+      );
     }
+    theoryPayloadIdentityRef.current = requestedIdentity;
     theoryPayloadRef.current = payload;
     setTheoryPayload(payload);
     return payload;
-  }, [activeProject.id, sessionSeed, settings.databaseDir]);
+  }, [activeProject.id, projectKey, sessionSeed, settings.databaseDir]);
 
   const resolveMessageReferences = useCallback(async (
     message: SideraAssistantMessage,
   ): Promise<SideraAnswerResolution> => {
-    const references = normalizeSideraReferences(message.entityRefs);
+    const references = normalizeSideraReferences(message.entityRefs).filter(
+      (reference): reference is typeof reference & { kind: "paper" | "hotspot" } => (
+        reference.kind !== "document-anchor"
+      ),
+    );
     if (!isSideraMessageFocusReady(message) || references.length === 0) {
       const empty: SideraAnswerResolution = {
         status: "idle",
@@ -905,6 +1211,14 @@ export function AgentDualBackgroundPage({
       }));
       return result;
     } catch (error) {
+      if (error instanceof AgentBackgroundPayloadStaleError) {
+        return {
+          status: "failed",
+          entities: [],
+          missing: [],
+          error: error.message,
+        };
+      }
       const result: SideraAnswerResolution = {
         status: "failed",
         entities: [],
@@ -1137,6 +1451,14 @@ export function AgentDualBackgroundPage({
     }, 10_000);
   }, [preferredMode]);
 
+  const requestHistoryOpen = useCallback((nextHistoryOpen: boolean) => {
+    if (nextHistoryOpen === historyOpen) return Promise.resolve();
+    return runDialogGeometryTransition(() => {
+      if (nextHistoryOpen && focusPresentation) releaseFocus();
+      setHistoryOpen(nextHistoryOpen);
+    });
+  }, [focusPresentation, historyOpen, releaseFocus, runDialogGeometryTransition]);
+
   const handleFocusRuntime = useCallback((
     snapshot: AgentDualFocusRuntimeSnapshot,
   ) => {
@@ -1308,16 +1630,22 @@ export function AgentDualBackgroundPage({
     mode: AgentBackgroundMode,
     useCoverDelay: boolean,
     requestedImmersiveStyle: AgentImmersiveStyle = immersiveStyleRef.current,
+    allowColdStartTheoryFallback = false,
   ) => {
     const token = ++switchTokenRef.current;
-    setLoadError("");
+    setBackgroundFailure(null);
+    if (!allowColdStartTheoryFallback) setDynamicFallbackNotice("");
     setSwitching(true);
     setMaskVisible(true);
     if (useCoverDelay) await delay(180);
     if (token !== switchTokenRef.current) return;
     setMountedMode(null);
     setMountedImmersiveStyle(null);
-    await nextAnimationFrame();
+    // Yield one macrotask so React can dispose the previous renderer before a
+    // replacement is mounted. A RAF is deliberately not used here: WebView2
+    // may throttle RAF while a native window is being revealed, which used to
+    // leave the real startup path suspended before payload loading even began.
+    await delay(0);
     if (token !== switchTokenRef.current) return;
     try {
       await ensurePayload(mode);
@@ -1336,8 +1664,43 @@ export function AgentDualBackgroundPage({
       setMountedMode(mode);
     } catch (error) {
       if (token !== switchTokenRef.current) return;
+      if (error instanceof AgentBackgroundPayloadStaleError) return;
+      if (
+        mode === "theory"
+        && allowColdStartTheoryFallback
+        && !initialReadyReportedRef.current
+        && error instanceof TheoryBackgroundNotReadyError
+      ) {
+        try {
+          await ensurePayload("immersive");
+          if (token !== switchTokenRef.current) return;
+          mountedFlowCheckpointRef.current = flowCheckpointRefs.current[
+            requestedImmersiveStyle
+          ];
+          setPreferredMode("immersive");
+          setDynamicFallbackNotice(
+            `理论星图尚未就绪，已降级到真实沉浸动态背景。${error.message}`,
+          );
+          setMountedImmersiveStyle(requestedImmersiveStyle);
+          setMountedMode("immersive");
+          return;
+        } catch (fallbackError) {
+          if (token !== switchTokenRef.current) return;
+          if (fallbackError instanceof AgentBackgroundPayloadStaleError) return;
+          const fallbackMessage = fallbackError instanceof Error
+            ? fallbackError.message
+            : "沉浸背景载荷读取失败。";
+          const message = "SIDERA_AGENT_DYNAMIC_FALLBACK_FAILED:"
+            + `theory=${error.message};immersive=${fallbackMessage}`;
+          setBackgroundFailure({ mode: "immersive", stage: "payload", message });
+          setSwitching(false);
+          setMaskVisible(false);
+          onInitialError?.(message);
+          return;
+        }
+      }
       const message = error instanceof Error ? error.message : "背景载荷读取失败。";
-      setLoadError(message);
+      setBackgroundFailure({ mode, stage: "payload", message });
       setSwitching(false);
       setMaskVisible(false);
       onInitialError?.(message);
@@ -1348,7 +1711,7 @@ export function AgentDualBackgroundPage({
     if (forceStaticBackground) {
       switchTokenRef.current += 1;
       setMountedMode(null);
-      setLoadError("");
+      setBackgroundFailure(null);
       setSwitching(false);
       setMaskVisible(false);
       const readyTimer = window.setTimeout(reportInitialReady, 24);
@@ -1356,8 +1719,12 @@ export function AgentDualBackgroundPage({
     }
     immersivePayloadRef.current = null;
     theoryPayloadRef.current = null;
+    immersivePayloadIdentityRef.current = null;
+    theoryPayloadIdentityRef.current = null;
     setImmersivePayload(null);
     setTheoryPayload(null);
+    setTheoryAvailability({ state: "idle", message: "" });
+    setDynamicFallbackNotice("");
     setImmersiveElapsedByStyle({
       "random-field": readElapsedSeconds(elapsedStorageKeys["random-field"]),
       "star-river": readElapsedSeconds(elapsedStorageKeys["star-river"]),
@@ -1400,6 +1767,7 @@ export function AgentDualBackgroundPage({
         shellPresentation === "workbench" ? "immersive" : preferredMode,
         false,
         shellPresentation === "workbench" ? "star-river" : immersiveStyleRef.current,
+        shellPresentation === "agent" && preferredMode === "theory",
       );
     }
     return () => {
@@ -1560,13 +1928,35 @@ export function AgentDualBackgroundPage({
     }
   }, [applyTheoryDialogExploreAmount]);
 
+  const dismissTheoryAvailability = useCallback(() => {
+    setTheoryAvailability({ state: "idle", message: "" });
+    window.requestAnimationFrame(() => {
+      theoryAvailabilityTriggerRef.current?.focus();
+    });
+  }, []);
+
   useEffect(() => {
-    if (!exploreTheory && !focusPresentation && !navigationOpen) return undefined;
+    if (!theoryAvailabilityVisible) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      theoryAvailabilityContinueRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [theoryAvailabilityVisible]);
+
+  useEffect(() => {
+    if (
+      !theoryAvailabilityVisible
+      && !exploreTheory
+      && !focusPresentation
+      && !navigationOpen
+    ) return undefined;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (navigationOpen) {
+      if (theoryAvailabilityVisible) {
+        dismissTheoryAvailability();
+      } else if (navigationOpen) {
         onCloseNavigation?.();
       } else if (focusPresentation) {
         releaseFocus();
@@ -1582,17 +1972,51 @@ export function AgentDualBackgroundPage({
     return () => window.removeEventListener("keydown", handleEscape, true);
   }, [
     beginTheoryExploreExit,
+    dismissTheoryAvailability,
     exploreTheory,
     focusPresentation,
     navigationOpen,
     onCloseNavigation,
     releaseFocus,
     requestTheoryNavigation,
+    theoryAvailabilityVisible,
     theoryNavigation.level,
   ]);
 
-  const switchBackground = async (mode: AgentBackgroundMode) => {
+  const switchBackground = async (
+    mode: AgentBackgroundMode,
+    trigger?: HTMLElement | null,
+  ) => {
     if (mode === preferredMode || switching) return;
+    setMoreOpen(false);
+    if (mode === "theory") {
+      theoryAvailabilityTriggerRef.current = trigger
+        ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    }
+    if (mode === "theory" && !forceStaticBackground) {
+      const preflightToken = ++switchTokenRef.current;
+      setTheoryAvailability({ state: "checking", message: "" });
+      setSwitching(true);
+      try {
+        await ensurePayload("theory");
+      } catch (error) {
+        if (preflightToken !== switchTokenRef.current) return;
+        if (error instanceof AgentBackgroundPayloadStaleError) return;
+        const message = error instanceof Error
+          ? error.message
+          : "理论星图载荷读取失败。";
+        setTheoryAvailability({
+          state: error instanceof TheoryBackgroundNotReadyError
+            ? "not-ready"
+            : "failed",
+          message,
+        });
+        setSwitching(false);
+        return;
+      }
+      if (preflightToken !== switchTokenRef.current) return;
+    }
+    setTheoryAvailability({ state: "idle", message: "" });
     setExploreTheory(false);
     setTheoryReturnActive(false);
     setTheoryReturnPhase("idle");
@@ -1602,7 +2026,6 @@ export function AgentDualBackgroundPage({
       paperFocusState: "idle",
       transitioning: false,
     });
-    setMoreOpen(false);
     setPreferredMode(mode);
     setFocusSession((current) => (
       current ? { ...current, backgroundMode: mode, phase: "acquiring" } : current
@@ -1622,7 +2045,10 @@ export function AgentDualBackgroundPage({
     } catch {
       // The mode remains valid for the current session.
     }
-    if (forceStaticBackground) return;
+    if (forceStaticBackground) {
+      setSwitching(false);
+      return;
+    }
     await mountBackground(mode, true);
   };
 
@@ -1651,7 +2077,7 @@ export function AgentDualBackgroundPage({
   const submitPrompt = () => {
     const text = draft.trim();
     if (!text || conversationGenerating) return;
-    setDialogCollapsed(false);
+    void requestDialogCollapsed(false, true);
     if (focusPresentation) releaseFocus();
     const event: AgentPromptSubmitEvent = {
       text,
@@ -1784,6 +2210,22 @@ export function AgentDualBackgroundPage({
 
   const dialogExploreVisible = exploreTheory || theoryReturnActive;
   const dialogVisuallyCollapsed = dialogCollapsed && !dialogExploreVisible;
+  const windowGeometryContentSuppressed = (
+    windowGeometryTransitionActive || passiveWindowResizeActive
+  );
+  const dialogTextSuppressed = (
+    dialogMotionPhase !== "visible" || windowGeometryContentSuppressed
+  );
+  const mountedImmersivePayload = mountedMode === "immersive"
+    ? immersivePayload
+    : null;
+  const historicalVisualSource = Boolean(
+    mountedImmersivePayload
+    && (
+      mountedImmersivePayload.visualSourceKind === "historical-v20"
+      || mountedImmersivePayload.analysisFreshness === "stale-by-library-revision"
+    ),
+  );
 
   return (
     <section
@@ -1798,6 +2240,7 @@ export function AgentDualBackgroundPage({
       ].filter(Boolean).join(" ")}
       data-background-mode={preferredMode}
       data-mounted-mode={mountedMode ?? "none"}
+      data-theory-availability={theoryAvailability.state}
       data-immersive-style={immersiveStyle}
       data-mounted-immersive-style={mountedImmersiveStyle ?? "none"}
       data-shell-presentation={shellPresentation}
@@ -1805,6 +2248,12 @@ export function AgentDualBackgroundPage({
       data-renderer-count={mountedMode ? 1 : 0}
       data-immersive-flow-backend={immersiveMetrics?.backend ?? "pending"}
       data-immersive-flow-degradation={immersiveMetrics?.degradationReason ?? ""}
+      data-visual-source-kind={mountedImmersivePayload?.visualSourceKind ?? ""}
+      data-analysis-freshness={mountedImmersivePayload?.analysisFreshness ?? ""}
+      data-source-library-revision={mountedImmersivePayload?.sourceLibraryRevision ?? ""}
+      data-current-library-revision={mountedImmersivePayload?.currentLibraryRevision ?? ""}
+      data-source-paper-count={mountedImmersivePayload?.sourcePaperCount ?? ""}
+      data-current-paper-count={mountedImmersivePayload?.currentPaperCount ?? ""}
       data-theory-return-phase={theoryReturnPhase}
       data-focus-phase={focusRuntime.phase}
       data-focus-primary={focusRuntime.primaryId ?? ""}
@@ -1823,6 +2272,8 @@ export function AgentDualBackgroundPage({
       data-sidera-session-count={focusSession?.candidates.length ?? 0}
       data-history-open={historyOpen ? "true" : "false"}
       data-dialog-collapsed={dialogVisuallyCollapsed ? "true" : "false"}
+      data-dialog-motion={dialogMotionPhase}
+      data-window-geometry-transition={windowGeometryContentSuppressed ? "true" : "false"}
       data-sidera-focus-side={focusSession?.side ?? ""}
       data-sidera-focus-gap={focusSession?.composition.dialogGapPx ?? ""}
       data-sidera-focus-diameter={focusSession?.composition.targetDiameterPx ?? ""}
@@ -1853,6 +2304,9 @@ export function AgentDualBackgroundPage({
             forceAnalyticFallback={forceAnalyticFallback}
             reducedMotion={window.matchMedia("(prefers-reduced-motion: reduce)").matches}
             motionScale={shellPresentation === "workbench" ? 0.2 : 1}
+            renderBudgetFps={shellPresentation === "workbench"
+              ? SIDERA_WORKBENCH_RENDER_BUDGET_FPS
+              : undefined}
             onElapsedSecondsChange={(value) => saveElapsed(
               mountedImmersiveStyle ?? immersiveStyle,
               value,
@@ -1867,10 +2321,16 @@ export function AgentDualBackgroundPage({
             onBackendFallback={lockAnalyticFallback}
             onReady={revealRenderer}
             onFatalError={(message) => {
-              setLoadError(message);
+              setBackgroundFailure({
+                mode: "immersive",
+                stage: "renderer",
+                message,
+              });
               setSwitching(false);
               setMaskVisible(false);
-              onInitialError?.(message);
+              if (!initialReadyReportedRef.current) {
+                onInitialError?.(message);
+              }
             }}
           />
         ) : null}
@@ -1912,10 +2372,16 @@ export function AgentDualBackgroundPage({
                   // A stale near-field pose is also ignored in memory.
                 }
               }
-              setLoadError(message);
+              setBackgroundFailure({
+                mode: "theory",
+                stage: "renderer",
+                message,
+              });
               setSwitching(false);
               setMaskVisible(false);
-              onInitialError?.(message);
+              if (!initialReadyReportedRef.current) {
+                onInitialError?.(message);
+              }
             }}
           />
         ) : null}
@@ -1933,12 +2399,19 @@ export function AgentDualBackgroundPage({
           type="button"
           title={preferredMode === "immersive" ? "切换到理论背景" : "切换到沉浸背景"}
           disabled={switching}
-          onClick={() => void switchBackground(
+          onClick={(event) => void switchBackground(
             preferredMode === "immersive" ? "theory" : "immersive",
+            event.currentTarget,
           )}
         >
           {preferredMode === "immersive" ? <Orbit size={15} /> : <Sparkles size={15} />}
-          <span>{preferredMode === "immersive" ? "理论" : "沉浸"}</span>
+          <span>
+            {theoryAvailability.state === "checking"
+              ? "检查中"
+              : preferredMode === "immersive"
+                ? "理论"
+                : "沉浸"}
+          </span>
         </button>
         {preferredMode === "theory" ? (
           exploreTheory && theoryNavigation.level !== "overview" ? (
@@ -2014,6 +2487,32 @@ export function AgentDualBackgroundPage({
           </button>
           {moreOpen ? (
             <div className="agent-dual-page__menu">
+              {mountedImmersivePayload || dynamicFallbackNotice ? (
+                <div
+                  className="agent-dual-page__source-summary"
+                  role="group"
+                  aria-label="视觉来源"
+                >
+                  <span>视觉来源</span>
+                  {mountedImmersivePayload ? (
+                    <>
+                      <strong>
+                        {historicalVisualSource ? "历史 V20" : "当前 V20"}
+                        {` · r${mountedImmersivePayload.sourceLibraryRevision}`}
+                      </strong>
+                      <small>
+                        {`${mountedImmersivePayload.sourcePaperCount.toLocaleString("zh-CN")} 篇`}
+                        {` · 当前库 r${mountedImmersivePayload.currentLibraryRevision}`}
+                        {` / ${mountedImmersivePayload.currentPaperCount.toLocaleString("zh-CN")} 篇`}
+                      </small>
+                      {historicalVisualSource ? (
+                        <small className="is-stale">非当前热点分析</small>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {dynamicFallbackNotice ? <small>{dynamicFallbackNotice}</small> : null}
+                </div>
+              ) : null}
               {preferredMode === "immersive" ? (
                 <div
                   className="agent-dual-page__immersive-style"
@@ -2239,7 +2738,8 @@ export function AgentDualBackgroundPage({
         <aside
           className="agent-conversation-drawer"
           aria-label="对话历史"
-          aria-hidden={!historyOpen}
+          aria-hidden={!historyOpen || dialogTextSuppressed}
+          inert={!historyOpen || dialogTextSuppressed ? true : undefined}
         >
           <header className="agent-conversation-drawer__header">
             <div>
@@ -2369,9 +2869,15 @@ export function AgentDualBackgroundPage({
           historyOpen ? "agent-dual-dialog--history-open" : "",
         ].filter(Boolean).join(" ")}
         aria-label="Sidera 科研 Agent 输入区"
+        aria-busy={dialogTextSuppressed}
+        inert={dialogTextSuppressed ? true : undefined}
       >
-        {!dialogExploreVisible && !dialogCollapsed ? (
-          <>
+        {!dialogExploreVisible ? (
+          <div
+            className="agent-dual-dialog__reading-shell"
+            aria-hidden={dialogCollapsed || dialogTextSuppressed}
+          >
+            <div className="agent-dual-dialog__reading-content">
             <header className="agent-dual-dialog__header">
               <span className="agent-dual-dialog__signal" />
               <div>
@@ -2386,10 +2892,7 @@ export function AgentDualBackgroundPage({
                   className="agent-dual-dialog__history-toggle"
                   title={historyOpen ? "关闭历史" : "打开历史"}
                   aria-expanded={historyOpen}
-                  onClick={() => {
-                    if (!historyOpen && focusPresentation) releaseFocus();
-                    setHistoryOpen((current) => !current);
-                  }}
+                  onClick={() => void requestHistoryOpen(!historyOpen)}
                 >
                   <History size={14} />
                 </button>
@@ -2406,10 +2909,7 @@ export function AgentDualBackgroundPage({
                   type="button"
                   className="agent-dual-dialog__collapse"
                   title="收起对话"
-                  onClick={() => {
-                    setHistoryOpen(false);
-                    setDialogCollapsed(true);
-                  }}
+                  onClick={() => void requestDialogCollapsed(true)}
                 >
                   <Minimize2 size={14} />
                 </button>
@@ -2470,6 +2970,10 @@ export function AgentDualBackgroundPage({
                     {references.length ? (
                       <div className="sidera-answer__citations" aria-label="结构化引用">
                         {references.map((reference) => {
+                          const documentEvidence = reference.kind === "document-anchor"
+                            && Boolean(reference.anchor)
+                            && Boolean(reference.paperId)
+                            && Boolean(reference.documentVersionId);
                           const missing = resolution?.missing.some((candidate) => (
                             candidate.entityId === reference.entityId
                             && candidate.kind === reference.kind
@@ -2485,13 +2989,17 @@ export function AgentDualBackgroundPage({
                               title={missing ? "本地库未找到" : reference.relationSummary}
                               disabled={
                                 message.status !== "complete"
-                                || resolution?.status !== "ready"
-                                || !resolved
+                                || (documentEvidence
+                                  ? !onOpenDocumentEvidence
+                                  : resolution?.status !== "ready" || !resolved)
                               }
-                              onClick={() => void activateMessageFocus(
-                                message,
-                                reference.entityId,
-                              )}
+                              onClick={() => {
+                                if (documentEvidence) {
+                                  onOpenDocumentEvidence?.(reference);
+                                  return;
+                                }
+                                void activateMessageFocus(message, reference.entityId);
+                              }}
                             >
                               <span>[{reference.citationIndex ?? reference.mentionOrder + 1}]</span>
                               {missing
@@ -2502,7 +3010,8 @@ export function AgentDualBackgroundPage({
                         })}
                       </div>
                     ) : null}
-                    {message.status === "complete" && references.length > 0 ? (
+                    {message.status === "complete"
+                    && references.some((reference) => reference.kind !== "document-anchor") ? (
                       <div className="sidera-answer__focus-controls">
                         {isActive && activeCount === 1 ? (
                           <button
@@ -2575,99 +3084,112 @@ export function AgentDualBackgroundPage({
                 );
               })}
             </div>
-          </>
+            </div>
+          </div>
         ) : null}
         {toolApproval && !dialogExploreVisible ? (
-          <section className="sidera-tool-approval" role="alert" aria-live="assertive">
-            <header>
-              <span>需要你的批准</span>
-              <small>仅对本次工具调用有效</small>
-            </header>
-            <strong>{toolApproval.summary}</strong>
-            {toolApproval.target ? <p>目标：{toolApproval.target}</p> : null}
-            {toolApproval.command ? (
-              <pre><code>{toolApproval.command}</code></pre>
-            ) : null}
-            {toolApproval.diffPreview ? (
-              <details>
-                <summary>查看差异预览</summary>
-                <pre><code>{toolApproval.diffPreview}</code></pre>
-              </details>
-            ) : null}
-            <div>
-              <button type="button" onClick={() => onDecideToolApproval?.("rejected")}>
-                <X size={13} />
-                拒绝
-              </button>
-              <button
-                type="button"
-                className="is-primary"
-                onClick={() => onDecideToolApproval?.("approved")}
-              >
-                <Check size={13} />
-                仅批准本次
-              </button>
-            </div>
-          </section>
+          <div
+            className="agent-dual-dialog__approval-shell"
+            aria-hidden={dialogCollapsed || dialogTextSuppressed}
+          >
+            <section className="sidera-tool-approval" role="alert" aria-live="assertive">
+              <header>
+                <span>需要你的批准</span>
+                <small>仅对本次工具调用有效</small>
+              </header>
+              <strong>{toolApproval.summary}</strong>
+              {toolApproval.target ? <p>目标：{toolApproval.target}</p> : null}
+              {toolApproval.command ? (
+                <pre><code>{toolApproval.command}</code></pre>
+              ) : null}
+              {toolApproval.diffPreview ? (
+                <details>
+                  <summary>查看差异预览</summary>
+                  <pre><code>{toolApproval.diffPreview}</code></pre>
+                </details>
+              ) : null}
+              <div>
+                <button type="button" onClick={() => onDecideToolApproval?.("rejected")}>
+                  <X size={13} />
+                  拒绝
+                </button>
+                <button
+                  type="button"
+                  className="is-primary"
+                  onClick={() => onDecideToolApproval?.("approved")}
+                >
+                  <Check size={13} />
+                  仅批准本次
+                </button>
+              </div>
+            </section>
+          </div>
         ) : null}
         <div className="agent-dual-dialog__composer">
-          {dialogCollapsed && !dialogExploreVisible ? (
-            <>
-              <button
-                type="button"
-                className="agent-dual-dialog__history-toggle"
-                title={historyOpen ? "关闭历史" : "打开历史"}
-                aria-expanded={historyOpen}
-                onClick={() => setHistoryOpen((current) => !current)}
-              >
-                <History size={14} />
-              </button>
-              <button
-                type="button"
-                className="agent-dual-dialog__restore"
-                title="展开对话"
-                onClick={() => setDialogCollapsed(false)}
-              >
-                <Eye size={14} />
-              </button>
-            </>
-          ) : null}
-          <textarea
-            ref={composerTextareaRef}
-            value={draft}
-            rows={1}
-            aria-label="输入研究问题"
-            placeholder={dialogExploreVisible ? "在理论星图中输入问题…" : "输入研究问题，Shift + Enter 换行"}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              resizeComposerTextarea(event.currentTarget);
-            }}
-            onKeyDown={handleInputKeyDown}
-          />
-          <button
-            type="button"
-            title={conversationGenerating ? "停止生成" : "提交"}
-            disabled={!conversationGenerating && !draft.trim()}
-            onClick={conversationGenerating ? onStopGeneration : submitPrompt}
-          >
-            {conversationGenerating ? <Square size={14} /> : <Send size={15} />}
-          </button>
+          <div className="agent-dual-dialog__composer-track">
+            {dialogCollapsed && !dialogExploreVisible ? (
+              <>
+                <button
+                  type="button"
+                  className="agent-dual-dialog__history-toggle"
+                  title={historyOpen ? "关闭历史" : "打开历史"}
+                  aria-expanded={historyOpen}
+                  onClick={() => void requestHistoryOpen(!historyOpen)}
+                >
+                  <History size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="agent-dual-dialog__restore"
+                  title="展开对话"
+                  onClick={() => void requestDialogCollapsed(false)}
+                >
+                  <Eye size={14} />
+                </button>
+              </>
+            ) : null}
+            <textarea
+              ref={composerTextareaRef}
+              value={draft}
+              rows={1}
+              aria-label="输入研究问题"
+              placeholder={dialogExploreVisible ? "在理论星图中输入问题…" : "输入研究问题，Shift + Enter 换行"}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                resizeComposerTextarea(event.currentTarget);
+              }}
+              onKeyDown={handleInputKeyDown}
+            />
+            <button
+              type="button"
+              title={conversationGenerating ? "停止生成" : "提交"}
+              disabled={!conversationGenerating && !draft.trim()}
+              onClick={conversationGenerating ? onStopGeneration : submitPrompt}
+            >
+              {conversationGenerating ? <Square size={14} /> : <Send size={15} />}
+            </button>
+          </div>
         </div>
-        {!dialogExploreVisible && !dialogCollapsed ? (
-          <footer>
-            <span className={conversationError ? "is-error" : ""}>
-              {conversationError || (
-                sessionStats
-                  ? `上下文 ${sessionStats.contextUsage?.percent?.toFixed(0) ?? "—"}% · 输入 ${sessionStats.tokens.input} · 输出 ${sessionStats.tokens.output} · 缓存读取 ${sessionStats.tokens.cacheRead || "未检测到"}`
-                  : "Pi 本地 RAG · 可审计文件与 HTTPS 工具 · 变更操作逐次审批"
+        {!dialogExploreVisible ? (
+          <div
+            className="agent-dual-dialog__footer-shell"
+            aria-hidden={dialogCollapsed || dialogTextSuppressed}
+          >
+            <footer>
+              <span className={conversationError ? "is-error" : ""}>
+                {conversationError || (
+                  sessionStats
+                    ? `上下文 ${sessionStats.contextUsage?.percent?.toFixed(0) ?? "—"}% · 输入 ${sessionStats.tokens.input} · 输出 ${sessionStats.tokens.output} · 缓存读取 ${sessionStats.tokens.cacheRead || "未检测到"}`
+                    : "Pi 本地 RAG · 可审计文件与 HTTPS 工具 · 变更操作逐次审批"
+                )}
+              </span>
+              {conversationError && onOpenSettings ? (
+                <button type="button" onClick={onOpenSettings}>打开设置</button>
+              ) : (
+                <kbd>{conversationGenerating ? "生成中" : "Enter"}</kbd>
               )}
-            </span>
-            {conversationError && onOpenSettings ? (
-              <button type="button" onClick={onOpenSettings}>打开设置</button>
-            ) : (
-              <kbd>{conversationGenerating ? "生成中" : "Enter"}</kbd>
-            )}
-          </footer>
+            </footer>
+          </div>
         ) : null}
       </main>
 
@@ -2775,7 +3297,11 @@ export function AgentDualBackgroundPage({
               打开完整详情
             </button>
             {preferredMode === "immersive" ? (
-              <button type="button" onClick={() => void switchBackground("theory")}>
+              <button
+                type="button"
+                disabled={switching}
+                onClick={(event) => void switchBackground("theory", event.currentTarget)}
+              >
                 <Orbit size={13} />
                 查看语义位置
               </button>
@@ -2826,15 +3352,60 @@ export function AgentDualBackgroundPage({
         </div>
       ) : null}
 
-      {loadError ? (
+      {theoryAvailabilityVisible ? (
+        <section
+          className="agent-dual-page__availability"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="agent-theory-availability-title"
+          aria-describedby="agent-theory-availability-description"
+        >
+          <strong id="agent-theory-availability-title">
+            {theoryAvailability.state === "not-ready"
+              ? "理论星图待更新"
+              : "理论载荷读取失败"}
+          </strong>
+          <span id="agent-theory-availability-description">
+            {theoryAvailability.message}
+          </span>
+          <div className="agent-dual-page__availability-actions">
+            <button
+              ref={theoryAvailabilityContinueRef}
+              type="button"
+              onClick={dismissTheoryAvailability}
+            >
+              <Sparkles size={14} />
+              继续沉浸
+            </button>
+            {onOpenPipeline ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setTheoryAvailability({ state: "idle", message: "" });
+                  onOpenPipeline();
+                }}
+              >
+                <Atom size={14} />
+                前往分析流水线
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {backgroundFailure ? (
         <div className="agent-dual-page__error" role="alert">
           <strong>
-            {preferredMode === "theory"
-              ? "理论背景渲染失败"
-              : "沉浸背景渲染失败"}
+            {backgroundFailure.mode === "theory" ? "理论" : "沉浸"}
+            {backgroundFailure.stage === "payload"
+              ? "背景载荷读取失败"
+              : "背景渲染失败"}
           </strong>
-          <span>{loadError}</span>
-          <button type="button" onClick={() => void mountBackground(preferredMode, false)}>
+          <span>{backgroundFailure.message}</span>
+          <button
+            type="button"
+            onClick={() => void mountBackground(backgroundFailure.mode, false)}
+          >
             <RefreshCw size={14} />
             重试
           </button>

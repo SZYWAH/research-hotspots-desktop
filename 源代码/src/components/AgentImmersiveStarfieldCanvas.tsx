@@ -85,6 +85,7 @@ type AgentImmersiveStarfieldCanvasProps = {
   forceAnalyticFallback?: boolean;
   reducedMotion?: boolean;
   motionScale?: number;
+  renderBudgetFps?: number;
   onElapsedSecondsChange?: (elapsedSeconds: number) => void;
   onCheckpoint?: (checkpoint: AgentImmersiveFlowCheckpointV1) => void;
   onMetrics?: (metrics: AgentImmersiveFlowMetrics) => void;
@@ -1672,6 +1673,7 @@ export function AgentImmersiveStarfieldCanvas({
   forceAnalyticFallback = false,
   reducedMotion = false,
   motionScale = 1,
+  renderBudgetFps,
   onElapsedSecondsChange,
   onCheckpoint,
   onMetrics,
@@ -1693,29 +1695,39 @@ export function AgentImmersiveStarfieldCanvas({
   const onReadyRef = useRef(onReady);
   const onFatalErrorRef = useRef(onFatalError);
   const motionScaleRef = useRef(Math.max(0, motionScale));
+  const renderBudgetFpsRef = useRef(
+    Number.isFinite(renderBudgetFps) ? Math.max(0, renderBudgetFps ?? 0) : 0,
+  );
 
   useEffect(() => {
     onElapsedRef.current = onElapsedSecondsChange;
     onCheckpointRef.current = onCheckpoint;
     onMetricsRef.current = onMetrics;
-    focusRef.current = focus;
     onFocusRuntimeRef.current = onFocusRuntime;
-    focusRefreshRef.current?.();
     onBackendFallbackRef.current = onBackendFallback;
     onReadyRef.current = onReady;
     onFatalErrorRef.current = onFatalError;
-    motionScaleRef.current = Math.max(0, motionScale);
   }, [
     onBackendFallback,
     onCheckpoint,
     onElapsedSecondsChange,
     onFatalError,
-    motionScale,
-    focus,
     onFocusRuntime,
     onMetrics,
     onReady,
   ]);
+
+  useEffect(() => {
+    motionScaleRef.current = Math.max(0, motionScale);
+    renderBudgetFpsRef.current = Number.isFinite(renderBudgetFps)
+      ? Math.max(0, renderBudgetFps ?? 0)
+      : 0;
+  }, [motionScale, renderBudgetFps]);
+
+  useEffect(() => {
+    focusRef.current = focus;
+    focusRefreshRef.current?.();
+  }, [focus]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -1736,6 +1748,7 @@ export function AgentImmersiveStarfieldCanvas({
       return undefined;
     }
 
+    try {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
     const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
@@ -1884,7 +1897,10 @@ export function AgentImmersiveStarfieldCanvas({
 
     let animationFrame = 0;
     let disposed = false;
-    let lastFrameMs = performance.now();
+    let lastProcessedFrameMs = performance.now();
+    let lastRafMs = lastProcessedFrameMs;
+    let renderBudgetAccumulatorMs = 0;
+    let activeRenderBudgetFps = renderBudgetFpsRef.current;
     let readyReported = false;
     let accumulatorSeconds = 0;
     let stepIndex = initialState.stepIndex;
@@ -2395,10 +2411,49 @@ export function AgentImmersiveStarfieldCanvas({
       renderer.render(scene, camera);
     };
 
+    const renderSceneAndReportReady = (nowMs: number) => {
+      updateFocus(nowMs);
+      updateRenderState();
+      renderer.render(scene, camera);
+      if (!readyReported) {
+        readyReported = true;
+        onReadyRef.current?.();
+      }
+    };
+
     const renderFrame = (nowMs: number) => {
       if (disposed) return;
-      const deltaSeconds = Math.min(0.05, Math.max(0, (nowMs - lastFrameMs) / 1000));
-      lastFrameMs = nowMs;
+      try {
+      const nextRenderBudgetFps = renderBudgetFpsRef.current;
+      if (nextRenderBudgetFps !== activeRenderBudgetFps) {
+        activeRenderBudgetFps = nextRenderBudgetFps;
+        renderBudgetAccumulatorMs = 0;
+        lastRafMs = nowMs;
+        if (activeRenderBudgetFps > 0) {
+          animationFrame = requestAnimationFrame(renderFrame);
+          return;
+        }
+      }
+      const rafDeltaMs = Math.max(0, nowMs - lastRafMs);
+      lastRafMs = nowMs;
+      if (activeRenderBudgetFps > 0) {
+        const renderIntervalMs = 1_000 / activeRenderBudgetFps;
+        renderBudgetAccumulatorMs += rafDeltaMs;
+        if (renderBudgetAccumulatorMs + 0.01 < renderIntervalMs) {
+          animationFrame = requestAnimationFrame(renderFrame);
+          return;
+        }
+        renderBudgetAccumulatorMs = renderBudgetAccumulatorMs >= renderIntervalMs
+          ? renderBudgetAccumulatorMs % renderIntervalMs
+          : 0;
+      } else {
+        renderBudgetAccumulatorMs = 0;
+      }
+      const deltaSeconds = Math.min(
+        0.05,
+        Math.max(0, (nowMs - lastProcessedFrameMs) / 1000),
+      );
+      lastProcessedFrameMs = nowMs;
       if (!document.hidden && !reducedMotion) {
         const scaledDeltaSeconds = deltaSeconds
           * activeFocusFlowSpeedScale
@@ -2460,13 +2515,7 @@ export function AgentImmersiveStarfieldCanvas({
           stepIndex = Math.round(elapsedRef.current / FLOW_FIXED_STEP_SECONDS);
         }
       }
-      updateFocus(nowMs);
-      updateRenderState();
-      renderer.render(scene, camera);
-      if (!readyReported) {
-        readyReported = true;
-        onReadyRef.current?.();
-      }
+      renderSceneAndReportReady(nowMs);
       if (
         !metricsReported
         && elapsedRef.current - metricsStartElapsed >= FLOW_METRICS_WINDOW_SECONDS
@@ -2490,11 +2539,21 @@ export function AgentImmersiveStarfieldCanvas({
       if (!document.hidden && !reducedMotion) {
         animationFrame = requestAnimationFrame(renderFrame);
       }
+      } catch (error) {
+        disposed = true;
+        cancelAnimationFrame(animationFrame);
+        onFatalErrorRef.current?.(
+          error instanceof Error ? error.message : "沉浸背景动态渲染失败。",
+        );
+      }
     };
     const resume = () => {
       if (disposed || document.hidden || reducedMotion) return;
       cancelAnimationFrame(animationFrame);
-      lastFrameMs = performance.now();
+      lastProcessedFrameMs = performance.now();
+      lastRafMs = lastProcessedFrameMs;
+      renderBudgetAccumulatorMs = 0;
+      activeRenderBudgetFps = renderBudgetFpsRef.current;
       animationFrame = requestAnimationFrame(renderFrame);
     };
     const handleVisibility = () => {
@@ -2518,12 +2577,14 @@ export function AgentImmersiveStarfieldCanvas({
     };
     document.addEventListener("visibilitychange", handleVisibility);
     renderer.domElement.addEventListener("webglcontextlost", handleContextLost, false);
-    if (reducedMotion) {
-      updateRenderState();
-      renderer.render(scene, camera);
-      readyReported = true;
-      onReadyRef.current?.();
-    } else {
+    // The startup contract is the first real WebGL render, not the next RAF.
+    // Rendering once synchronously makes window reveal deterministic even when
+    // WebView2 temporarily throttles animation callbacks during cold start.
+    renderSceneAndReportReady(performance.now());
+    lastProcessedFrameMs = performance.now();
+    lastRafMs = lastProcessedFrameMs;
+    renderBudgetAccumulatorMs = 0;
+    if (!reducedMotion && !document.hidden) {
       animationFrame = requestAnimationFrame(renderFrame);
     }
 
@@ -2565,6 +2626,15 @@ export function AgentImmersiveStarfieldCanvas({
       renderer.dispose();
       renderer.domElement.remove();
     };
+    } catch (error) {
+      focusRefreshRef.current = null;
+      renderer.dispose();
+      renderer.domElement.remove();
+      onFatalErrorRef.current?.(
+        error instanceof Error ? error.message : "沉浸背景首帧初始化失败。",
+      );
+      return undefined;
+    }
   }, [
     forceAnalyticFallback,
     initialCheckpoint,

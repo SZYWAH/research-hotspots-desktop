@@ -1556,9 +1556,7 @@ fn search_local_papers_page(
     }));
     values.push(SqlValue::Integer(minimum_score));
     values.push(SqlValue::Integer(limit.saturating_add(1) as i64));
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|error| error.to_string())?;
+    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let mut rows = stmt
         .query_map(params_from_iter(values), |row| {
             let abstract_text: String = row.get(2)?;
@@ -1661,30 +1659,9 @@ fn meaningful_search_terms(query: &str) -> Result<Vec<String>, String> {
         return Err("AGENT_SEARCH_QUERY_INVALID".into());
     }
     const STOP_WORDS: &[&str] = &[
-        "a",
-        "an",
-        "and",
-        "analysis",
-        "analyze",
-        "analyse",
-        "based",
-        "current",
-        "for",
-        "from",
-        "generate",
-        "in",
-        "library",
-        "local",
-        "of",
-        "on",
-        "report",
-        "research",
-        "snapshot",
-        "the",
-        "trend",
-        "trends",
-        "v20",
-        "with",
+        "a", "an", "and", "analysis", "analyze", "analyse", "based", "current", "for", "from",
+        "generate", "in", "library", "local", "of", "on", "report", "research", "snapshot", "the",
+        "trend", "trends", "v20", "with",
     ];
     let mut terms = Vec::new();
     let mut seen = HashSet::new();
@@ -2273,15 +2250,12 @@ mod tests {
             search_v20_hotspots(&conn, "project", "V20 snapshot report", 10).unwrap_err(),
             "AGENT_SEARCH_QUERY_TOO_BROAD"
         );
-        assert!(search_v20_hotspots(
-            &conn,
-            "project",
-            "retrieval augmented scientific agent",
-            10
-        )
-        .unwrap()
-        .1
-        .is_empty());
+        assert!(
+            search_v20_hotspots(&conn, "project", "retrieval augmented scientific agent", 10)
+                .unwrap()
+                .1
+                .is_empty()
+        );
     }
 
     #[test]

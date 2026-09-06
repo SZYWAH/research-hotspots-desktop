@@ -7,12 +7,16 @@ export const SIDERA_DIRECT_CAROUSEL_LIMIT = 6;
 export const SIDERA_RESOLVED_ENTITY_LIMIT = 32;
 
 export type SideraAnswerEntityReference = {
-  kind: "paper" | "hotspot";
+  kind: "paper" | "hotspot" | "document-anchor";
   entityId: string;
   citationIndex?: number;
   mentionOrder: number;
   role: "cited" | "discussed" | "recommended";
   relationSummary: string;
+  paperId?: string;
+  documentVersionId?: string;
+  pageIndex?: number;
+  anchor?: import("./documentReaderContract").DocumentEvidenceAnchor;
 };
 
 export type SideraAssistantMessage = {
@@ -209,7 +213,8 @@ export function normalizeSideraReferences(
 export function isSideraMessageFocusReady(message: SideraAssistantMessage) {
   return (
     message.status === "complete"
-    && normalizeSideraReferences(message.entityRefs).length > 0
+    && normalizeSideraReferences(message.entityRefs)
+      .some((reference) => reference.kind !== "document-anchor")
   );
 }
 

@@ -7,7 +7,8 @@ use std::{
 };
 
 use rusqlite::{
-    backup::Backup, params, Connection, OptionalExtension, Transaction, TransactionBehavior,
+    backup::Backup, params, types::ValueRef, Connection, OptionalExtension, Transaction,
+    TransactionBehavior,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,8 +25,8 @@ use crate::agent::{
     AGENT_PLAN_MAX_BYTES,
 };
 use crate::{
-    sha256_file, validate_library_candidate_file, LIBRARY_SCHEMA_VERSION,
-    MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION,
+    sha256_file, validate_library_candidate_file, LibraryV14SchemaContractStatus,
+    ValidatedLibraryCandidate, LIBRARY_SCHEMA_VERSION, MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION,
 };
 
 pub const AGENT_LEASE_TTL_MS: i64 = 30_000;
@@ -297,6 +298,8 @@ pub struct AgentMigrationResult {
     pub current_version: i64,
     pub backup_path: Option<PathBuf>,
     pub backup_sha256: Option<String>,
+    pub compatibility_repair_applied: bool,
+    pub schema_contract_status: LibraryV14SchemaContractStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -371,6 +374,294 @@ fn migration_source_size(path: &Path) -> Result<u64, String> {
     Ok(database_size.saturating_add(wal_size))
 }
 
+fn ensure_migration_backup_space(available: u64, source_size: u64) -> Result<(), String> {
+    if available < source_size.saturating_add(16 * 1024 * 1024) {
+        return Err("AGENT_MIGRATION_BACKUP_SPACE_INSUFFICIENT".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct V14CompatibilityFingerprint {
+    candidate: ValidatedLibraryCandidate,
+    table_counts: Vec<i64>,
+    key_sha256: String,
+}
+
+fn update_sqlite_value_hash(hasher: &mut Sha256, value: ValueRef<'_>) {
+    match value {
+        ValueRef::Null => hasher.update([0]),
+        ValueRef::Integer(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_le_bytes());
+        }
+        ValueRef::Real(value) => {
+            hasher.update([2]);
+            hasher.update(value.to_bits().to_le_bytes());
+        }
+        ValueRef::Text(value) => {
+            hasher.update([3]);
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value);
+        }
+        ValueRef::Blob(value) => {
+            hasher.update([4]);
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value);
+        }
+    }
+}
+
+fn hash_query_rows(conn: &Connection, sql: &str, hasher: &mut Sha256) -> Result<(), String> {
+    let mut statement = conn
+        .prepare(sql)
+        .map_err(|error| format!("AGENT_V14_COMPATIBILITY_FINGERPRINT_FAILED:{error}"))?;
+    let column_count = statement.column_count();
+    let mut rows = statement
+        .query([])
+        .map_err(|error| format!("AGENT_V14_COMPATIBILITY_FINGERPRINT_FAILED:{error}"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| format!("AGENT_V14_COMPATIBILITY_FINGERPRINT_FAILED:{error}"))?
+    {
+        hasher.update([0x7f]);
+        for index in 0..column_count {
+            let value = row
+                .get_ref(index)
+                .map_err(|error| format!("AGENT_V14_COMPATIBILITY_FINGERPRINT_FAILED:{error}"))?;
+            update_sqlite_value_hash(hasher, value);
+        }
+    }
+    Ok(())
+}
+
+fn v14_compatibility_fingerprint(
+    conn: &Connection,
+    project_id: &str,
+    expected_status: LibraryV14SchemaContractStatus,
+) -> Result<V14CompatibilityFingerprint, String> {
+    let assessment = crate::inspect_library_v14_schema_contract_connection(conn, project_id)?;
+    if assessment.status != expected_status {
+        return Err(format!(
+            "AGENT_V14_COMPATIBILITY_STATUS_CHANGED:{:?}",
+            assessment.status
+        ));
+    }
+    let table_queries = [
+        (
+            "papers",
+            "SELECT project_id,id FROM papers ORDER BY project_id,id",
+        ),
+        (
+            "v20_hotspots",
+            "SELECT project_id,snapshot_id,hotspot_id,identity_key_sha256 FROM v20_hotspots ORDER BY project_id,snapshot_id,hotspot_id",
+        ),
+        (
+            "v20_paper_memberships",
+            "SELECT project_id,snapshot_id,paper_id,hotspot_id FROM v20_paper_memberships ORDER BY project_id,snapshot_id,paper_id",
+        ),
+        (
+            "paper_import_commits",
+            "SELECT * FROM paper_import_commits ORDER BY id",
+        ),
+        (
+            "paper_source_records",
+            "SELECT * FROM paper_source_records ORDER BY id",
+        ),
+        (
+            "paper_identity_aliases",
+            "SELECT * FROM paper_identity_aliases ORDER BY id",
+        ),
+        (
+            "paper_import_commit_items",
+            "SELECT * FROM paper_import_commit_items ORDER BY commit_id,candidate_id",
+        ),
+    ];
+    let mut table_counts = Vec::with_capacity(table_queries.len());
+    let mut hasher = Sha256::new();
+    for (table, query) in table_queries {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| format!("AGENT_V14_COMPATIBILITY_FINGERPRINT_FAILED:{error}"))?;
+        table_counts.push(count);
+        hasher.update(table.as_bytes());
+        hasher.update(count.to_le_bytes());
+        hash_query_rows(conn, query, &mut hasher)?;
+    }
+    Ok(V14CompatibilityFingerprint {
+        candidate: assessment.candidate,
+        table_counts,
+        key_sha256: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn create_precontract_v14_backup(
+    conn: &Connection,
+    path: &Path,
+    project_id: &str,
+    now_ms: i64,
+    source_fingerprint: &V14CompatibilityFingerprint,
+) -> Result<(PathBuf, String), String> {
+    let parent = path.parent().ok_or("AGENT_MIGRATION_PARENT_MISSING")?;
+    let source_size = migration_source_size(path)?;
+    let available = fs2::available_space(parent)
+        .map_err(|error| format!("AGENT_MIGRATION_BACKUP_SPACE_CHECK_FAILED:{error}"))?;
+    ensure_migration_backup_space(available, source_size)?;
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or("AGENT_MIGRATION_FILE_NAME_INVALID")?;
+    let backup_path = parent.join(format!("{stem}.pre-v14-contract.{now_ms}.sqlite"));
+    if backup_path.exists() {
+        return Err("AGENT_MIGRATION_BACKUP_EXISTS".into());
+    }
+    let partial_path = backup_path.with_file_name(format!(
+        "{}.partial",
+        backup_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or("AGENT_MIGRATION_BACKUP_FILE_NAME_INVALID")?
+    ));
+    cleanup_migration_backup_artifacts(&partial_path);
+    if partial_path.exists() {
+        return Err("AGENT_MIGRATION_BACKUP_PARTIAL_CLEANUP_FAILED".into());
+    }
+    let backup_result: Result<(PathBuf, String), String> = (|| {
+        let mut destination = Connection::open(&partial_path)
+            .map_err(|error| format!("AGENT_MIGRATION_BACKUP_OPEN_FAILED:{error}"))?;
+        let backup = Backup::new(conn, &mut destination)
+            .map_err(|error| format!("AGENT_MIGRATION_BACKUP_FAILED:{error}"))?;
+        backup
+            .run_to_completion(128, Duration::from_millis(5), None)
+            .map_err(|error| format!("AGENT_MIGRATION_BACKUP_FAILED:{error}"))?;
+        drop(backup);
+        drop(destination);
+        let backup_connection =
+            Connection::open_with_flags(&partial_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|error| format!("AGENT_MIGRATION_BACKUP_OPEN_FAILED:{error}"))?;
+        let backup_fingerprint = v14_compatibility_fingerprint(
+            &backup_connection,
+            project_id,
+            LibraryV14SchemaContractStatus::KnownPrecontractV14,
+        )
+        .map_err(|error| format!("AGENT_MIGRATION_BACKUP_INVALID:{error}"))?;
+        if &backup_fingerprint != source_fingerprint {
+            return Err("AGENT_MIGRATION_BACKUP_COUNT_MISMATCH".into());
+        }
+        drop(backup_connection);
+        let hash = sha256_file(&partial_path)
+            .map_err(|error| format!("AGENT_MIGRATION_BACKUP_HASH_FAILED:{error}"))?;
+        fs::rename(&partial_path, &backup_path)
+            .map_err(|error| format!("AGENT_MIGRATION_BACKUP_ACTIVATE_FAILED:{error}"))?;
+        cleanup_migration_backup_artifacts(&partial_path);
+        Ok((backup_path, hash))
+    })();
+    if backup_result.is_err() {
+        cleanup_migration_backup_artifacts(&partial_path);
+    }
+    backup_result
+}
+
+fn repair_known_precontract_v14(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX idx_papers_project_identity ON papers(project_id,id);
+         CREATE TABLE paper_source_records_v14_contract(
+           id TEXT PRIMARY KEY,project_id TEXT NOT NULL,paper_id TEXT NOT NULL,
+           commit_id TEXT NOT NULL,batch_id TEXT NOT NULL,candidate_id TEXT NOT NULL,
+           source_database TEXT NOT NULL,producer_version TEXT NOT NULL,
+           provider_record_id TEXT,canonical_locator TEXT,record_type TEXT,
+           full_text_status TEXT,metadata_json TEXT NOT NULL,provenance_json TEXT NOT NULL,
+           created_at_ms INTEGER NOT NULL,UNIQUE(project_id,batch_id,candidate_id),
+           FOREIGN KEY(project_id,paper_id) REFERENCES papers(project_id,id) ON DELETE CASCADE,
+           FOREIGN KEY(commit_id) REFERENCES paper_import_commits(id) ON DELETE RESTRICT
+         );
+         INSERT INTO paper_source_records_v14_contract
+           SELECT id,project_id,paper_id,commit_id,batch_id,candidate_id,source_database,
+                  producer_version,provider_record_id,canonical_locator,record_type,
+                  full_text_status,metadata_json,provenance_json,created_at_ms
+           FROM paper_source_records;
+         CREATE TABLE paper_identity_aliases_v14_stage AS
+           SELECT id,project_id,paper_id,alias_kind,normalized_value,source_record_id,
+                  commit_id,created_at_ms FROM paper_identity_aliases;
+         DROP TABLE paper_identity_aliases;
+         DROP TABLE paper_source_records;
+         ALTER TABLE paper_source_records_v14_contract RENAME TO paper_source_records;",
+    )
+    .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))?;
+    tx.execute_batch(include_str!("import_schema.sql"))
+        .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))?;
+    tx.execute_batch(
+        "INSERT INTO paper_identity_aliases(
+           id,project_id,paper_id,alias_kind,normalized_value,source_record_id,commit_id,created_at_ms
+         )
+         SELECT id,project_id,paper_id,alias_kind,normalized_value,source_record_id,commit_id,created_at_ms
+         FROM paper_identity_aliases_v14_stage;
+         DROP TABLE paper_identity_aliases_v14_stage;",
+    )
+    .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))
+}
+
+fn migrate_known_precontract_v14_file(
+    conn: &mut Connection,
+    path: &Path,
+    project_id: &str,
+    now_ms: i64,
+) -> Result<AgentMigrationResult, String> {
+    let source_fingerprint = v14_compatibility_fingerprint(
+        conn,
+        project_id,
+        LibraryV14SchemaContractStatus::KnownPrecontractV14,
+    )?;
+    let (backup_path, backup_sha256) =
+        create_precontract_v14_backup(conn, path, project_id, now_ms, &source_fingerprint)?;
+    conn.pragma_update(None, "foreign_keys", "OFF")
+        .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))?;
+    let migration = (|| {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))?;
+        let locked_fingerprint = v14_compatibility_fingerprint(
+            &tx,
+            project_id,
+            LibraryV14SchemaContractStatus::KnownPrecontractV14,
+        )?;
+        if locked_fingerprint != source_fingerprint {
+            return Err("AGENT_V14_COMPATIBILITY_SOURCE_CHANGED".to_string());
+        }
+        repair_known_precontract_v14(&tx)?;
+        let foreign_key_errors: i64 = tx
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))?;
+        if foreign_key_errors != 0 {
+            return Err("AGENT_V14_COMPATIBILITY_FOREIGN_KEY_FAILED".to_string());
+        }
+        let repaired_fingerprint = v14_compatibility_fingerprint(
+            &tx,
+            project_id,
+            LibraryV14SchemaContractStatus::CurrentV14,
+        )?;
+        if repaired_fingerprint != source_fingerprint {
+            return Err("AGENT_V14_COMPATIBILITY_DATA_CHANGED".to_string());
+        }
+        tx.commit()
+            .map_err(|error| format!("AGENT_V14_COMPATIBILITY_REPAIR_FAILED:{error}"))
+    })();
+    let _ = conn.pragma_update(None, "foreign_keys", "ON");
+    migration?;
+    Ok(AgentMigrationResult {
+        previous_version: LIBRARY_SCHEMA_VERSION,
+        current_version: LIBRARY_SCHEMA_VERSION,
+        backup_path: Some(backup_path),
+        backup_sha256: Some(backup_sha256),
+        compatibility_repair_applied: true,
+        schema_contract_status: LibraryV14SchemaContractStatus::CurrentV14,
+    })
+}
+
 pub fn migrate_library_file(
     path: &Path,
     project_id: &str,
@@ -397,14 +688,23 @@ pub fn migrate_library_file(
         return Err("LIBRARY_SCHEMA_TOO_OLD".into());
     }
     if previous == LIBRARY_SCHEMA_VERSION {
-        crate::ensure_v20_schema(&conn)?;
-        ensure_agent_schema(&conn)?;
-        return Ok(AgentMigrationResult {
-            previous_version: previous,
-            current_version: LIBRARY_SCHEMA_VERSION,
-            backup_path: None,
-            backup_sha256: None,
-        });
+        let assessment = crate::inspect_library_v14_schema_contract_connection(&conn, project_id)?;
+        return match assessment.status {
+            LibraryV14SchemaContractStatus::CurrentV14 => Ok(AgentMigrationResult {
+                previous_version: previous,
+                current_version: LIBRARY_SCHEMA_VERSION,
+                backup_path: None,
+                backup_sha256: None,
+                compatibility_repair_applied: false,
+                schema_contract_status: LibraryV14SchemaContractStatus::CurrentV14,
+            }),
+            LibraryV14SchemaContractStatus::KnownPrecontractV14 => {
+                migrate_known_precontract_v14_file(&mut conn, path, project_id, now_ms)
+            }
+            LibraryV14SchemaContractStatus::UnknownInvalidV14 => Err(assessment
+                .error_code
+                .unwrap_or_else(|| "LIBRARY_SCHEMA_V14_IMPORT_CONTRACT_INVALID".to_string())),
+        };
     }
     let source_value = validate_library_candidate_file(path, project_id)?;
     let (mut backup_path, mut backup_sha256) = if backup_existing {
@@ -412,14 +712,15 @@ pub fn migrate_library_file(
         let source_size = migration_source_size(path)?;
         let available = fs2::available_space(parent)
             .map_err(|error| format!("AGENT_MIGRATION_BACKUP_SPACE_CHECK_FAILED:{error}"))?;
-        if available < source_size.saturating_add(16 * 1024 * 1024) {
-            return Err("AGENT_MIGRATION_BACKUP_SPACE_INSUFFICIENT".into());
-        }
+        ensure_migration_backup_space(available, source_size)?;
         let stem = path
             .file_stem()
             .and_then(|v| v.to_str())
             .ok_or("AGENT_MIGRATION_FILE_NAME_INVALID")?;
-        let backup_path = parent.join(format!("{stem}.pre-schema-v13.{now_ms}.sqlite"));
+        let backup_path = parent.join(format!(
+            "{stem}.pre-schema-v{}.{now_ms}.sqlite",
+            LIBRARY_SCHEMA_VERSION
+        ));
         if backup_path.exists() {
             return Err("AGENT_MIGRATION_BACKUP_EXISTS".into());
         }
@@ -480,6 +781,8 @@ pub fn migrate_library_file(
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         if locked_version == LIBRARY_SCHEMA_VERSION {
+            crate::validate_library_candidate_connection(&tx, project_id)
+                .map_err(|error| format!("AGENT_SCHEMA_CURRENT_INVALID:{error}"))?;
             tx.commit()
                 .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
             return Ok(false);
@@ -499,6 +802,7 @@ pub fn migrate_library_file(
         // reference a column that does not exist yet. The v13 migration also creates
         // the v12 semantic embedding table when it is absent.
         migrate_v13_hotspot_layout_schema(&tx)?;
+        migrate_v14_import_schema(&tx)?;
         let foreign_key_errors: i64 = tx
             .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
                 row.get(0)
@@ -507,6 +811,8 @@ pub fn migrate_library_file(
         if foreign_key_errors != 0 {
             return Err("AGENT_SCHEMA_MIGRATION_FOREIGN_KEY_FAILED".into());
         }
+        tx.pragma_update(None, "user_version", LIBRARY_SCHEMA_VERSION)
+            .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         let migrated_value = crate::validate_library_candidate_connection(&tx, project_id)
             .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_V20_INVALID:{e}"))?;
         if migrated_value.paper_count != source_value.paper_count
@@ -516,8 +822,6 @@ pub fn migrate_library_file(
         {
             return Err("AGENT_SCHEMA_MIGRATION_V20_CHANGED".into());
         }
-        tx.pragma_update(None, "user_version", LIBRARY_SCHEMA_VERSION)
-            .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         tx.commit()
             .map_err(|e| format!("AGENT_SCHEMA_MIGRATION_FAILED:{e}"))?;
         Ok(true)
@@ -538,6 +842,8 @@ pub fn migrate_library_file(
         current_version: LIBRARY_SCHEMA_VERSION,
         backup_path,
         backup_sha256,
+        compatibility_repair_applied: false,
+        schema_contract_status: LibraryV14SchemaContractStatus::CurrentV14,
     })
 }
 
@@ -711,6 +1017,11 @@ fn migrate_v13_hotspot_layout_schema(tx: &Transaction<'_>) -> Result<(), String>
     )
     .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))?;
     tx.execute_batch(include_str!("schema.sql"))
+        .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))
+}
+
+fn migrate_v14_import_schema(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(include_str!("import_schema.sql"))
         .map_err(|error| format!("AGENT_SCHEMA_MIGRATION_FAILED:{error}"))
 }
 
@@ -2632,9 +2943,7 @@ impl<'a> AgentRepository<'a> {
         mutation: F,
     ) -> Result<Value, String>
     where
-        F: FnOnce(
-            &Transaction<'_>,
-        ) -> Result<(Value, Option<AgentArtifactRecord>), String>,
+        F: FnOnce(&Transaction<'_>) -> Result<(Value, Option<AgentArtifactRecord>), String>,
     {
         let expected_operation_key =
             self.operation_key(&fence.run_id, plan_version, step_id, tool_name, action_hash)?;
@@ -3994,7 +4303,366 @@ mod tests {
     }
 
     #[test]
-    fn v9_file_migrates_to_v13_with_backup_and_new_contract() {
+    fn known_precontract_v14_empty_governance_repairs_with_backup_and_is_idempotent() {
+        let database = precontract_v14_test_path("empty");
+        let expected_backup = database.with_file_name(format!(
+            "{}.pre-v14-contract.11.sqlite",
+            database.file_stem().unwrap().to_string_lossy()
+        ));
+        cleanup_test_file(&database);
+        cleanup_test_file(&expected_backup);
+        create_known_precontract_v14_fixture(&database, false);
+
+        let before =
+            crate::inspect_library_v14_schema_contract_file(&database, "project-default").unwrap();
+        assert_eq!(
+            before.status,
+            LibraryV14SchemaContractStatus::KnownPrecontractV14
+        );
+        let migration = migrate_library_file(&database, "project-default", 11, true).unwrap();
+        assert!(migration.compatibility_repair_applied);
+        assert_eq!(
+            migration.schema_contract_status,
+            LibraryV14SchemaContractStatus::CurrentV14
+        );
+        assert_eq!(
+            migration.backup_path.as_deref(),
+            Some(expected_backup.as_path())
+        );
+        assert_eq!(
+            migration.backup_sha256,
+            Some(crate::sha256_file(&expected_backup).unwrap())
+        );
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_file(&expected_backup, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::KnownPrecontractV14
+        );
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_file(&database, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::CurrentV14
+        );
+
+        let second = migrate_library_file(&database, "project-default", 12, true).unwrap();
+        assert!(!second.compatibility_repair_applied);
+        assert!(second.backup_path.is_none());
+        assert!(second.backup_sha256.is_none());
+        assert!(!database
+            .with_file_name(format!(
+                "{}.pre-v14-contract.12.sqlite",
+                database.file_stem().unwrap().to_string_lossy()
+            ))
+            .exists());
+
+        cleanup_test_file(&database);
+        cleanup_test_file(&expected_backup);
+    }
+
+    #[test]
+    fn known_precontract_v14_preserves_governance_rows_and_composite_foreign_keys() {
+        let database = precontract_v14_test_path("populated");
+        let expected_backup = database.with_file_name(format!(
+            "{}.pre-v14-contract.21.sqlite",
+            database.file_stem().unwrap().to_string_lossy()
+        ));
+        cleanup_test_file(&database);
+        cleanup_test_file(&expected_backup);
+        create_known_precontract_v14_fixture(&database, true);
+        let before_connection = Connection::open(&database).unwrap();
+        let before = v14_compatibility_fingerprint(
+            &before_connection,
+            "project-default",
+            LibraryV14SchemaContractStatus::KnownPrecontractV14,
+        )
+        .unwrap();
+        drop(before_connection);
+
+        migrate_library_file(&database, "project-default", 21, false).unwrap();
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        let after = v14_compatibility_fingerprint(
+            &connection,
+            "project-default",
+            LibraryV14SchemaContractStatus::CurrentV14,
+        )
+        .unwrap();
+        assert_eq!(after, before);
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT source_database||':'||provider_record_id FROM paper_source_records WHERE id='source-1'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "WOS:WOS:1"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT normalized_value FROM paper_identity_aliases WHERE id='alias-1'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "10.1000/example"
+        );
+        drop(connection);
+
+        cleanup_test_file(&database);
+        cleanup_test_file(&expected_backup);
+    }
+
+    #[test]
+    fn unknown_invalid_v14_is_rejected_without_backup_or_mutation() {
+        let database = precontract_v14_test_path("unknown-index");
+        let unexpected_backup = database.with_file_name(format!(
+            "{}.pre-v14-contract.31.sqlite",
+            database.file_stem().unwrap().to_string_lossy()
+        ));
+        cleanup_test_file(&database);
+        cleanup_test_file(&unexpected_backup);
+        create_known_precontract_v14_fixture(&database, false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "CREATE INDEX idx_unexpected_source_candidate ON paper_source_records(candidate_id)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let before_hash = crate::sha256_file(&database).unwrap();
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_file(&database, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::UnknownInvalidV14
+        );
+        assert!(migrate_library_file(&database, "project-default", 31, true).is_err());
+        assert_eq!(crate::sha256_file(&database).unwrap(), before_hash);
+        assert!(!unexpected_backup.exists());
+
+        cleanup_test_file(&database);
+    }
+
+    #[test]
+    fn precontract_v14_unknown_foreign_key_shape_is_rejected() {
+        let database = precontract_v14_test_path("unknown-foreign-key");
+        cleanup_test_file(&database);
+        create_known_precontract_v14_fixture(&database, false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE paper_identity_aliases_wrong_fk(
+                   id TEXT PRIMARY KEY,
+                   project_id TEXT NOT NULL,
+                   paper_id TEXT NOT NULL,
+                   alias_kind TEXT NOT NULL CHECK(alias_kind IN('doi','provider-record','canonical-url')),
+                   normalized_value TEXT NOT NULL,
+                   source_record_id TEXT,
+                   commit_id TEXT NOT NULL,
+                   created_at_ms INTEGER NOT NULL,
+                   UNIQUE(project_id,alias_kind,normalized_value),
+                   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                   FOREIGN KEY(source_record_id) REFERENCES paper_source_records(id) ON DELETE SET NULL,
+                   FOREIGN KEY(commit_id) REFERENCES paper_import_commits(id) ON DELETE RESTRICT,
+                   FOREIGN KEY(normalized_value) REFERENCES paper_import_commits(id) ON DELETE RESTRICT
+                 );
+                 INSERT INTO paper_identity_aliases_wrong_fk SELECT * FROM paper_identity_aliases;
+                 DROP TABLE paper_identity_aliases;
+                 ALTER TABLE paper_identity_aliases_wrong_fk RENAME TO paper_identity_aliases;
+                 CREATE INDEX idx_paper_identity_aliases_project_paper
+                   ON paper_identity_aliases(project_id,paper_id,alias_kind);",
+            )
+            .unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        drop(connection);
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_file(&database, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::UnknownInvalidV14
+        );
+        assert!(migrate_library_file(&database, "project-default", 32, true).is_err());
+        cleanup_test_file(&database);
+    }
+
+    #[test]
+    fn precontract_v14_cross_project_identity_mismatch_is_rejected() {
+        let database = precontract_v14_test_path("cross-project");
+        cleanup_test_file(&database);
+        create_known_precontract_v14_fixture(&database, false);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "INSERT INTO papers(
+                   id,project_id,source,title,abstract,field,year,created_at,updated_at,search_blob
+                 ) VALUES(
+                   'paper-other','project-other','fixture','Other project paper','',
+                   'fixture',2026,'now','now','other project paper'
+                 )",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO paper_import_commits(
+                   id,project_id,batch_id,client_commit_id,preview_id,preview_hash,
+                   batch_version,status,before_revision,after_revision,paper_count_before,
+                   paper_count_after,counts_json,created_at_ms,completed_at_ms
+                 ) VALUES(
+                   'commit-cross','project-default','batch-cross','client-cross','preview-cross',?1,
+                   1,'committed',0,1,1,1,'{}',1,2
+                 )",
+                params!["c".repeat(64)],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO paper_source_records(
+                   id,project_id,paper_id,commit_id,batch_id,candidate_id,source_database,
+                   producer_version,metadata_json,provenance_json,created_at_ms
+                 ) VALUES(
+                   'source-cross','project-default','paper-other','commit-cross','batch-cross',
+                   'candidate-cross','WOS','fixture-v1','{}','{}',3
+                 )",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        drop(connection);
+        let assessment =
+            crate::inspect_library_v14_schema_contract_file(&database, "project-default").unwrap();
+        assert_eq!(
+            assessment.status,
+            LibraryV14SchemaContractStatus::UnknownInvalidV14
+        );
+        assert_eq!(
+            assessment.error_code.as_deref(),
+            Some(
+                "LIBRARY_SCHEMA_V14_IMPORT_CONTRACT_INVALID:PRECONTRACT_SOURCE_PAPER_PROJECT_MISMATCH"
+            )
+        );
+        assert!(migrate_library_file(&database, "project-default", 33, true).is_err());
+        cleanup_test_file(&database);
+    }
+
+    #[test]
+    fn precontract_v14_existing_backup_aborts_before_source_mutation() {
+        let database = precontract_v14_test_path("backup-exists");
+        let backup = database.with_file_name(format!(
+            "{}.pre-v14-contract.34.sqlite",
+            database.file_stem().unwrap().to_string_lossy()
+        ));
+        cleanup_test_file(&database);
+        cleanup_test_file(&backup);
+        create_known_precontract_v14_fixture(&database, true);
+        let before_hash = crate::sha256_file(&database).unwrap();
+        fs::write(&backup, b"do-not-overwrite").unwrap();
+
+        assert_eq!(
+            migrate_library_file(&database, "project-default", 34, false).unwrap_err(),
+            "AGENT_MIGRATION_BACKUP_EXISTS"
+        );
+        assert_eq!(crate::sha256_file(&database).unwrap(), before_hash);
+        assert_eq!(fs::read(&backup).unwrap(), b"do-not-overwrite");
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_file(&database, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::KnownPrecontractV14
+        );
+
+        cleanup_test_file(&database);
+        cleanup_test_file(&backup);
+    }
+
+    #[test]
+    fn precontract_v14_backup_space_guard_rejects_insufficient_capacity() {
+        let source_size = 1024_u64;
+        assert_eq!(
+            ensure_migration_backup_space(16 * 1024 * 1024 + source_size - 1, source_size)
+                .unwrap_err(),
+            "AGENT_MIGRATION_BACKUP_SPACE_INSUFFICIENT"
+        );
+        ensure_migration_backup_space(16 * 1024 * 1024 + source_size, source_size).unwrap();
+    }
+
+    #[test]
+    fn known_precontract_v14_transaction_rollback_restores_original_contract() {
+        let database = precontract_v14_test_path("rollback");
+        cleanup_test_file(&database);
+        create_known_precontract_v14_fixture(&database, true);
+        let mut connection = Connection::open(&database).unwrap();
+        let before = v14_compatibility_fingerprint(
+            &connection,
+            "project-default",
+            LibraryV14SchemaContractStatus::KnownPrecontractV14,
+        )
+        .unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        repair_known_precontract_v14(&transaction).unwrap();
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_connection(&transaction, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::CurrentV14
+        );
+        transaction.rollback().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        let after = v14_compatibility_fingerprint(
+            &connection,
+            "project-default",
+            LibraryV14SchemaContractStatus::KnownPrecontractV14,
+        )
+        .unwrap();
+        assert_eq!(after, before);
+        drop(connection);
+        cleanup_test_file(&database);
+    }
+
+    #[test]
+    fn v9_file_migrates_to_v14_with_backup_and_new_contract() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4010,7 +4678,7 @@ mod tests {
         ));
         cleanup_test_file(&database);
         let expected_backup = database.with_file_name(format!(
-            "{}.pre-schema-v13.123.sqlite",
+            "{}.pre-schema-v14.123.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&expected_backup);
@@ -4019,7 +4687,7 @@ mod tests {
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
         let migration = migrate_library_file(&database, "project-default", 123, true).unwrap();
         assert_eq!(migration.previous_version, 9);
-        assert_eq!(migration.current_version, 13);
+        assert_eq!(migration.current_version, 14);
         let backup = migration.backup_path.unwrap();
         let backup_hash = crate::sha256_file(&backup).unwrap();
         assert_eq!(
@@ -4030,7 +4698,7 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .contains("pre-schema-v13"));
+            .contains("pre-schema-v14"));
         assert_eq!(
             crate::validate_library_candidate_file(&backup, "project-default").unwrap(),
             before_state
@@ -4043,7 +4711,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         assert_same_v20_state(
             &crate::validate_library_candidate_connection(&connection, "project-default").unwrap(),
@@ -4099,14 +4767,14 @@ mod tests {
     }
 
     #[test]
-    fn v10_v11_and_v12_files_migrate_to_v13_without_losing_v20_or_agent_state() {
+    fn v10_through_v13_files_migrate_to_v14_without_losing_v20_or_agent_state() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
             .join("agent-schema-tests");
         fs::create_dir_all(&directory).unwrap();
 
-        for source_version in [10_i64, 11_i64, 12_i64] {
+        for source_version in [10_i64, 11_i64, 12_i64, 13_i64] {
             let database = directory.join(format!(
                 "v{source_version}-{}-{}.sqlite",
                 std::process::id(),
@@ -4132,6 +4800,9 @@ mod tests {
                 if source_version >= 12 {
                     migrate_v12_semantic_schema(&transaction).unwrap();
                 }
+                if source_version >= 13 {
+                    migrate_v13_hotspot_layout_schema(&transaction).unwrap();
+                }
                 transaction
                     .pragma_update(None, "user_version", source_version)
                     .unwrap();
@@ -4140,18 +4811,19 @@ mod tests {
 
             let before_state =
                 crate::validate_library_candidate_file(&database, "project-default").unwrap();
-            let migration = migrate_library_file(
-                &database,
-                "project-default",
-                1_200 + source_version,
-                true,
-            )
-            .unwrap();
+            let migration =
+                migrate_library_file(&database, "project-default", 1_200 + source_version, true)
+                    .unwrap();
             assert_eq!(
                 (migration.previous_version, migration.current_version),
-                (source_version, 13)
+                (source_version, 14)
             );
             let backup = migration.backup_path.unwrap();
+            let backup_hash = crate::sha256_file(&backup).unwrap();
+            assert_eq!(
+                migration.backup_sha256.as_deref(),
+                Some(backup_hash.as_str())
+            );
             assert_eq!(
                 crate::validate_library_candidate_file(&backup, "project-default").unwrap(),
                 before_state
@@ -4159,18 +4831,15 @@ mod tests {
 
             let connection = Connection::open(&database).unwrap();
             assert_same_v20_state(
-                &crate::validate_library_candidate_connection(
-                    &connection,
-                    "project-default",
-                )
-                .unwrap(),
+                &crate::validate_library_candidate_connection(&connection, "project-default")
+                    .unwrap(),
                 &before_state,
             );
             assert_eq!(
                 connection
                     .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                     .unwrap(),
-                13
+                14
             );
             assert_eq!(
                 connection
@@ -4188,6 +4857,14 @@ mod tests {
                     .unwrap(),
                 0
             );
+            for table in [
+                "paper_identity_aliases",
+                "paper_source_records",
+                "paper_import_commits",
+                "paper_import_commit_items",
+            ] {
+                assert!(table_exists(&connection, table).unwrap(), "missing {table}");
+            }
             drop(connection);
             cleanup_test_file(&database);
             cleanup_test_file(&backup);
@@ -4195,7 +4872,84 @@ mod tests {
     }
 
     #[test]
-    fn v8_seed_shape_migrates_directly_to_v13() {
+    fn too_new_library_is_rejected_without_backup_or_mutation() {
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("agent-schema-tests");
+        fs::create_dir_all(&directory).unwrap();
+        let database = directory.join(format!("v15-{}.sqlite", std::process::id()));
+        let backup = database.with_file_name(format!(
+            "{}.pre-schema-v14.1415.sqlite",
+            database.file_stem().unwrap().to_string_lossy()
+        ));
+        cleanup_test_file(&database);
+        cleanup_test_file(&backup);
+        create_v20_migration_fixture(&database, LIBRARY_SCHEMA_VERSION + 1);
+        let before_hash = crate::sha256_file(&database).unwrap();
+
+        assert_eq!(
+            migrate_library_file(&database, "project-default", 1415, true).unwrap_err(),
+            "LIBRARY_SCHEMA_TOO_NEW"
+        );
+        assert_eq!(crate::sha256_file(&database).unwrap(), before_hash);
+        assert!(!backup.exists());
+        assert_eq!(
+            crate::validate_library_candidate_file(&database, "project-default").unwrap_err(),
+            "LIBRARY_SCHEMA_TOO_NEW"
+        );
+
+        cleanup_test_file(&database);
+        cleanup_test_file(&backup);
+    }
+
+    #[test]
+    fn malformed_declared_v14_library_is_rejected_without_schema_repair() {
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("agent-schema-tests");
+        fs::create_dir_all(&directory).unwrap();
+        let database = directory.join(format!("v14-malformed-{}.sqlite", std::process::id()));
+        let backup = database.with_file_name(format!(
+            "{}.pre-schema-v14.1414.sqlite",
+            database.file_stem().unwrap().to_string_lossy()
+        ));
+        cleanup_test_file(&database);
+        cleanup_test_file(&backup);
+        {
+            let connection = Connection::open(&database).unwrap();
+            crate::ensure_library_schema(&connection).unwrap();
+            connection
+                .execute_batch("DROP INDEX idx_paper_import_commit_items_paper;")
+                .unwrap();
+        }
+
+        let error = migrate_library_file(&database, "project-default", 1414, true).unwrap_err();
+        assert!(
+            error.contains("MISSING_INDEX:idx_paper_import_commit_items_paper"),
+            "{error}"
+        );
+        assert!(!backup.exists());
+        let connection = Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_paper_import_commit_items_paper'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        drop(connection);
+
+        cleanup_test_file(&database);
+        cleanup_test_file(&backup);
+    }
+
+    #[test]
+    fn v8_seed_shape_migrates_directly_to_v14() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4218,7 +4972,7 @@ mod tests {
         let migration = migrate_library_file(&database, "project-default", 456, false).unwrap();
         assert_eq!(
             (migration.previous_version, migration.current_version),
-            (8, 13)
+            (8, 14)
         );
         assert!(migration.backup_path.is_none());
         let connection = Connection::open(&database).unwrap();
@@ -4235,12 +4989,14 @@ mod tests {
                         hotspot_identity_version
                  FROM v20_analysis_snapshots WHERE id='snapshot-1'",
                 [],
-                |row| Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                )),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(
@@ -4256,14 +5012,14 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         drop(connection);
         cleanup_test_file(&database);
     }
 
     #[test]
-    fn repeated_v13_open_is_idempotent_and_does_not_create_another_backup() {
+    fn repeated_v14_open_is_idempotent_and_does_not_create_another_backup() {
         let directory = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -4271,11 +5027,11 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v11-idempotent-{}.sqlite", std::process::id()));
         let first_backup = database.with_file_name(format!(
-            "{}.pre-schema-v13.1003.sqlite",
+            "{}.pre-schema-v14.1003.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let second_backup = database.with_file_name(format!(
-            "{}.pre-schema-v13.1004.sqlite",
+            "{}.pre-schema-v14.1004.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let first_partial = first_backup.with_file_name(format!(
@@ -4289,7 +5045,7 @@ mod tests {
         fs::write(&first_partial, b"stale-partial").unwrap();
 
         let first = migrate_library_file(&database, "project-default", 1003, true).unwrap();
-        assert_eq!((first.previous_version, first.current_version), (8, 13));
+        assert_eq!((first.previous_version, first.current_version), (8, 14));
         assert_eq!(first.backup_path.as_deref(), Some(first_backup.as_path()));
         assert!(!first_partial.exists());
         assert!(!PathBuf::from(format!("{}-wal", first_partial.to_string_lossy())).exists());
@@ -4299,7 +5055,7 @@ mod tests {
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
 
         let second = migrate_library_file(&database, "project-default", 1004, true).unwrap();
-        assert_eq!((second.previous_version, second.current_version), (13, 13));
+        assert_eq!((second.previous_version, second.current_version), (14, 14));
         assert!(second.backup_path.is_none());
         assert!(!second_backup.exists());
         assert_eq!(
@@ -4322,11 +5078,11 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v11-concurrent-{}.sqlite", std::process::id()));
         let backup_one = database.with_file_name(format!(
-            "{}.pre-schema-v13.2001.sqlite",
+            "{}.pre-schema-v14.2001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         let backup_two = database.with_file_name(format!(
-            "{}.pre-schema-v13.2002.sqlite",
+            "{}.pre-schema-v14.2002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         for path in [&database, &backup_one, &backup_two] {
@@ -4358,7 +5114,7 @@ mod tests {
         assert_eq!(
             results
                 .iter()
-                .filter(|result| result.previous_version == 13 && result.backup_path.is_none())
+                .filter(|result| result.previous_version == 14 && result.backup_path.is_none())
                 .count(),
             1
         );
@@ -4371,7 +5127,7 @@ mod tests {
         );
         let migrated =
             crate::validate_library_candidate_file(&database, "project-default").unwrap();
-        assert_eq!(migrated.schema_version, 13);
+        assert_eq!(migrated.schema_version, 14);
         assert_eq!(
             (
                 migrated.paper_count,
@@ -4395,7 +5151,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v0-existing-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v13.3001.sqlite",
+            "{}.pre-schema-v14.3001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4437,7 +5193,7 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join(format!("v8-backup-exists-{}.sqlite", std::process::id()));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v13.1001.sqlite",
+            "{}.pre-schema-v14.1001.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -4484,7 +5240,7 @@ mod tests {
             std::process::id()
         ));
         let backup = database.with_file_name(format!(
-            "{}.pre-schema-v13.1002.sqlite",
+            "{}.pre-schema-v14.1002.sqlite",
             database.file_stem().unwrap().to_string_lossy()
         ));
         cleanup_test_file(&database);
@@ -5416,6 +6172,196 @@ mod tests {
         assert_eq!(actual.hotspot_count, expected.hotspot_count);
         assert_eq!(actual.membership_count, expected.membership_count);
         assert_eq!(actual.snapshot_id, expected.snapshot_id);
+    }
+
+    fn precontract_v14_test_path(label: &str) -> PathBuf {
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("agent-schema-tests");
+        fs::create_dir_all(&directory).unwrap();
+        directory.join(format!(
+            "pre-v14-{label}-{}-{}.sqlite",
+            std::process::id(),
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(':', "-")
+        ))
+    }
+
+    fn create_known_precontract_v14_fixture(path: &Path, populated: bool) {
+        let connection = Connection::open(path).unwrap();
+        crate::ensure_library_schema(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO papers(
+                   id,project_id,source,title,abstract,authors,categories,field,
+                   published_date,year,url,doi,created_at,updated_at,search_blob
+                 ) VALUES(
+                   'paper-1','project-default','fixture','Fixture paper','',
+                   '[\"Alice Example\"]','[\"fixture\"]','fixture',NULL,2026,
+                   'https://example.invalid/paper-1','10.1000/example','now','now','fixture paper'
+                 )",
+                [],
+            )
+            .unwrap();
+        if populated {
+            connection
+                .execute(
+                    "INSERT INTO paper_import_commits(
+                       id,project_id,batch_id,client_commit_id,preview_id,preview_hash,
+                       batch_version,status,before_revision,after_revision,paper_count_before,
+                       paper_count_after,counts_json,created_at_ms,completed_at_ms
+                     ) VALUES(
+                       'commit-1','project-default','batch-1','client-1','preview-1',?1,
+                       1,'committed',0,1,0,1,'{\"inserted\":1}',1,2
+                     )",
+                    params!["a".repeat(64)],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO paper_source_records(
+                       id,project_id,paper_id,commit_id,batch_id,candidate_id,source_database,
+                       producer_version,provider_record_id,canonical_locator,record_type,
+                       full_text_status,metadata_json,provenance_json,created_at_ms
+                     ) VALUES(
+                       'source-1','project-default','paper-1','commit-1','batch-1','candidate-1',
+                       'WOS','fixture-v1','WOS:1','https://example.invalid/record/1',
+                       'journal-article','link-only','{\"title\":\"Fixture paper\"}',
+                       '{\"title\":\"source\"}',2
+                     )",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO paper_identity_aliases(
+                       id,project_id,paper_id,alias_kind,normalized_value,source_record_id,
+                       commit_id,created_at_ms
+                     ) VALUES(
+                       'alias-1','project-default','paper-1','doi','10.1000/example',
+                       'source-1','commit-1',3
+                     )",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO paper_import_commit_items(
+                       commit_id,candidate_id,row_index,action,paper_id,before_paper_json,
+                       after_paper_json,after_fingerprint,source_record_id,created_at_ms
+                     ) VALUES(
+                       'commit-1','candidate-1',0,'insert','paper-1',NULL,
+                       '{\"id\":\"paper-1\"}',?1,'source-1',4
+                     )",
+                    params!["b".repeat(64)],
+                )
+                .unwrap();
+        }
+
+        connection
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE paper_source_records_precontract_stage AS
+                   SELECT * FROM paper_source_records;
+                 CREATE TABLE paper_identity_aliases_precontract_stage AS
+                   SELECT * FROM paper_identity_aliases;
+                 CREATE TABLE paper_import_commit_items_precontract_stage AS
+                   SELECT * FROM paper_import_commit_items;
+                 DROP TABLE paper_identity_aliases;
+                 DROP TABLE paper_import_commit_items;
+                 DROP TABLE paper_source_records;
+
+                 CREATE TABLE paper_source_records(
+                   id TEXT PRIMARY KEY,
+                   project_id TEXT NOT NULL,
+                   paper_id TEXT NOT NULL,
+                   commit_id TEXT NOT NULL,
+                   batch_id TEXT NOT NULL,
+                   candidate_id TEXT NOT NULL,
+                   source_database TEXT NOT NULL,
+                   producer_version TEXT NOT NULL,
+                   provider_record_id TEXT,
+                   canonical_locator TEXT,
+                   record_type TEXT,
+                   full_text_status TEXT,
+                   metadata_json TEXT NOT NULL,
+                   provenance_json TEXT NOT NULL,
+                   created_at_ms INTEGER NOT NULL,
+                   UNIQUE(project_id,batch_id,candidate_id),
+                   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                   FOREIGN KEY(commit_id) REFERENCES paper_import_commits(id) ON DELETE RESTRICT
+                 );
+                 CREATE INDEX idx_paper_source_records_project_paper
+                   ON paper_source_records(project_id,paper_id,created_at_ms DESC);
+                 CREATE INDEX idx_paper_source_records_provider
+                   ON paper_source_records(project_id,source_database,provider_record_id);
+
+                 CREATE TABLE paper_identity_aliases(
+                   id TEXT PRIMARY KEY,
+                   project_id TEXT NOT NULL,
+                   paper_id TEXT NOT NULL,
+                   alias_kind TEXT NOT NULL CHECK(alias_kind IN('doi','provider-record','canonical-url')),
+                   normalized_value TEXT NOT NULL,
+                   source_record_id TEXT,
+                   commit_id TEXT NOT NULL,
+                   created_at_ms INTEGER NOT NULL,
+                   UNIQUE(project_id,alias_kind,normalized_value),
+                   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                   FOREIGN KEY(source_record_id) REFERENCES paper_source_records(id) ON DELETE SET NULL,
+                   FOREIGN KEY(commit_id) REFERENCES paper_import_commits(id) ON DELETE RESTRICT
+                 );
+                 CREATE INDEX idx_paper_identity_aliases_project_paper
+                   ON paper_identity_aliases(project_id,paper_id,alias_kind);
+
+                 CREATE TABLE paper_import_commit_items(
+                   commit_id TEXT NOT NULL,
+                   candidate_id TEXT NOT NULL,
+                   row_index INTEGER NOT NULL,
+                   action TEXT NOT NULL CHECK(action IN('insert','merge','keep-separate','skip')),
+                   paper_id TEXT,
+                   before_paper_json TEXT,
+                   after_paper_json TEXT,
+                   after_fingerprint TEXT,
+                   source_record_id TEXT,
+                   created_at_ms INTEGER NOT NULL,
+                   PRIMARY KEY(commit_id,candidate_id),
+                   FOREIGN KEY(commit_id) REFERENCES paper_import_commits(id) ON DELETE CASCADE,
+                   FOREIGN KEY(source_record_id) REFERENCES paper_source_records(id) ON DELETE SET NULL
+                 );
+                 CREATE INDEX idx_paper_import_commit_items_paper
+                   ON paper_import_commit_items(paper_id,commit_id);
+
+                 INSERT INTO paper_source_records SELECT * FROM paper_source_records_precontract_stage;
+                 INSERT INTO paper_identity_aliases SELECT * FROM paper_identity_aliases_precontract_stage;
+                 INSERT INTO paper_import_commit_items SELECT * FROM paper_import_commit_items_precontract_stage;
+                 DROP TABLE paper_source_records_precontract_stage;
+                 DROP TABLE paper_identity_aliases_precontract_stage;
+                 DROP TABLE paper_import_commit_items_precontract_stage;
+                 DROP INDEX idx_papers_project_identity;",
+            )
+            .unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            crate::inspect_library_v14_schema_contract_connection(&connection, "project-default")
+                .unwrap()
+                .status,
+            LibraryV14SchemaContractStatus::KnownPrecontractV14
+        );
     }
 
     fn create_complete_v9_migration_fixture(path: &Path) {

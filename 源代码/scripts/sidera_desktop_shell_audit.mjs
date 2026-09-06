@@ -5,6 +5,9 @@ const root = process.cwd();
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 const appSource = read("src/App.tsx");
 const agentSource = read("src/components/AgentDualBackgroundPage.tsx");
+const immersiveSource = read("src/components/AgentImmersiveStarfieldCanvas.tsx");
+const theorySource = read("src/components/AgentTheoryBackgroundCanvas.tsx");
+const galaxyCanvasSource = read("src/components/App17GalaxyCanvas.tsx");
 const splashSource = read("src/components/SideraSplash.tsx");
 const titleBarSource = read("src/components/SideraTitleBar.tsx");
 const htmlSource = read("index.html");
@@ -35,13 +38,26 @@ check(
   "The splash completion signal comes from the mounted background onReady path.",
 );
 check(
+  "Agent startup requires a real dynamic first frame",
+  !appSource.includes("SIDERA_AGENT_BACKGROUND_READY_TIMEOUT_MS")
+    && !appSource.includes("动态星图初始化超时，已使用静态背景进入应用。")
+    && agentSource.includes("await delay(0)")
+    && !agentSource.includes("await nextAnimationFrame()")
+    && immersiveSource.includes("renderSceneAndReportReady(performance.now())")
+    && immersiveSource.includes("renderer.render(scene, camera)")
+    && theorySource.includes("onFirstFrame={() =>")
+    && galaxyCanvasSource.includes("onFirstFrameRef.current?.()")
+    && galaxyCanvasSource.includes("render(performance.now())"),
+  "No timer may promote startup. Both dynamic renderers synchronously report their first error-free WebGL frame.",
+);
+check(
   "splash timing and recovery routes exist",
   appSource.includes("Math.max(0, 1000 - elapsed)")
     && appSource.includes("Math.max(0, 2000 - elapsed)")
     && splashSource.includes("使用静态背景继续")
     && splashSource.includes("打开设置")
     && splashSource.includes("重试"),
-  "Minimum display, delayed status, retry, settings, and static fallback are present.",
+  "Minimum display, delayed status, retry, settings, and an explicit user-selected diagnostic fallback are present.",
 );
 check(
   "startup surface is black before React",
@@ -58,6 +74,21 @@ check(
   "The locked Sidera wordmark and source line are rendered.",
 );
 check(
+  "splash feedback is outside brand flow",
+  splashSource.includes('className="sidera-splash__feedback"')
+    && /\.sidera-splash__feedback\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*calc\(100% \+ 34px\);/m.test(cssSource)
+    && !/\.sidera-splash__content\s*\{[^}]*?min-height:/m.test(cssSource),
+  "Loading and failure feedback use an absolute layer below the unchanged brand-flow boundary.",
+);
+check(
+  "splash feedback keeps live recovery semantics",
+  splashSource.includes('aria-live="polite"')
+    && splashSource.includes('className="sidera-splash__status"')
+    && splashSource.includes('className="sidera-splash__failure"')
+    && cssSource.includes("@keyframes sidera-status-in"),
+  "Status and failure content retain live semantics and only animate their own opacity and offset.",
+);
+check(
   "title bar uses scoped native window operations",
   titleBarSource.includes("getCurrentWindow")
     && titleBarSource.includes(".minimize()")
@@ -65,6 +96,17 @@ check(
     && titleBarSource.includes(".close()")
     && titleBarSource.includes("isDesktopRuntime"),
   "Native window operations are guarded and browser layout remains inert.",
+);
+check(
+  "maximize paths share a guarded geometry transition",
+  titleBarSource.includes("const handleToggleMaximize = useCallback(async () =>")
+    && titleBarSource.includes("onBeforeToggleMaximize")
+    && titleBarSource.includes("onAfterToggleMaximize")
+    && titleBarSource.includes("SIDERA_WINDOW_RESIZE_QUIET_MS = 120")
+    && titleBarSource.includes("SIDERA_WINDOW_RESIZE_FALLBACK_MS = 900")
+    && titleBarSource.includes("finally")
+    && titleBarSource.includes("maximizeToggleActiveRef.current"),
+  "The button and title-bar double click use one locked async handler with settle and finally recovery.",
 );
 
 const mainWindow = tauriConfig.app?.windows?.find((window) => window.label === "main");

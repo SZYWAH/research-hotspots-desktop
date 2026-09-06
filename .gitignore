@@ -14,6 +14,10 @@
 /源代码/work/
 /源代码/.visual-review/
 /源代码/outputs/
+/源代码/output/
+/源代码/.codex-runtime/
+/源代码/.codex-build-worktrees/
+/.codex-runtime/
 
 # Frontend build artifacts and dependency stores.
 /源代码/node_modules/
@@ -23,6 +27,7 @@
 
 # Rust and Tauri build output.
 /源代码/src-tauri/target/
+/源代码/src-tauri/core/target/
 /源代码/src-tauri/gen/
 
 # Local editor and operating-system files.

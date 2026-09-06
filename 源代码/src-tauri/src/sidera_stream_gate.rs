@@ -55,9 +55,7 @@ impl SideraAssistantStreamGate {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        SideraAssistantStreamGate, SideraAssistantStreamMode, SideraTextDeltaDecision,
-    };
+    use super::{SideraAssistantStreamGate, SideraAssistantStreamMode, SideraTextDeltaDecision};
 
     #[test]
     fn direct_text_streams_from_the_first_delta() {

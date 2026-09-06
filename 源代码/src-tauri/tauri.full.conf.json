@@ -10,7 +10,13 @@
       "../release-assets/semantic-model/special_tokens_map.json": "semantic-model/special_tokens_map.json",
       "../release-assets/semantic-model/tokenizer_config.json": "semantic-model/tokenizer_config.json",
       "../resources/semantic-model/semantic-model-manifest.json": "semantic-model/semantic-model-manifest.json",
-      "../resources/semantic-model/LICENSE-MIT.txt": "semantic-model/LICENSE-MIT.txt"
+      "../resources/semantic-model/LICENSE-MIT.txt": "semantic-model/LICENSE-MIT.txt",
+      "../release-assets/ocr-model/det/inference.onnx": "ocr-model/det/inference.onnx",
+      "../release-assets/ocr-model/det/inference.yml": "ocr-model/det/inference.yml",
+      "../release-assets/ocr-model/rec/inference.onnx": "ocr-model/rec/inference.onnx",
+      "../release-assets/ocr-model/rec/inference.yml": "ocr-model/rec/inference.yml",
+      "../release-assets/ocr-model/ocr-model-manifest.json": "ocr-model/ocr-model-manifest.json",
+      "../resources/ocr-model/LICENSE-APACHE-2.0.txt": "ocr-model/LICENSE-APACHE-2.0.txt"
     }
   }
 }

@@ -1,4 +1,4 @@
-export type SourceKind = "arxiv" | "openalex" | "cnki" | "local";
+export type SourceKind = "arxiv" | "openalex" | "cnki" | "local" | "institution";
 
 export type TrendStatus = "Surging" | "Stable" | "Declining" | "Unknown";
 
@@ -315,6 +315,7 @@ export type PaperLibraryStatus = {
   databasePath: string;
   sizeBytes: number;
   paperCount: number;
+  libraryRevision: number;
 };
 
 export type CountFacet = {
@@ -509,6 +510,16 @@ export type AgentImmersiveBackgroundPaperV2 = {
  */
 export type AgentImmersiveBackgroundPayloadV2 = {
   sourceSnapshotId: string;
+  visualSourceKind: "active-v20" | "historical-v20";
+  analysisFreshness: "current" | "stale-by-library-revision";
+  visualSourceStaleReason?:
+    | "active-state-missing"
+    | "library-revision-advanced"
+    | "library-revision-and-paper-count-changed";
+  sourceLibraryRevision: number;
+  currentLibraryRevision: number;
+  sourcePaperCount: number;
+  currentPaperCount: number;
   sessionSeed: string;
   hotspots: AgentImmersiveBackgroundHotspotV2[];
   papers: AgentImmersiveBackgroundPaperV2[];

@@ -1,0 +1,13 @@
+[package]
+name = "sidera-windows-test-host-smoke"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[build-dependencies]
+embed-resource = "3"
+
+[dependencies]
+http = "1"
+research-hotspots-core = { path = "../core" }

@@ -10,6 +10,10 @@ vite.config.js
 vite.config.d.ts
 .visual-review/
 .codex-tmp/
+.codex-runtime/
+.codex-build-worktrees/
+output/
+src-tauri/core/target/
 release/
 release-assets/
 data/library/

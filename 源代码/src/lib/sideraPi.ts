@@ -140,6 +140,7 @@ export async function submitSideraPiPrompt(input: {
   sessionId: string;
   messageId: string;
   prompt: string;
+  readingContext?: import("./documentReaderContract").SideraReadingContextScope;
 }) {
   requireDesktop();
   await invoke("sidera_pi_submit_prompt", { input });

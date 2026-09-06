@@ -2,9 +2,30 @@ mod agent_model_gateway;
 mod agent_runtime;
 pub mod semantic_embedding;
 mod sidera_conversations;
+mod sidera_document_ocr;
+mod sidera_document_protocol;
+mod sidera_documents;
+mod sidera_import_review;
+mod sidera_institution_browser;
+mod sidera_institution_protocol;
+mod sidera_institution_runtime;
 mod sidera_pi_runtime;
 mod sidera_rag;
 mod sidera_stream_gate;
+mod sidera_window_host;
+
+#[cfg(feature = "dev-tools")]
+pub fn audit_document_ocr_runtime(model_root: &Path) -> Result<serde_json::Value, String> {
+    sidera_document_ocr::audit_document_ocr_runtime(model_root)
+}
+
+#[cfg(feature = "dev-tools")]
+pub fn audit_document_ocr_fixture(
+    model_root: &Path,
+    image_path: &Path,
+) -> Result<serde_json::Value, String> {
+    sidera_document_ocr::audit_document_ocr_fixture(model_root, image_path)
+}
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -13,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,6 +50,17 @@ use research_hotspots_core::agent_store::{
     migrate_library_file, AgentArtifactRecord, AgentRepository, AgentRunOverview, AgentRunRecord,
     AgentRunSnapshot, NewAgentRun,
 };
+use research_hotspots_core::institution_probe::{
+    aggregate_probe_status, build_capability_report, build_navigation_targets_with_database_sso,
+    classify_atrust_client, classify_endpoint_observation, contains_metadata_export_evidence,
+    resolve_database_sso_entry, resolve_database_sso_from_official_script, resolve_discovery_entry,
+    resolve_whu_official_script_url, safe_url_without_query, summarize_catalog,
+    unresolved_discovery_check, validate_whu_official_script_content_type,
+    validate_whu_official_script_url, validate_whu_probe_url, EndpointObservation,
+    SideraInstitutionClientProbe, SideraInstitutionEndpointCheck, SideraInstitutionEndpointStatus,
+    SideraInstitutionId, SideraInstitutionNavigationKind, SideraInstitutionProbeResult,
+    SideraInstitutionProbeStatus, WHU_DATABASE_DIRECTORY_URL, WHU_LIBRARY_HOME_URL,
+};
 use research_hotspots_core::semantic_layout::{
     multiply_matrix_vector_3d, orthogonal_procrustes_3d, project_semantic_embeddings,
     project_semantic_hotspot_centroids, scale_semantic_local_point_sets, semantic_centroid_record,
@@ -38,14 +70,20 @@ use research_hotspots_core::semantic_layout::{
 };
 use research_hotspots_core::{
     atomic_replace_file_with_rollback, create_empty_library_atomically, current_library_revision,
-    install_seed_library_atomically, read_analysis_state, read_unified_galaxy_rows,
-    read_unified_hotspot_rows, validate_active_snapshot, validate_library_candidate_connection,
+    inspect_library_v14_schema_contract_file, install_seed_library_atomically, read_analysis_state,
+    read_unified_galaxy_rows, read_unified_hotspot_rows, select_immersive_background_visual_source,
+    validate_active_snapshot, validate_library_candidate_connection,
     validate_library_candidate_file, write_snapshot_in_transaction, write_snapshot_transaction,
-    AnalysisState, FirstRunMode, SeedExpectation, SnapshotHotspot, SnapshotHotspotLineage,
+    AnalysisState, FirstRunMode, ImmersiveBackgroundAnalysisFreshness,
+    ImmersiveBackgroundVisualSourceKind, ImmersiveBackgroundVisualSourceStaleReason,
+    LibraryV14SchemaContractStatus, SeedExpectation, SnapshotHotspot, SnapshotHotspotLineage,
     SnapshotMembership, SnapshotWriteInput, UnifiedGalaxyRows, ValidatedLibraryCandidate,
     HOTSPOT_IDENTITY_VERSION, V20_ALGORITHM_VERSION,
 };
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use rusqlite::{
+    params, params_from_iter, types::Value as SqlValue, Connection, OpenFlags, OptionalExtension,
+    Transaction, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{path::BaseDirectory, Emitter, Manager};
@@ -79,6 +117,501 @@ struct HealthCheckResult {
     export_dir_writable: Option<bool>,
     backup_dir_writable: Option<bool>,
     errors: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SideraInstitutionProbeInput {
+    institution_id: SideraInstitutionId,
+}
+
+#[derive(Clone, Debug)]
+struct RawInstitutionEndpointProbe {
+    check: SideraInstitutionEndpointCheck,
+    body: String,
+}
+
+#[derive(Clone, Debug)]
+struct RawInstitutionOfficialScriptProbe {
+    body: String,
+    safe_url: String,
+    error_code: Option<String>,
+}
+
+const INSTITUTION_PROBE_MAX_BYTES: usize = 256 * 1024;
+
+fn whu_atrust_known_paths() -> [PathBuf; 2] {
+    [
+        PathBuf::from(r"C:\Program Files (x86)\Sangfor\aTrust\aTrustTray\aTrustTray.exe"),
+        PathBuf::from(r"C:\Program Files\Sangfor\aTrust\aTrustTray\aTrustTray.exe"),
+    ]
+}
+
+fn find_whu_atrust_installation() -> Result<Option<String>, String> {
+    for path in whu_atrust_known_paths() {
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => return Ok(Some(path.display().to_string())),
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("SIDERA_INSTITUTION_ATRUST_PATH_UNREADABLE".to_string()),
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(windows)]
+fn list_windows_process_names() -> Result<Vec<String>, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err("SIDERA_INSTITUTION_PROCESS_SNAPSHOT_FAILED".to_string());
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut names = Vec::new();
+        let mut has_entry = Process32FirstW(snapshot, &mut entry) != 0;
+        while has_entry {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|value| *value == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if end > 0 {
+                names.push(String::from_utf16_lossy(&entry.szExeFile[..end]));
+            }
+            has_entry = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        Ok(names)
+    }
+}
+
+#[cfg(not(windows))]
+fn list_windows_process_names() -> Result<Vec<String>, String> {
+    Err("SIDERA_INSTITUTION_WINDOWS_REQUIRED".to_string())
+}
+
+fn probe_whu_atrust_client() -> SideraInstitutionClientProbe {
+    let installed_path = find_whu_atrust_installation();
+    let process_names = list_windows_process_names();
+    classify_atrust_client(
+        installed_path
+            .as_ref()
+            .map(Clone::clone)
+            .map_err(String::as_str),
+        process_names.as_deref().map_err(String::as_str),
+    )
+}
+
+fn institution_http_error_code(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        return "SIDERA_INSTITUTION_HTTP_TIMEOUT";
+    }
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("dns") || message.contains("resolve") {
+        "SIDERA_INSTITUTION_HTTP_DNS"
+    } else if message.contains("tls") || message.contains("certificate") {
+        "SIDERA_INSTITUTION_HTTP_TLS"
+    } else {
+        "SIDERA_INSTITUTION_HTTP_FAILED"
+    }
+}
+
+fn failed_institution_endpoint(
+    id: &str,
+    label: &str,
+    url: &str,
+    code: &str,
+    latency_ms: u128,
+) -> RawInstitutionEndpointProbe {
+    RawInstitutionEndpointProbe {
+        check: classify_endpoint_observation(
+            id,
+            label,
+            url,
+            &EndpointObservation {
+                status: None,
+                content_type: "",
+                body: "",
+                truncated: false,
+                latency_ms,
+                error_code: Some(code),
+            },
+        ),
+        body: String::new(),
+    }
+}
+
+fn probe_institution_endpoint(
+    client: &reqwest::blocking::Client,
+    id: &str,
+    label: &str,
+    url: &str,
+) -> RawInstitutionEndpointProbe {
+    if !validate_whu_probe_url(url) {
+        return failed_institution_endpoint(id, label, url, "SIDERA_INSTITUTION_URL_REJECTED", 0);
+    }
+    let started = Instant::now();
+    let response = match client.get(url).send() {
+        Ok(response) => response,
+        Err(error) => {
+            return failed_institution_endpoint(
+                id,
+                label,
+                url,
+                institution_http_error_code(&error),
+                started.elapsed().as_millis(),
+            )
+        }
+    };
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if !validate_whu_probe_url(response.url().as_str()) {
+        return failed_institution_endpoint(
+            id,
+            label,
+            url,
+            "SIDERA_INSTITUTION_URL_REJECTED",
+            started.elapsed().as_millis(),
+        );
+    }
+    let mut reader = response.take((INSTITUTION_PROBE_MAX_BYTES + 1) as u64);
+    let mut bytes = Vec::with_capacity(64 * 1024);
+    if reader.read_to_end(&mut bytes).is_err() {
+        return failed_institution_endpoint(
+            id,
+            label,
+            url,
+            "SIDERA_INSTITUTION_HTTP_READ_FAILED",
+            started.elapsed().as_millis(),
+        );
+    }
+    let truncated = bytes.len() > INSTITUTION_PROBE_MAX_BYTES;
+    bytes.truncate(INSTITUTION_PROBE_MAX_BYTES);
+    let body = String::from_utf8_lossy(&bytes).to_string();
+    let check = classify_endpoint_observation(
+        id,
+        label,
+        url,
+        &EndpointObservation {
+            status: Some(status),
+            content_type: &content_type,
+            body: &body,
+            truncated,
+            latency_ms: started.elapsed().as_millis(),
+            error_code: None,
+        },
+    );
+    RawInstitutionEndpointProbe { check, body }
+}
+
+fn failed_official_script_probe(
+    url: &str,
+    code: impl Into<String>,
+) -> RawInstitutionOfficialScriptProbe {
+    RawInstitutionOfficialScriptProbe {
+        body: String::new(),
+        safe_url: safe_url_without_query(url)
+            .unwrap_or_else(|| "https://www.lib.whu.edu.cn/whuWebsite.js".to_string()),
+        error_code: Some(code.into()),
+    }
+}
+
+fn probe_whu_official_script(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> RawInstitutionOfficialScriptProbe {
+    if !validate_whu_official_script_url(url) {
+        return failed_official_script_probe(url, "SIDERA_INSTITUTION_URL_REJECTED");
+    }
+    let response = match client.get(url).send() {
+        Ok(response) => response,
+        Err(error) => {
+            return failed_official_script_probe(url, institution_http_error_code(&error))
+        }
+    };
+    if !validate_whu_official_script_url(response.url().as_str()) {
+        return failed_official_script_probe(url, "SIDERA_INSTITUTION_URL_REJECTED");
+    }
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        return failed_official_script_probe(
+            url,
+            format!("SIDERA_INSTITUTION_HTTP_STATUS_{status}"),
+        );
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if !validate_whu_official_script_content_type(&content_type) {
+        return failed_official_script_probe(
+            url,
+            "SIDERA_INSTITUTION_DATABASE_CONFIG_CONTENT_TYPE",
+        );
+    }
+    let mut reader = response.take((INSTITUTION_PROBE_MAX_BYTES + 1) as u64);
+    let mut bytes = Vec::with_capacity(8 * 1024);
+    if reader.read_to_end(&mut bytes).is_err() {
+        return failed_official_script_probe(url, "SIDERA_INSTITUTION_HTTP_READ_FAILED");
+    }
+    if bytes.len() > INSTITUTION_PROBE_MAX_BYTES {
+        return failed_official_script_probe(url, "SIDERA_INSTITUTION_RESPONSE_TRUNCATED");
+    }
+    RawInstitutionOfficialScriptProbe {
+        body: String::from_utf8_lossy(&bytes).to_string(),
+        safe_url: safe_url_without_query(url)
+            .unwrap_or_else(|| "https://www.lib.whu.edu.cn/whuWebsite.js".to_string()),
+        error_code: None,
+    }
+}
+
+pub(crate) fn probe_whu_institution() -> Result<SideraInstitutionProbeResult, String> {
+    let client_probe = probe_whu_atrust_client();
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("SIDERA_INSTITUTION_REDIRECT_LIMIT")
+            } else if validate_whu_probe_url(attempt.url().as_str()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .user_agent("Sidera/0.22 institution-readiness")
+        .build()
+        .map_err(|_| "SIDERA_INSTITUTION_HTTP_CLIENT_FAILED".to_string())?;
+    let (home, mut directory) = thread::scope(|scope| {
+        let home_client = client.clone();
+        let directory_client = client.clone();
+        let home = scope.spawn(move || {
+            probe_institution_endpoint(
+                &home_client,
+                "library-home",
+                "图书馆官网",
+                WHU_LIBRARY_HOME_URL,
+            )
+        });
+        let directory = scope.spawn(move || {
+            probe_institution_endpoint(
+                &directory_client,
+                "database-directory",
+                "数据库导航",
+                WHU_DATABASE_DIRECTORY_URL,
+            )
+        });
+        (
+            home.join().unwrap_or_else(|_| {
+                failed_institution_endpoint(
+                    "library-home",
+                    "图书馆官网",
+                    WHU_LIBRARY_HOME_URL,
+                    "SIDERA_INSTITUTION_PROBE_THREAD_FAILED",
+                    0,
+                )
+            }),
+            directory.join().unwrap_or_else(|_| {
+                failed_institution_endpoint(
+                    "database-directory",
+                    "数据库导航",
+                    WHU_DATABASE_DIRECTORY_URL,
+                    "SIDERA_INSTITUTION_PROBE_THREAD_FAILED",
+                    0,
+                )
+            }),
+        )
+    });
+
+    let official_documents = [home.body.as_str(), directory.body.as_str()];
+    let mut database_sso = resolve_database_sso_entry(&official_documents);
+    let mut database_config_failure = None;
+    if database_sso.is_none() {
+        match resolve_whu_official_script_url(&home.body) {
+            Some(script_url) => {
+                let script_client = reqwest::blocking::Client::builder()
+                    .connect_timeout(Duration::from_secs(5))
+                    .timeout(Duration::from_secs(8))
+                    .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                        if attempt.previous().len() >= 5 {
+                            attempt.error("SIDERA_INSTITUTION_REDIRECT_LIMIT")
+                        } else if validate_whu_official_script_url(attempt.url().as_str()) {
+                            attempt.follow()
+                        } else {
+                            attempt.stop()
+                        }
+                    }))
+                    .user_agent("Sidera/0.22 institution-readiness")
+                    .build();
+                match script_client {
+                    Ok(script_client) => {
+                        let script = probe_whu_official_script(&script_client, &script_url);
+                        if let Some(code) = script.error_code {
+                            database_config_failure = Some((
+                                SideraInstitutionEndpointStatus::Failed,
+                                "SIDERA_INSTITUTION_DATABASE_CONFIG_FETCH_FAILED",
+                                format!(
+                                    "官网动态导航配置读取失败（{}；{}）；未请求 MetaAuth 或第三方跳转接口。",
+                                    script.safe_url, code
+                                ),
+                            ));
+                        } else {
+                            database_sso = resolve_database_sso_from_official_script(&script.body);
+                            if database_sso.is_none() {
+                                database_config_failure = Some((
+                                    SideraInstitutionEndpointStatus::Unresolved,
+                                    "SIDERA_INSTITUTION_DATABASE_CONFIG_UNRESOLVED",
+                                    format!(
+                                        "已读取官网动态导航配置（{}），但未解析到唯一合法的正式 SSO；将回退图书馆主页。",
+                                        script.safe_url
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        database_config_failure = Some((
+                            SideraInstitutionEndpointStatus::Failed,
+                            "SIDERA_INSTITUTION_DATABASE_CONFIG_FETCH_FAILED",
+                            "无法初始化官网动态导航配置客户端；未请求 MetaAuth 或第三方跳转接口。"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+            None => {
+                database_config_failure = Some((
+                    SideraInstitutionEndpointStatus::Unresolved,
+                    "SIDERA_INSTITUTION_DATABASE_CONFIG_UNRESOLVED",
+                    "官网响应未暴露唯一、合法的同域动态导航配置；将回退图书馆主页。".to_string(),
+                ));
+            }
+        }
+    }
+
+    let navigation_targets =
+        build_navigation_targets_with_database_sso(&official_documents, database_sso.as_deref());
+    let database_sso = navigation_targets.iter().find(|target| {
+        target.id == "database-directory"
+            && target.kind == SideraInstitutionNavigationKind::OfficialSso
+    });
+    if let Some(target) = database_sso {
+        directory.check.status = SideraInstitutionEndpointStatus::BrowserRequired;
+        directory.check.code = "SIDERA_INSTITUTION_DATABASE_SSO_REQUIRED".to_string();
+        directory.check.detail =
+            "已从武汉大学图书馆官网公开响应解析正式 SSO；该无 Cookie 探针不判断系统浏览器或应用内会话是否已经登录。"
+                .to_string();
+        directory.check.detected_entry = Some(target.display_url.clone());
+    } else if let Some((status, code, detail)) = database_config_failure {
+        directory.check.status = status;
+        directory.check.code = code.to_string();
+        directory.check.detail = detail;
+        directory.check.detected_entry = None;
+    }
+
+    let discovery_candidate = resolve_discovery_entry(&[&home.body, &directory.body]);
+    let discovery = match discovery_candidate {
+        Some(candidate) if validate_whu_probe_url(&candidate) => {
+            probe_institution_endpoint(&client, "unified-discovery", "全馆统一发现", &candidate)
+        }
+        Some(candidate) => {
+            let detected_entry = safe_url_without_query(&candidate);
+            RawInstitutionEndpointProbe {
+                check: SideraInstitutionEndpointCheck {
+                    id: "unified-discovery".to_string(),
+                    label: "全馆统一发现".to_string(),
+                    url: WHU_LIBRARY_HOME_URL.to_string(),
+                    status: SideraInstitutionEndpointStatus::BrowserRequired,
+                    http_status: None,
+                    latency_ms: None,
+                    code: "SIDERA_INSTITUTION_DISCOVERY_EXTERNAL_BROWSER".to_string(),
+                    detail: "官方入口指向外部发现服务；无 Cookie 探针不向该域名发送后台请求，也不判断登录状态。".to_string(),
+                    detected_entry,
+                },
+                body: String::new(),
+            }
+        }
+        None => RawInstitutionEndpointProbe {
+            check: unresolved_discovery_check(
+                "当前公开响应未暴露稳定的统一发现地址；该结果与系统浏览器或应用内会话是否已经登录无关。",
+            ),
+            body: String::new(),
+        },
+    };
+
+    let catalog = summarize_catalog(&directory.body);
+    let metadata_export_detected = [&home.body, &directory.body, &discovery.body]
+        .iter()
+        .any(|body| contains_metadata_export_evidence(body));
+    let client_running = client_probe.running;
+    let library_home_available = home.check.status != SideraInstitutionEndpointStatus::Failed;
+    let endpoints = vec![home.check, directory.check, discovery.check];
+    let capabilities =
+        build_capability_report(&endpoints, catalog.entry_count, metadata_export_detected);
+    let status = aggregate_probe_status(client_probe.running, &endpoints);
+    let (summary, checked_at_ms) = (
+        match status {
+            SideraInstitutionProbeStatus::Ready => {
+                "机构接入环境与公开入口已就绪；应用内登录状态请查看独立机构会话。"
+            }
+            SideraInstitutionProbeStatus::Partial if database_sso.is_some() => {
+                "aTrust 与正式数据库 SSO 路由已就绪；公开统一发现入口仍待解析。"
+            }
+            SideraInstitutionProbeStatus::Partial if client_running && library_home_available => {
+                "aTrust 与官网可达；正式数据库 SSO 尚未解析。"
+            }
+            SideraInstitutionProbeStatus::Partial => {
+                "机构公开入口部分可达；该结果不表示系统浏览器或应用内会话的登录状态。"
+            }
+            SideraInstitutionProbeStatus::Unavailable => {
+                "机构资源当前不可达，请检查 aTrust 与网络后重试。"
+            }
+        }
+        .to_string(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    );
+
+    Ok(SideraInstitutionProbeResult {
+        institution_id: SideraInstitutionId::Whu,
+        institution_name: "武汉大学".to_string(),
+        access_method: "atrust-external-session".to_string(),
+        status,
+        client: client_probe,
+        endpoints,
+        capabilities,
+        catalog,
+        navigation_targets,
+        checked_at_ms,
+        summary,
+    })
+}
+
+#[tauri::command]
+async fn sidera_institution_probe(
+    input: SideraInstitutionProbeInput,
+) -> Result<SideraInstitutionProbeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || match input.institution_id {
+        SideraInstitutionId::Whu => probe_whu_institution(),
+    })
+    .await
+    .map_err(|_| "SIDERA_INSTITUTION_PROBE_TASK_FAILED".to_string())?
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -200,6 +733,7 @@ struct PaperLibraryStatus {
     database_path: String,
     size_bytes: u64,
     paper_count: i64,
+    library_revision: i64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -290,6 +824,7 @@ struct LibraryLocationValidation {
     membership_count: i64,
     snapshot_id: Option<String>,
     database_schema_version: Option<i64>,
+    schema_contract_status: Option<LibraryV14SchemaContractStatus>,
     requires_modeling: bool,
     message: String,
 }
@@ -316,6 +851,10 @@ struct InitializeLibraryResult {
     requires_modeling: bool,
     sha256: String,
     integrity_check: String,
+    compatibility_repair_applied: bool,
+    migration_backup_path: Option<String>,
+    migration_backup_sha256: Option<String>,
+    schema_contract_status: LibraryV14SchemaContractStatus,
     summary: String,
 }
 
@@ -373,7 +912,7 @@ struct CountFacet {
     count: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PaperLibraryFacets {
     sources: Vec<CountFacet>,
@@ -489,6 +1028,7 @@ impl Default for SemanticModelingStatus {
 }
 
 const LIBRARY_BUSY: &str = "LIBRARY_BUSY";
+const LIBRARY_READ_NOT_PREPARED: &str = "LIBRARY_READ_NOT_PREPARED";
 
 #[derive(Clone, Default)]
 pub(crate) struct LibraryMutationRegistry {
@@ -498,6 +1038,206 @@ pub(crate) struct LibraryMutationRegistry {
 struct LibraryMutationPermit {
     registry: LibraryMutationRegistry,
     key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LibraryReadFingerprint {
+    created: Option<SystemTime>,
+}
+
+#[derive(Default)]
+struct LibraryReadPreparationEntry {
+    prepare_lock: Mutex<()>,
+    fingerprint: Mutex<Option<LibraryReadFingerprint>>,
+}
+
+#[derive(Default)]
+struct LibraryReadPreparationRegistry {
+    entries: Mutex<HashMap<String, Arc<LibraryReadPreparationEntry>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PaperLibraryFacetCacheKey {
+    database_key: String,
+    project_id: String,
+    library_revision: i64,
+}
+
+#[derive(Default)]
+struct PaperLibraryFacetCache {
+    entries: Mutex<HashMap<PaperLibraryFacetCacheKey, Arc<Mutex<Option<PaperLibraryFacets>>>>>,
+}
+
+static LIBRARY_READ_PREPARATIONS: OnceLock<LibraryReadPreparationRegistry> = OnceLock::new();
+static PAPER_LIBRARY_FACET_CACHE: OnceLock<PaperLibraryFacetCache> = OnceLock::new();
+
+fn library_read_fingerprint(database_path: &Path) -> Result<LibraryReadFingerprint, String> {
+    let metadata = fs::metadata(database_path).map_err(|error| {
+        format!(
+            "Cannot inspect prepared SQLite library {:?}: {error}",
+            database_path
+        )
+    })?;
+    Ok(LibraryReadFingerprint {
+        created: metadata.created().ok(),
+    })
+}
+
+impl LibraryReadPreparationRegistry {
+    fn entry(&self, database_path: &Path) -> Result<Arc<LibraryReadPreparationEntry>, String> {
+        let key = normalized_database_key(database_path);
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| "Cannot lock library read preparation registry.".to_string())?;
+        Ok(entries
+            .entry(key)
+            .or_insert_with(|| Arc::new(LibraryReadPreparationEntry::default()))
+            .clone())
+    }
+
+    fn is_prepared(
+        &self,
+        entry: &LibraryReadPreparationEntry,
+        database_path: &Path,
+    ) -> Result<bool, String> {
+        let current = match library_read_fingerprint(database_path) {
+            Ok(value) => Some(value),
+            Err(_) => None,
+        };
+        let mut prepared = entry
+            .fingerprint
+            .lock()
+            .map_err(|_| "Cannot lock library read preparation state.".to_string())?;
+        if prepared.is_some() && prepared.as_ref() == current.as_ref() {
+            return Ok(true);
+        }
+        if prepared.is_some() {
+            *prepared = None;
+            invalidate_paper_library_facets(database_path)?;
+        }
+        Ok(false)
+    }
+
+    fn prepare_if_needed<F>(
+        &self,
+        entry: &LibraryReadPreparationEntry,
+        database_path: &Path,
+        prepare: F,
+    ) -> Result<bool, String>
+    where
+        F: FnOnce() -> Result<(), String>,
+    {
+        if self.is_prepared(entry, database_path)? {
+            return Ok(false);
+        }
+        prepare()?;
+        self.mark_prepared(entry, database_path)?;
+        Ok(true)
+    }
+
+    fn require_prepared(
+        &self,
+        entry: &LibraryReadPreparationEntry,
+        database_path: &Path,
+    ) -> Result<(), String> {
+        if self.is_prepared(entry, database_path)? {
+            Ok(())
+        } else {
+            Err(LIBRARY_READ_NOT_PREPARED.to_string())
+        }
+    }
+
+    fn mark_prepared(
+        &self,
+        entry: &LibraryReadPreparationEntry,
+        database_path: &Path,
+    ) -> Result<(), String> {
+        let current = library_read_fingerprint(database_path)?;
+        let mut prepared = entry
+            .fingerprint
+            .lock()
+            .map_err(|_| "Cannot lock library read preparation state.".to_string())?;
+        if prepared
+            .as_ref()
+            .is_some_and(|previous| previous != &current)
+        {
+            invalidate_paper_library_facets(database_path)?;
+        }
+        *prepared = Some(current);
+        Ok(())
+    }
+
+    fn invalidate(&self, database_path: &Path) -> Result<(), String> {
+        let entry = self.entry(database_path)?;
+        *entry
+            .fingerprint
+            .lock()
+            .map_err(|_| "Cannot lock library read preparation state.".to_string())? = None;
+        invalidate_paper_library_facets(database_path)
+    }
+}
+
+impl PaperLibraryFacetCache {
+    fn get_or_compute<F>(
+        &self,
+        key: PaperLibraryFacetCacheKey,
+        compute: F,
+    ) -> Result<PaperLibraryFacets, String>
+    where
+        F: FnOnce() -> Result<PaperLibraryFacets, String>,
+    {
+        let entry = {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| "Cannot lock paper library facet cache.".to_string())?;
+            entries
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(None)))
+                .clone()
+        };
+        let mut cached = entry
+            .lock()
+            .map_err(|_| "Cannot lock paper library facet cache entry.".to_string())?;
+        if let Some(value) = cached.as_ref() {
+            return Ok(value.clone());
+        }
+        let value = compute()?;
+        *cached = Some(value.clone());
+        drop(cached);
+
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| "Cannot lock paper library facet cache.".to_string())?;
+        entries.retain(|candidate, _| {
+            candidate.database_key != key.database_key
+                || candidate.project_id != key.project_id
+                || candidate.library_revision >= key.library_revision
+        });
+        Ok(value)
+    }
+
+    fn invalidate_database(&self, database_key: &str) -> Result<(), String> {
+        self.entries
+            .lock()
+            .map_err(|_| "Cannot lock paper library facet cache.".to_string())?
+            .retain(|key, _| key.database_key != database_key);
+        Ok(())
+    }
+}
+
+fn library_read_preparations() -> &'static LibraryReadPreparationRegistry {
+    LIBRARY_READ_PREPARATIONS.get_or_init(LibraryReadPreparationRegistry::default)
+}
+
+fn paper_library_facet_cache() -> &'static PaperLibraryFacetCache {
+    PAPER_LIBRARY_FACET_CACHE.get_or_init(PaperLibraryFacetCache::default)
+}
+
+fn invalidate_paper_library_facets(database_path: &Path) -> Result<(), String> {
+    paper_library_facet_cache().invalidate_database(&normalized_database_key(database_path))
 }
 
 impl LibraryMutationRegistry {
@@ -1023,6 +1763,14 @@ struct AgentImmersiveBackgroundPaperV2 {
 #[serde(rename_all = "camelCase")]
 struct AgentImmersiveBackgroundPayloadV2 {
     source_snapshot_id: String,
+    visual_source_kind: ImmersiveBackgroundVisualSourceKind,
+    analysis_freshness: ImmersiveBackgroundAnalysisFreshness,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_source_stale_reason: Option<ImmersiveBackgroundVisualSourceStaleReason>,
+    source_library_revision: i64,
+    current_library_revision: i64,
+    source_paper_count: i64,
+    current_paper_count: i64,
     session_seed: String,
     hotspots: Vec<AgentImmersiveBackgroundHotspotV2>,
     papers: Vec<AgentImmersiveBackgroundPaperV2>,
@@ -1679,9 +2427,22 @@ fn get_library_setup_state(
         });
     };
 
-    recover_interrupted_restore(&database_dir)?;
-
     let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let preparations = library_read_preparations();
+    let preparation_entry = preparations.entry(&database_path)?;
+    let _prepare_guard = preparation_entry
+        .prepare_lock
+        .lock()
+        .map_err(|_| "Cannot lock library read preparation.".to_string())?;
+    if database_dir
+        .join("research-hotspots-v7.restore.json")
+        .exists()
+    {
+        preparations.invalidate(&database_path)?;
+    }
+    recover_interrupted_restore(&database_dir)?;
+    drop(_prepare_guard);
+
     let database_exists = database_path.is_file();
     let validation = if database_exists {
         validate_database_file(&database_path)
@@ -1717,7 +2478,28 @@ fn get_library_setup_state(
                 message,
             )
         }
-        Err(error) => (false, 0, 0, 0, None, None, true, error),
+        Err(error) => {
+            match inspect_library_v14_schema_contract_file(&database_path, &default_project_id()) {
+                Ok(assessment)
+                    if assessment.status == LibraryV14SchemaContractStatus::KnownPrecontractV14 =>
+                {
+                    let candidate = assessment.candidate;
+                    let requires_modeling = candidate.snapshot_id.is_none();
+                    (
+                        false,
+                        candidate.paper_count,
+                        candidate.hotspot_count,
+                        candidate.membership_count,
+                        candidate.snapshot_id,
+                        Some(candidate.schema_version),
+                        requires_modeling,
+                        "检测到开发版早期 v14，可先备份并安全补全；现有论文不会被覆盖。"
+                            .to_string(),
+                    )
+                }
+                _ => (false, 0, 0, 0, None, None, true, error),
+            }
+        }
     };
 
     Ok(LibrarySetupState {
@@ -1758,6 +2540,14 @@ fn get_library_setup_state(
 }
 
 #[tauri::command]
+fn prepare_library_database(
+    app: tauri::AppHandle,
+    database_dir: Option<String>,
+) -> Result<(), String> {
+    prepare_library_database_for_reads(&app, database_dir)
+}
+
+#[tauri::command]
 fn validate_library_location(
     app: tauri::AppHandle,
     input: ValidateLibraryLocationInput,
@@ -1784,18 +2574,80 @@ fn initialize_library(
     fs::create_dir_all(&database_dir)
         .map_err(|error| format!("无法创建论文库目录 {:?}: {error}", database_dir))?;
 
-    match mode.as_str() {
-        "seed" => install_seed_library(&app, &database_path)?,
-        "empty" => create_empty_library(&database_path)?,
-        "existing" => {}
-        _ => unreachable!(),
-    }
+    let preparations = library_read_preparations();
+    let preparation_entry = preparations.entry(&database_path)?;
+    let (migration, verified) = {
+        let _prepare_guard = preparation_entry
+            .prepare_lock
+            .lock()
+            .map_err(|_| "Cannot lock library read preparation.".to_string())?;
+        preparations.invalidate(&database_path)?;
+        match mode.as_str() {
+            "seed" => install_seed_library(&app, &database_path)?,
+            "empty" => create_empty_library(&database_path)?,
+            "existing" => {}
+            _ => unreachable!(),
+        }
 
-    let verified = validate_database_file(&database_path)?;
+        let migration = migrate_library_file(
+            &database_path,
+            &default_project_id(),
+            now_millis().min(i64::MAX as u128) as i64,
+            true,
+        )?;
+        let verified = validate_database_file(&database_path)?;
+        prepare_library_database_locked(
+            preparations,
+            &preparation_entry,
+            &database_dir,
+            &database_path,
+        )?;
+        (migration, verified)
+    };
     let size_bytes = fs::metadata(&database_path)
         .map(|metadata| metadata.len())
         .unwrap_or_default();
     let sha256 = sha256_file(&database_path)?;
+    let compatibility_repair_applied = migration.compatibility_repair_applied;
+    let migration_backup_path = migration
+        .backup_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+    let migration_backup_sha256 = migration.backup_sha256.clone();
+    let schema_contract_status = migration.schema_contract_status;
+    let base_summary = match mode.as_str() {
+        "seed" => format!(
+            "默认论文库安装完成：{} 篇论文，{} 个热点，{} 条归属。",
+            verified.paper_count, verified.hotspot_count, verified.membership_count
+        ),
+        "empty" => "空白论文库已创建。".to_string(),
+        _ if verified.snapshot_id.is_some() => format!(
+            "现有论文库验证完成：{} 篇论文，{} 个热点，{} 条归属。",
+            verified.paper_count, verified.hotspot_count, verified.membership_count
+        ),
+        _ => format!(
+            "现有论文库验证完成：{} 篇论文；尚无 V20 快照，请显式运行热点建模。",
+            verified.paper_count
+        ),
+    };
+    let summary = if compatibility_repair_applied {
+        format!(
+            "开发版早期 v14 已安全补全。{} 迁移备份：{}；SHA-256：{}。",
+            base_summary,
+            migration_backup_path.as_deref().unwrap_or("未生成"),
+            migration_backup_sha256.as_deref().unwrap_or("未生成")
+        )
+    } else if let (Some(path), Some(backup_sha256)) = (
+        migration_backup_path.as_deref(),
+        migration_backup_sha256.as_deref(),
+    ) {
+        format!(
+            "{} 迁移备份：{}；SHA-256：{}。",
+            base_summary, path, backup_sha256
+        )
+    } else {
+        base_summary
+    };
     Ok(InitializeLibraryResult {
         mode: mode.clone(),
         database_dir: database_dir.to_string_lossy().to_string(),
@@ -1809,21 +2661,11 @@ fn initialize_library(
         requires_modeling: verified.snapshot_id.is_none(),
         sha256,
         integrity_check: verified.integrity_check,
-        summary: match mode.as_str() {
-            "seed" => format!(
-                "默认论文库安装完成：{} 篇论文，{} 个热点，{} 条归属。",
-                verified.paper_count, verified.hotspot_count, verified.membership_count
-            ),
-            "empty" => "空白论文库已创建。".to_string(),
-            _ if verified.snapshot_id.is_some() => format!(
-                "现有论文库验证完成：{} 篇论文，{} 个热点，{} 条归属。",
-                verified.paper_count, verified.hotspot_count, verified.membership_count
-            ),
-            _ => format!(
-                "现有论文库验证完成：{} 篇论文；尚无 V20 快照，请显式运行热点建模。",
-                verified.paper_count
-            ),
-        },
+        compatibility_repair_applied,
+        migration_backup_path,
+        migration_backup_sha256,
+        schema_contract_status,
+        summary,
     })
 }
 
@@ -1833,7 +2675,7 @@ fn paper_library_status(
     database_dir: Option<String>,
     project_id: Option<String>,
 ) -> Result<PaperLibraryStatus, String> {
-    let (conn, database_dir, database_path) = open_library_database(&app, database_dir)?;
+    let (conn, database_dir, database_path) = open_library_database_read_only(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
     let paper_count = conn
         .query_row(
@@ -1842,6 +2684,7 @@ fn paper_library_status(
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
+    let library_revision = read_library_revision(&conn, &project_id)?;
     let size_bytes = fs::metadata(&database_path)
         .map(|metadata| metadata.len())
         .unwrap_or_default();
@@ -1850,6 +2693,7 @@ fn paper_library_status(
         database_path: database_path.to_string_lossy().to_string(),
         size_bytes,
         paper_count,
+        library_revision,
     })
 }
 
@@ -1997,6 +2841,13 @@ fn restore_library_database_path(
             return Err(format!("SQLite backup validation failed: {error}"));
         }
     };
+    let preparations = library_read_preparations();
+    let preparation_entry = preparations.entry(&database_path)?;
+    let _prepare_guard = preparation_entry
+        .prepare_lock
+        .lock()
+        .map_err(|_| "Cannot lock library read preparation.".to_string())?;
+    preparations.invalidate(&database_path)?;
     fs::write(
         &marker_path,
         serde_json::to_vec_pretty(&serde_json::json!({
@@ -2030,6 +2881,15 @@ fn restore_library_database_path(
             return Err(error);
         }
     };
+    let (connection, _, _) = open_library_database_after_restore_recovery(
+        database_dir.to_path_buf(),
+        database_path.clone(),
+    )
+    .map_err(|error| format!("LIBRARY_RESTORE_NOT_PREPARED:{error}"))?;
+    drop(connection);
+    preparations
+        .mark_prepared(&preparation_entry, &database_path)
+        .map_err(|error| format!("LIBRARY_RESTORE_NOT_PREPARED:{error}"))?;
     let _ = fs::remove_file(&marker_path);
     let size_bytes = fs::metadata(&database_path)
         .map(|metadata| metadata.len())
@@ -2195,11 +3055,12 @@ fn query_paper_library(
     input: PaperQueryInput,
 ) -> Result<PaperQueryResult, String> {
     let started = Instant::now();
-    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let (conn, _, _) = open_library_database_read_only(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let query = normalize_query(input.query);
     let source = normalize_filter(input.source);
     let field = normalize_filter(input.field);
+    let year = input.year;
     let limit = input.limit.unwrap_or(20).clamp(1, 200);
     let offset = input.offset.unwrap_or(0).max(0);
     let sort_sql = match input.sort.as_deref().unwrap_or("newest") {
@@ -2207,35 +3068,32 @@ fn query_paper_library(
         "title" => "title COLLATE NOCASE ASC",
         _ => "COALESCE(year, 0) DESC, updated_at DESC",
     };
+    let (where_sql, query_params) = paper_query_predicate(
+        &project_id,
+        query.as_deref(),
+        source.as_deref(),
+        field.as_deref(),
+        year,
+    );
     let sql = format!(
         "SELECT id, project_id, source, title, abstract, authors, categories, field, published_date, year, url, doi, created_at, updated_at
          FROM papers
-         WHERE project_id = ?1
-           AND (?2 IS NULL OR search_blob LIKE ?2)
-           AND (?3 IS NULL OR source = ?3)
-           AND (?4 IS NULL OR field = ?4)
-           AND (?5 IS NULL OR year = ?5)
+         WHERE {where_sql}
          ORDER BY {sort_sql}
-         LIMIT ?6 OFFSET ?7"
+         LIMIT ? OFFSET ?"
     );
+    let count_sql = format!("SELECT COUNT(*) FROM papers WHERE {where_sql}");
     let total = conn
-        .query_row(
-            "SELECT COUNT(*) FROM papers
-             WHERE project_id = ?1
-               AND (?2 IS NULL OR search_blob LIKE ?2)
-               AND (?3 IS NULL OR source = ?3)
-               AND (?4 IS NULL OR field = ?4)
-               AND (?5 IS NULL OR year = ?5)",
-            params![project_id, query, source, field, input.year],
-            |row| row.get(0),
-        )
+        .query_row(&count_sql, params_from_iter(query_params.iter()), |row| {
+            row.get(0)
+        })
         .map_err(|error| error.to_string())?;
+    let mut page_params = query_params;
+    page_params.push(SqlValue::Integer(limit));
+    page_params.push(SqlValue::Integer(offset));
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let rows = stmt
-        .query_map(
-            params![project_id, query, source, field, input.year, limit, offset],
-            row_to_paper,
-        )
+        .query_map(params_from_iter(page_params.iter()), row_to_paper)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -2255,13 +3113,22 @@ fn paper_library_facets(
     database_dir: Option<String>,
     project_id: Option<String>,
 ) -> Result<PaperLibraryFacets, String> {
-    let (conn, _, _) = open_library_database(&app, database_dir)?;
+    let (mut conn, _, database_path) = open_library_database_read_only(&app, database_dir)?;
     let project_id = project_id.unwrap_or_else(default_project_id);
-    Ok(PaperLibraryFacets {
-        sources: count_facets(&conn, "source", &project_id, 20)?,
-        fields: count_facets(&conn, "field", &project_id, 80)?,
-        years: count_facets(&conn, "CAST(year AS TEXT)", &project_id, 80)?,
-    })
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .map_err(|error| error.to_string())?;
+    let library_revision = read_library_revision(&transaction, &project_id)?;
+    let key = PaperLibraryFacetCacheKey {
+        database_key: normalized_database_key(&database_path),
+        project_id: project_id.clone(),
+        library_revision,
+    };
+    let facets = paper_library_facet_cache().get_or_compute(key, || {
+        compute_paper_library_facets(&transaction, &project_id)
+    })?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(facets)
 }
 
 #[tauri::command]
@@ -4487,8 +5354,8 @@ fn sidera_agent_local_readiness(
                 .join("@earendil-works")
                 .join("pi-coding-agent")
                 .join("package.json");
-            let database_path = PathBuf::from(&input.database_dir)
-                .join("research-hotspots-v7.sqlite");
+            let database_path =
+                PathBuf::from(&input.database_dir).join("research-hotspots-v7.sqlite");
             match sidera_pi_runtime::check_installation(&package_json_path, &database_path) {
                 Ok(readiness) => SideraPiReadinessResult {
                     status: "pass".to_string(),
@@ -4849,7 +5716,7 @@ fn get_v20_analysis_state(
     app: tauri::AppHandle,
     input: App17GalaxyPayloadInput,
 ) -> Result<Option<AnalysisState>, String> {
-    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let (conn, _, _) = open_library_database_read_only(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     read_analysis_state(&conn, &project_id)
 }
@@ -4859,10 +5726,10 @@ fn get_v20_hotspot_snapshot(
     app: tauri::AppHandle,
     input: App17GalaxyPayloadInput,
 ) -> Result<V20HotspotSnapshot, String> {
-    let (conn, _, database_path) = open_library_database(&app, input.database_dir)?;
+    let (conn, _, database_path) = open_library_database_read_only(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let database_key = normalized_database_key(&database_path);
-    let current_library_revision = current_library_revision(&conn, &project_id)?;
+    let current_library_revision = read_library_revision(&conn, &project_id)?;
     let Some(rows) = read_unified_hotspot_rows(&conn, &project_id)? else {
         return Ok(V20HotspotSnapshot {
             database_key,
@@ -4918,7 +5785,7 @@ fn get_v20_galaxy_payload(
     app: tauri::AppHandle,
     input: App17GalaxyPayloadInput,
 ) -> Result<V20GalaxyPayload, String> {
-    let (conn, _, _) = open_library_database(&app, input.database_dir)?;
+    let (conn, _, _) = open_library_database_read_only(&app, input.database_dir)?;
     let project_id = input.project_id.unwrap_or_else(default_project_id);
     let mode = input.mode.unwrap_or_else(|| "nebula".to_string());
     build_v20_galaxy_payload(&conn, &project_id, &mode)
@@ -5087,8 +5954,8 @@ fn build_agent_immersive_background_payload(
     session_seed: &str,
     requested_count: usize,
 ) -> Result<AgentImmersiveBackgroundPayloadV2, String> {
-    let state = read_analysis_state(conn, project_id)?
-        .ok_or_else(|| "AGENT_IMMERSIVE_ACTIVE_SNAPSHOT_MISSING".to_string())?;
+    let visual_source = select_immersive_background_visual_source(conn, project_id)?
+        .ok_or_else(|| "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING".to_string())?;
 
     let mut hotspot_stmt = conn
         .prepare(
@@ -5099,13 +5966,16 @@ fn build_agent_immersive_background_payload(
         )
         .map_err(|error| error.to_string())?;
     let hotspots = hotspot_stmt
-        .query_map(params![project_id, state.active_snapshot_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })
+        .query_map(
+            params![project_id, visual_source.source_snapshot_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
         .map_err(|error| error.to_string())?
         .map(|result| {
             let (id, payload_json, paper_count) = result.map_err(|error| error.to_string())?;
@@ -5142,13 +6012,16 @@ fn build_agent_immersive_background_payload(
         )
         .map_err(|error| error.to_string())?;
     for row in membership_stmt
-        .query_map(params![project_id, state.active_snapshot_id], |row| {
-            Ok(AgentImmersivePaperCandidate {
-                id: row.get(0)?,
-                hotspot_id: row.get(1)?,
-                year: row.get(2)?,
-            })
-        })
+        .query_map(
+            params![project_id, visual_source.source_snapshot_id],
+            |row| {
+                Ok(AgentImmersivePaperCandidate {
+                    id: row.get(0)?,
+                    hotspot_id: row.get(1)?,
+                    year: row.get(2)?,
+                })
+            },
+        )
         .map_err(|error| error.to_string())?
     {
         let candidate = row.map_err(|error| error.to_string())?;
@@ -5213,7 +6086,14 @@ fn build_agent_immersive_background_payload(
     }
 
     Ok(AgentImmersiveBackgroundPayloadV2 {
-        source_snapshot_id: state.active_snapshot_id,
+        source_snapshot_id: visual_source.source_snapshot_id,
+        visual_source_kind: visual_source.source_kind,
+        analysis_freshness: visual_source.analysis_freshness,
+        visual_source_stale_reason: visual_source.stale_reason,
+        source_library_revision: visual_source.source_revision,
+        current_library_revision: visual_source.current_revision,
+        source_paper_count: visual_source.source_paper_count,
+        current_paper_count: visual_source.current_paper_count,
         session_seed: session_seed.to_string(),
         hotspots,
         papers,
@@ -5232,8 +6112,8 @@ pub fn audit_agent_immersive_background_database(
                 database_path
             )
         })?;
-    let state = read_analysis_state(&conn, project_id)?
-        .ok_or_else(|| "AGENT_IMMERSIVE_ACTIVE_SNAPSHOT_MISSING".to_string())?;
+    let visual_source = select_immersive_background_visual_source(&conn, project_id)?
+        .ok_or_else(|| "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING".to_string())?;
     let first = build_agent_immersive_background_payload(
         &conn,
         project_id,
@@ -5290,7 +6170,7 @@ pub fn audit_agent_immersive_background_database(
     }
 
     let expected_paper_count =
-        (state.membership_count.max(0) as usize).min(AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT);
+        (visual_source.source_paper_count.max(0) as usize).min(AGENT_IMMERSIVE_DEFAULT_PAPER_COUNT);
     if first.papers.len() != expected_paper_count {
         return Err(format!(
             "AGENT_IMMERSIVE_AUDIT_PAPER_COUNT_MISMATCH:{}:{}",
@@ -5298,14 +6178,6 @@ pub fn audit_agent_immersive_background_database(
             expected_paper_count
         ));
     }
-    if first.hotspots.len() != state.hotspot_count.max(0) as usize {
-        return Err(format!(
-            "AGENT_IMMERSIVE_AUDIT_HOTSPOT_COUNT_MISMATCH:{}:{}",
-            first.hotspots.len(),
-            state.hotspot_count
-        ));
-    }
-
     let selected_count_by_hotspot =
         first
             .papers
@@ -5363,7 +6235,14 @@ pub fn audit_agent_immersive_background_database(
         "databasePath": database_path,
         "projectId": project_id,
         "sourceSnapshotId": first.source_snapshot_id,
-        "sourceMembershipCount": state.membership_count,
+        "visualSourceKind": first.visual_source_kind,
+        "analysisFreshness": first.analysis_freshness,
+        "visualSourceStaleReason": first.visual_source_stale_reason,
+        "sourceLibraryRevision": first.source_library_revision,
+        "currentLibraryRevision": first.current_library_revision,
+        "sourcePaperCount": first.source_paper_count,
+        "currentPaperCount": first.current_paper_count,
+        "sourceMembershipCount": visual_source.source_paper_count,
         "paperCount": first.papers.len(),
         "hotspotCount": first.hotspots.len(),
         "uniquePaperCount": first_paper_ids.len(),
@@ -9658,7 +10537,11 @@ fn load_default_library_manifest(app: &tauri::AppHandle) -> Result<DefaultLibrar
         && manifest.embedding_count == Some(manifest.paper_count);
     let semantic_v5_common = manifest.manifest_schema_version == 5
         && manifest.generator_version == "semantic-seed-5"
-        && manifest.database_schema_version == research_hotspots_core::LIBRARY_SCHEMA_VERSION
+        // The published semantic v5 seed is schema 13. Keep it installable as a
+        // verified migration source; install_seed_library_atomically upgrades the
+        // staged copy to the current schema before it can become active.
+        && (manifest.database_schema_version == 13
+            || manifest.database_schema_version == research_hotspots_core::LIBRARY_SCHEMA_VERSION)
         && manifest.embedding_model_id.as_deref()
             == Some(research_hotspots_core::semantic_layout::SEMANTIC_MODEL_ID)
         && manifest.embedding_model_revision.as_deref()
@@ -9719,22 +10602,86 @@ fn validate_library_location_impl(
         &default_project_id(),
         seed_size,
     )?;
-    let existing_database_valid = core.existing.is_some();
-    let (paper_count, hotspot_count, membership_count, snapshot_id, database_schema_version) = core
-        .existing
-        .as_ref()
-        .map(|value| {
-            (
-                value.paper_count,
-                value.hotspot_count,
-                value.membership_count,
-                value.snapshot_id.clone(),
-                Some(value.schema_version),
-            )
-        })
-        .unwrap_or((0, 0, 0, None, None));
-    let message = match core.message.as_str() {
+    let mut valid = core.valid;
+    let mut required_space_bytes = core.required_space_bytes;
+    let mut existing = core.existing.clone();
+    let mut validation_message = core.message.clone();
+    let mut schema_contract_status = None;
+
+    if core.existing_database {
+        if let Ok(assessment) =
+            inspect_library_v14_schema_contract_file(&core.database_path, &default_project_id())
+        {
+            schema_contract_status = Some(assessment.status);
+            match assessment.status {
+                LibraryV14SchemaContractStatus::CurrentV14 => {
+                    existing = Some(assessment.candidate);
+                }
+                LibraryV14SchemaContractStatus::KnownPrecontractV14 => {
+                    let database_size = fs::metadata(&core.database_path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or_default();
+                    let wal_size =
+                        fs::metadata(format!("{}-wal", core.database_path.to_string_lossy()))
+                            .map(|metadata| metadata.len())
+                            .unwrap_or_default();
+                    required_space_bytes = database_size
+                        .saturating_add(wal_size)
+                        .saturating_add(16 * 1024 * 1024);
+                    existing = Some(assessment.candidate);
+                    valid = mode == FirstRunMode::Existing
+                        && core.writable
+                        && (core.available_space_bytes == 0
+                            || core.available_space_bytes >= required_space_bytes);
+                    validation_message = if mode == FirstRunMode::Existing {
+                        if valid {
+                            "KNOWN_PRECONTRACT_V14".to_string()
+                        } else if !core.writable {
+                            "LIBRARY_DIRECTORY_NOT_WRITABLE".to_string()
+                        } else {
+                            "INSUFFICIENT_DISK_SPACE".to_string()
+                        }
+                    } else {
+                        "KNOWN_PRECONTRACT_V14_TARGET_ALREADY_EXISTS".to_string()
+                    };
+                }
+                LibraryV14SchemaContractStatus::UnknownInvalidV14 => {
+                    existing = None;
+                    valid = false;
+                    validation_message = "UNKNOWN_INVALID_V14".to_string();
+                }
+            }
+        }
+    }
+
+    let existing_database_valid = existing.is_some();
+    let (paper_count, hotspot_count, membership_count, snapshot_id, database_schema_version) =
+        existing
+            .as_ref()
+            .map(|value| {
+                (
+                    value.paper_count,
+                    value.hotspot_count,
+                    value.membership_count,
+                    value.snapshot_id.clone(),
+                    Some(value.schema_version),
+                )
+            })
+            .unwrap_or((0, 0, 0, None, None));
+    let message = match validation_message.as_str() {
         "ok" => "目录检查通过。".to_string(),
+        "KNOWN_PRECONTRACT_V14" => {
+            "检测到开发版早期 v14，可先备份并安全补全；现有论文不会被覆盖。"
+                .to_string()
+        }
+        "KNOWN_PRECONTRACT_V14_TARGET_ALREADY_EXISTS" => {
+            "所选目录已包含可安全升级的早期 v14 论文库。请选择“使用现有 SQLite 论文库”，应用不会覆盖它。"
+                .to_string()
+        }
+        "UNKNOWN_INVALID_V14" => {
+            "所选目录中的 v14 结构不属于已知兼容版本，应用不会自动修复或覆盖它。"
+                .to_string()
+        }
         "LIBRARY_DIRECTORY_NOT_WRITABLE" => "所选目录不可写，请选择其他目录。".to_string(),
         "EXISTING_LIBRARY_NOT_FOUND" => {
             "所选目录中未找到 research-hotspots-v7.sqlite。".to_string()
@@ -9747,18 +10694,18 @@ fn validate_library_location_impl(
         }
         "INSUFFICIENT_DISK_SPACE" => format!(
             "可用空间不足：至少需要 {} MB。",
-            core.required_space_bytes / 1024 / 1024
+            required_space_bytes / 1024 / 1024
         ),
         error => error.to_string(),
     };
 
     Ok(LibraryLocationValidation {
-        valid: core.valid,
+        valid,
         database_dir: database_dir.to_string_lossy().to_string(),
         database_path: core.database_path.to_string_lossy().to_string(),
         writable: core.writable,
         available_space_bytes: core.available_space_bytes,
-        required_space_bytes: core.required_space_bytes,
+        required_space_bytes,
         existing_database: core.existing_database,
         existing_database_valid,
         paper_count,
@@ -9767,6 +10714,7 @@ fn validate_library_location_impl(
         requires_modeling: existing_database_valid && snapshot_id.is_none(),
         snapshot_id,
         database_schema_version,
+        schema_contract_status,
         message,
     })
 }
@@ -9839,10 +10787,32 @@ fn open_library_database(
     database_dir: Option<String>,
 ) -> Result<(Connection, PathBuf, PathBuf), String> {
     let database_dir = resolve_database_dir(app, database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let preparations = library_read_preparations();
+    let entry = preparations.entry(&database_path)?;
+    let _prepare_guard = entry
+        .prepare_lock
+        .lock()
+        .map_err(|_| "Cannot lock library read preparation.".to_string())?;
+    let result = open_library_database_full(database_dir, database_path.clone())?;
+    preparations.mark_prepared(&entry, &database_path)?;
+    Ok(result)
+}
+
+fn open_library_database_full(
+    database_dir: PathBuf,
+    database_path: PathBuf,
+) -> Result<(Connection, PathBuf, PathBuf), String> {
     fs::create_dir_all(&database_dir)
         .map_err(|error| format!("Cannot create library dir {:?}: {error}", database_dir))?;
     recover_interrupted_restore(&database_dir)?;
-    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    open_library_database_after_restore_recovery(database_dir, database_path)
+}
+
+fn open_library_database_after_restore_recovery(
+    database_dir: PathBuf,
+    database_path: PathBuf,
+) -> Result<(Connection, PathBuf, PathBuf), String> {
     if database_path.exists() {
         migrate_library_file(
             &database_path,
@@ -9858,10 +10828,98 @@ fn open_library_database(
     Ok((conn, database_dir, database_path))
 }
 
+fn prepare_library_database_for_reads(
+    app: &tauri::AppHandle,
+    database_dir: Option<String>,
+) -> Result<(), String> {
+    let database_dir = resolve_database_dir(app, database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let preparations = library_read_preparations();
+    let entry = preparations.entry(&database_path)?;
+    let _prepare_guard = entry
+        .prepare_lock
+        .lock()
+        .map_err(|_| "Cannot lock library read preparation.".to_string())?;
+    prepare_library_database_locked(preparations, &entry, &database_dir, &database_path)
+}
+
+fn prepare_library_database_locked(
+    preparations: &LibraryReadPreparationRegistry,
+    entry: &LibraryReadPreparationEntry,
+    database_dir: &Path,
+    database_path: &Path,
+) -> Result<(), String> {
+    preparations.prepare_if_needed(entry, database_path, || {
+        let (connection, _, _) =
+            open_library_database_full(database_dir.to_path_buf(), database_path.to_path_buf())?;
+        drop(connection);
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn open_library_database_read_only(
+    app: &tauri::AppHandle,
+    database_dir: Option<String>,
+) -> Result<(Connection, PathBuf, PathBuf), String> {
+    let database_dir = resolve_database_dir(app, database_dir)?;
+    let database_path = database_dir.join("research-hotspots-v7.sqlite");
+    let preparations = library_read_preparations();
+    let entry = preparations.entry(&database_path)?;
+    let _prepare_guard = entry
+        .prepare_lock
+        .lock()
+        .map_err(|_| "Cannot lock library read preparation.".to_string())?;
+    preparations.require_prepared(&entry, &database_path)?;
+    let connection = match open_prepared_library_read_connection(&database_path) {
+        Ok(connection) => connection,
+        Err(error) if error == "LIBRARY_READ_PREPARATION_STALE" => {
+            preparations.invalidate(&database_path)?;
+            return Err(LIBRARY_READ_NOT_PREPARED.to_string());
+        }
+        Err(error) => return Err(error),
+    };
+    Ok((connection, database_dir, database_path))
+}
+
+fn open_prepared_library_read_connection(database_path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open_with_flags(
+        database_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| {
+        format!(
+            "Cannot open prepared SQLite library read-only {:?}: {error}",
+            database_path
+        )
+    })?;
+    connection
+        .pragma_update(None, "query_only", "ON")
+        .map_err(|error| format!("Cannot enforce SQLite query_only: {error}"))?;
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(|error| format!("Cannot enable SQLite foreign_keys: {error}"))?;
+    connection
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(|error| format!("Cannot configure SQLite read timeout: {error}"))?;
+    let schema_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if schema_version != research_hotspots_core::LIBRARY_SCHEMA_VERSION {
+        return Err("LIBRARY_READ_PREPARATION_STALE".to_string());
+    }
+    Ok(connection)
+}
+
 fn resolve_database_dir(
     _app: &tauri::AppHandle,
     database_dir: Option<String>,
 ) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = resolve_isolated_debug_database_dir()? {
+        return Ok(path);
+    }
+
     if let Some(value) = database_dir.filter(|value| !value.trim().is_empty()) {
         return Ok(PathBuf::from(value));
     }
@@ -9873,6 +10931,41 @@ fn resolve_database_dir(
     }
 
     Err("论文库尚未配置。请先完成首次启动设置。".to_string())
+}
+
+#[cfg(debug_assertions)]
+fn resolve_isolated_debug_database_dir() -> Result<Option<PathBuf>, String> {
+    const ENV_NAME: &str = "SIDERA_DEV_ISOLATED_LIBRARY_DIR";
+    const MARKER_NAME: &str = ".sidera-dev-isolated-library";
+
+    let Some(value) = std::env::var_os(ENV_NAME) else {
+        return Ok(None);
+    };
+    let candidate = PathBuf::from(value);
+    if !candidate.is_absolute() {
+        return Err(format!("{ENV_NAME} must be an absolute path"));
+    }
+    let candidate = candidate
+        .canonicalize()
+        .map_err(|error| format!("{ENV_NAME} cannot be resolved: {error}"))?;
+    if !candidate.is_dir() || !candidate.join(MARKER_NAME).is_file() {
+        return Err(format!(
+            "{ENV_NAME} must point to an existing directory containing {MARKER_NAME}"
+        ));
+    }
+
+    if let Some(project_root) = find_project_root() {
+        let default_library = project_root.join("data").join("library");
+        if let Ok(default_library) = default_library.canonicalize() {
+            if candidate == default_library {
+                return Err(format!(
+                    "{ENV_NAME} refuses the project default library; use an isolated fixture directory"
+                ));
+            }
+        }
+    }
+
+    Ok(Some(candidate))
 }
 
 fn initialize_library_database(conn: &Connection) -> Result<(), String> {
@@ -9978,22 +11071,70 @@ fn row_to_paper(row: &rusqlite::Row<'_>) -> rusqlite::Result<PaperRecord> {
     })
 }
 
+fn read_library_revision(conn: &Connection, project_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COALESCE((SELECT revision FROM library_revision_state WHERE project_id=?1),0)",
+        params![project_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn paper_query_predicate(
+    project_id: &str,
+    query: Option<&str>,
+    source: Option<&str>,
+    field: Option<&str>,
+    year: Option<i64>,
+) -> (String, Vec<SqlValue>) {
+    let mut clauses = vec!["project_id = ?"];
+    let mut values = vec![SqlValue::Text(project_id.to_string())];
+    if let Some(query) = query {
+        clauses.push("search_blob LIKE ? ESCAPE '\\'");
+        values.push(SqlValue::Text(query.to_string()));
+    }
+    if let Some(source) = source {
+        clauses.push("source = ?");
+        values.push(SqlValue::Text(source.to_string()));
+    }
+    if let Some(field) = field {
+        clauses.push("field = ?");
+        values.push(SqlValue::Text(field.to_string()));
+    }
+    if let Some(year) = year {
+        clauses.push("year = ?");
+        values.push(SqlValue::Integer(year));
+    }
+    (clauses.join(" AND "), values)
+}
+
+fn compute_paper_library_facets(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<PaperLibraryFacets, String> {
+    Ok(PaperLibraryFacets {
+        sources: count_facets(conn, "source", project_id, 20)?,
+        fields: count_facets(conn, "field", project_id, 80)?,
+        years: count_facets(conn, "year", project_id, 80)?,
+    })
+}
+
 fn count_facets(
     conn: &Connection,
     field_expr: &str,
     project_id: &str,
     limit: i64,
 ) -> Result<Vec<CountFacet>, String> {
-    let null_guard = if field_expr.contains("year") {
-        "AND year IS NOT NULL"
+    let (select_expr, group_expr, null_guard) = if field_expr == "year" {
+        ("CAST(year AS TEXT)", "year", "AND year IS NOT NULL")
     } else {
-        ""
+        (field_expr, field_expr, "")
     };
     let sql = format!(
-        "SELECT {field_expr} AS value, COUNT(*) AS count
+        "SELECT {select_expr} AS value, COUNT(*) AS count
          FROM papers
          WHERE project_id = ?1 {null_guard}
-         GROUP BY value
+         GROUP BY {group_expr}
          HAVING value IS NOT NULL AND value <> ''
          ORDER BY count DESC, value ASC
          LIMIT ?2"
@@ -10707,6 +11848,256 @@ fn find_project_file(parts: &[&str]) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::{atomic::AtomicUsize, Barrier};
+
+    #[test]
+    fn explicit_library_read_preparation_runs_once_and_gates_readers() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "sidera-library-read-preparation-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&base_dir).expect("preparation test dir");
+        let database_path = base_dir.join("research-hotspots-v7.sqlite");
+        fs::write(&database_path, b"read-preparation-identity").expect("preparation identity file");
+
+        let registry = Arc::new(LibraryReadPreparationRegistry::default());
+        let prepare_count = Arc::new(AtomicUsize::new(0));
+        let entry = registry.entry(&database_path).expect("preparation entry");
+        let guard = entry.prepare_lock.lock().expect("preparation lock");
+        assert_eq!(
+            registry
+                .require_prepared(&entry, &database_path)
+                .expect_err("unprepared reads must be rejected"),
+            LIBRARY_READ_NOT_PREPARED
+        );
+        drop(guard);
+        let barrier = Arc::new(Barrier::new(4));
+        let mut workers = Vec::new();
+        for _ in 0..4 {
+            let registry = Arc::clone(&registry);
+            let prepare_count = Arc::clone(&prepare_count);
+            let barrier = Arc::clone(&barrier);
+            let database_path = database_path.clone();
+            workers.push(thread::spawn(move || {
+                barrier.wait();
+                let entry = registry.entry(&database_path)?;
+                let _guard = entry
+                    .prepare_lock
+                    .lock()
+                    .map_err(|_| "test preparation lock poisoned".to_string())?;
+                registry.prepare_if_needed(&entry, &database_path, || {
+                    prepare_count.fetch_add(1, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(15));
+                    Ok(())
+                })
+            }));
+        }
+        for worker in workers {
+            worker
+                .join()
+                .expect("preparation worker")
+                .expect("prepare read path");
+        }
+        assert_eq!(prepare_count.load(Ordering::SeqCst), 1);
+        let entry = registry.entry(&database_path).expect("preparation entry");
+        let guard = entry.prepare_lock.lock().expect("preparation lock");
+        registry
+            .require_prepared(&entry, &database_path)
+            .expect("explicit preparation unlocks read contract");
+        drop(guard);
+
+        registry
+            .invalidate(&database_path)
+            .expect("explicit replacement invalidation");
+        let entry = registry.entry(&database_path).expect("preparation entry");
+        let _guard = entry.prepare_lock.lock().expect("preparation lock");
+        assert_eq!(
+            registry
+                .require_prepared(&entry, &database_path)
+                .expect_err("replacement invalidation gates reads"),
+            LIBRARY_READ_NOT_PREPARED
+        );
+        assert!(registry
+            .prepare_if_needed(&entry, &database_path, || {
+                prepare_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .expect("prepare after invalidation"));
+        assert_eq!(prepare_count.load(Ordering::SeqCst), 2);
+
+        drop(_guard);
+        fs::remove_dir_all(&base_dir).expect("cleanup preparation test dir");
+    }
+
+    #[test]
+    fn prepared_library_connection_enforces_read_only_query_contract() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "sidera-library-read-contract-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&base_dir).expect("read contract test dir");
+        let database_path = base_dir.join("research-hotspots-v7.sqlite");
+        let connection = Connection::open(&database_path).expect("writable fixture connection");
+        connection
+            .pragma_update(
+                None,
+                "user_version",
+                research_hotspots_core::LIBRARY_SCHEMA_VERSION,
+            )
+            .expect("fixture schema version");
+        connection
+            .execute_batch("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('kept');")
+            .expect("fixture table");
+        drop(connection);
+
+        let connection = open_prepared_library_read_connection(&database_path)
+            .expect("prepared read-only connection");
+        let query_only: i64 = connection
+            .pragma_query_value(None, "query_only", |row| row.get(0))
+            .expect("query_only state");
+        assert_eq!(query_only, 1);
+        assert!(connection
+            .execute("INSERT INTO probe VALUES ('blocked')", [])
+            .is_err());
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM probe", [], |row| row.get(0))
+            .expect("read fixture");
+        assert_eq!(count, 1);
+
+        drop(connection);
+        fs::remove_dir_all(&base_dir).expect("cleanup read contract test dir");
+    }
+
+    #[test]
+    fn paper_query_predicate_emits_only_active_filters() {
+        let (unfiltered_sql, unfiltered_values) =
+            paper_query_predicate("project-a", None, None, None, None);
+        assert_eq!(unfiltered_sql, "project_id = ?");
+        assert_eq!(unfiltered_values.len(), 1);
+        assert!(!unfiltered_sql.contains("IS NULL OR"));
+
+        let normalized_query = normalize_query(Some("Graph_100%".to_string()));
+        let (filtered_sql, filtered_values) = paper_query_predicate(
+            "project-a",
+            normalized_query.as_deref(),
+            Some("institution"),
+            Some("Artificial Intelligence"),
+            Some(2026),
+        );
+        assert_eq!(
+            filtered_sql,
+            "project_id = ? AND search_blob LIKE ? ESCAPE '\\' AND source = ? AND field = ? AND year = ?"
+        );
+        assert_eq!(filtered_values.len(), 5);
+        assert_eq!(normalized_query.as_deref(), Some("%graph\\_100\\%%"));
+        assert!(!filtered_sql.contains("IS NULL OR"));
+    }
+
+    #[test]
+    fn paper_library_facets_use_revision_snapshot_and_native_year_grouping() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "sidera-library-facet-snapshot-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&base_dir).expect("facet snapshot test dir");
+        let database_path = base_dir.join("research-hotspots-v7.sqlite");
+        let mut connection = Connection::open(&database_path).expect("facet fixture connection");
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 CREATE TABLE papers(project_id TEXT NOT NULL, year INTEGER, source TEXT, field TEXT);
+                 CREATE TABLE library_revision_state(project_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+                 INSERT INTO library_revision_state VALUES ('project-a', 1);
+                 INSERT INTO papers VALUES
+                    ('project-a', 2024, 'a', 'x'),
+                    ('project-a', 2024, 'b', 'x'),
+                    ('project-a', 2023, 'a', 'y'),
+                    ('project-a', NULL, 'a', 'y'),
+                    ('project-b', 2024, 'a', 'x');",
+            )
+            .expect("facet fixture rows");
+
+        let writer = Connection::open(&database_path).expect("facet fixture writer");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .expect("deferred facet snapshot");
+        assert_eq!(
+            read_library_revision(&transaction, "project-a").expect("snapshot revision"),
+            1
+        );
+        writer
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 INSERT INTO papers VALUES ('project-a', 2025, 'c', 'z');
+                 UPDATE library_revision_state SET revision=2 WHERE project_id='project-a';
+                 COMMIT;",
+            )
+            .expect("concurrent facet revision commit");
+
+        let facets = compute_paper_library_facets(&transaction, "project-a")
+            .expect("revision-consistent facet snapshot");
+        assert_eq!(facets.years.len(), 2);
+        assert_eq!(facets.years[0].value, "2024");
+        assert_eq!(facets.years[0].count, 2);
+        assert_eq!(facets.years[1].value, "2023");
+        assert_eq!(facets.years[1].count, 1);
+        assert!(facets.years.iter().all(|facet| facet.value != "2025"));
+        transaction.commit().expect("commit facet snapshot");
+        assert_eq!(
+            read_library_revision(&connection, "project-a").expect("latest revision"),
+            2
+        );
+
+        drop(writer);
+        drop(connection);
+        remove_sqlite_sidecars(&database_path);
+        fs::remove_dir_all(&base_dir).expect("cleanup facet snapshot test dir");
+    }
+
+    #[test]
+    fn paper_library_facet_cache_is_revision_scoped() {
+        let cache = PaperLibraryFacetCache::default();
+        let compute_count = AtomicUsize::new(0);
+        let key = PaperLibraryFacetCacheKey {
+            database_key: "d:\\library\\research-hotspots-v7.sqlite".to_string(),
+            project_id: "project-a".to_string(),
+            library_revision: 1,
+        };
+        let facets = || PaperLibraryFacets {
+            sources: vec![CountFacet {
+                value: "institution".to_string(),
+                count: 10,
+            }],
+            fields: Vec::new(),
+            years: Vec::new(),
+        };
+
+        let first = cache
+            .get_or_compute(key.clone(), || {
+                compute_count.fetch_add(1, Ordering::SeqCst);
+                Ok(facets())
+            })
+            .expect("first facet computation");
+        let second = cache
+            .get_or_compute(key.clone(), || Err("cache miss".to_string()))
+            .expect("same revision facet cache hit");
+        assert_eq!(first.sources[0].count, second.sources[0].count);
+        assert_eq!(compute_count.load(Ordering::SeqCst), 1);
+
+        let mut next_key = key;
+        next_key.library_revision = 2;
+        cache
+            .get_or_compute(next_key, || {
+                compute_count.fetch_add(1, Ordering::SeqCst);
+                Ok(facets())
+            })
+            .expect("new revision facet computation");
+        assert_eq!(compute_count.load(Ordering::SeqCst), 2);
+        assert_eq!(cache.entries.lock().expect("facet cache entries").len(), 1);
+    }
 
     #[test]
     fn cluster_registry_rejects_same_project_and_allows_independent_keys() {
@@ -11807,17 +13198,40 @@ fn agent_get_draft_model_profiles(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                // Institution features own hidden WebView windows. Closing only the
+                // visible main window would otherwise keep the process alive and
+                // prevent a genuine restart (and WebView2 profile shutdown/flush).
+                window.app_handle().exit(0);
+            }
+        })
         .manage(PaperImportTaskRegistry::default())
         .manage(ClusterTaskRegistry::default())
         .manage(SemanticModelingRegistry::default())
         .manage(LibraryMutationRegistry::default())
         .manage(AiTaskRegistry::default())
         .manage(agent_runtime::AgentRuntimeState::default())
+        .manage(sidera_document_protocol::SideraDocumentResourceRegistry::default())
+        .manage(sidera_document_ocr::SideraDocumentOcrRuntimeState::default())
+        .manage(sidera_documents::SideraDocumentIndexRuntimeState::default())
+        .manage(sidera_institution_browser::SideraInstitutionBrowserRuntimeState::default())
+        .manage(sidera_institution_runtime::SideraInstitutionRuntimeState::default())
         .manage(sidera_pi_runtime::SideraPiRuntimeState::default());
     #[cfg(all(not(test), feature = "desktop-dialog"))]
     let builder = builder.plugin(tauri_plugin_dialog::init());
     builder
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
+        .register_uri_scheme_protocol(
+            "sidera-document",
+            sidera_document_protocol::handle_document_protocol,
+        )
         .invoke_handler(tauri::generate_handler![
             agent_create_run,
             agent_get_run,
@@ -11839,6 +13253,7 @@ pub fn run() {
             agent_runtime::agent_get_events,
             agent_runtime::agent_control_run,
             get_library_setup_state,
+            prepare_library_database,
             validate_library_location,
             initialize_library,
             get_library_mutation_status,
@@ -11885,6 +13300,99 @@ pub fn run() {
             sidera_pi_decide_tool_approval,
             sidera_pi_stop_session,
             sidera_agent_local_readiness,
+            sidera_institution_probe,
+            sidera_institution_browser::sidera_institution_browser_ensure,
+            sidera_institution_browser::sidera_institution_browser_state,
+            sidera_institution_browser::sidera_institution_browser_tab_new,
+            sidera_institution_browser::sidera_institution_browser_tab_select,
+            sidera_institution_browser::sidera_institution_browser_tab_close,
+            sidera_institution_browser::sidera_institution_browser_navigate,
+            sidera_institution_browser::sidera_institution_browser_back,
+            sidera_institution_browser::sidera_institution_browser_forward,
+            sidera_institution_browser::sidera_institution_browser_reload,
+            sidera_institution_browser::sidera_institution_browser_stop,
+            sidera_institution_browser::sidera_institution_browser_shell_set_bounds,
+            sidera_institution_browser::sidera_institution_browser_shell_set_visible,
+            sidera_institution_browser::sidera_institution_browser_auth_cancel,
+            sidera_institution_browser::sidera_institution_browser_reset,
+            sidera_institution_browser::sidera_institution_download_list,
+            sidera_institution_browser::sidera_institution_download_cancel,
+            sidera_institution_browser::sidera_institution_download_retry,
+            sidera_institution_browser::sidera_institution_download_open,
+            sidera_institution_browser::sidera_institution_download_reveal,
+            sidera_institution_runtime::sidera_institution_session_ensure,
+            sidera_institution_runtime::sidera_institution_session_restore,
+            sidera_institution_runtime::sidera_institution_session_restore_cancel,
+            sidera_institution_runtime::sidera_institution_session_state,
+            sidera_institution_runtime::sidera_institution_connection_begin,
+            sidera_institution_runtime::sidera_institution_connection_cancel,
+            sidera_institution_runtime::sidera_institution_browser_set_bounds,
+            sidera_institution_runtime::sidera_institution_browser_set_visible,
+            sidera_institution_runtime::sidera_institution_auth_cancel,
+            sidera_institution_runtime::sidera_institution_search_start,
+            sidera_institution_runtime::sidera_institution_search_cancel,
+            sidera_institution_runtime::sidera_research_search_start,
+            sidera_institution_runtime::sidera_research_search_cancel,
+            sidera_institution_runtime::sidera_research_search_snapshot,
+            sidera_institution_runtime::sidera_research_result_open,
+            sidera_institution_runtime::sidera_import_review_create_from_search,
+            sidera_institution_runtime::sidera_institution_result_open,
+            sidera_institution_runtime::sidera_institution_open_current_source,
+            sidera_institution_runtime::sidera_institution_session_reset,
+            sidera_import_review::sidera_import_review_batch_create,
+            sidera_import_review::sidera_import_review_batch_list,
+            sidera_import_review::sidera_import_review_batch_open,
+            sidera_import_review::sidera_import_review_batch_clone,
+            sidera_import_review::sidera_import_review_decision_save,
+            sidera_import_review::sidera_import_review_batch_discard,
+            sidera_import_review::sidera_import_review_commit_prepare,
+            sidera_import_review::sidera_import_review_commit_execute,
+            sidera_import_review::sidera_import_review_commit_status,
+            sidera_import_review::sidera_import_review_commit_history,
+            sidera_import_review::sidera_import_review_commit_rollback,
+            sidera_import_review::sidera_import_read_fault_fixture_arm,
+            sidera_import_review::sidera_import_read_fault_fixture_clear,
+            sidera_documents::sidera_document_import_local,
+            sidera_documents::sidera_document_attach_institution_download,
+            sidera_documents::sidera_document_paper_snapshot,
+            sidera_documents::sidera_document_open_institution_source,
+            sidera_documents::sidera_document_open_version,
+            sidera_documents::sidera_document_parse_start,
+            sidera_documents::sidera_document_parse_snapshot,
+            sidera_documents::sidera_document_parse_cancel,
+            sidera_documents::sidera_document_parse_page_submit,
+            sidera_documents::sidera_document_parse_finalize,
+            sidera_documents::sidera_document_search,
+            sidera_documents::sidera_document_page_text,
+            sidera_documents::sidera_document_page_text_get,
+            sidera_documents::sidera_document_annotation_list,
+            sidera_documents::sidera_document_annotation_create,
+            sidera_documents::sidera_document_annotation_update,
+            sidera_documents::sidera_document_annotation_save,
+            sidera_documents::sidera_document_annotation_delete,
+            sidera_documents::sidera_document_evidence_list,
+            sidera_documents::sidera_document_evidence_save,
+            sidera_documents::sidera_document_evidence_delete,
+            sidera_documents::sidera_document_saved_evidence_list,
+            sidera_documents::sidera_document_saved_evidence_save,
+            sidera_documents::sidera_document_saved_evidence_delete,
+            sidera_documents::sidera_document_source_preference_get,
+            sidera_documents::sidera_document_source_preference_save,
+            sidera_documents::sidera_document_index_start,
+            sidera_documents::sidera_document_index_current,
+            sidera_documents::sidera_document_index_snapshot,
+            sidera_documents::sidera_document_index_pause,
+            sidera_documents::sidera_document_index_resume,
+            sidera_documents::sidera_document_index_cancel,
+            sidera_documents::sidera_document_index_search,
+            sidera_documents::sidera_document_reader_manifest,
+            sidera_documents::sidera_document_reader_state_get,
+            sidera_documents::sidera_document_reader_state_save,
+            sidera_document_ocr::sidera_document_ocr_capabilities,
+            sidera_document_ocr::sidera_document_ocr_start,
+            sidera_document_ocr::sidera_document_ocr_current,
+            sidera_document_ocr::sidera_document_ocr_snapshot,
+            sidera_document_ocr::sidera_document_ocr_cancel,
             sidera_conversation_list,
             sidera_conversation_open_recent,
             sidera_conversation_create,

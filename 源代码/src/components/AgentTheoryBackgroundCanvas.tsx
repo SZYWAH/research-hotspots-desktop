@@ -1054,6 +1054,10 @@ export function AgentTheoryBackgroundCanvas({
           latestCameraPoseRef.current = pose;
           onCameraPoseChange(pose);
         }}
+        onFirstFrame={() => {
+          setFocusRuntimeReady(true);
+          onReady();
+        }}
         onReady={() => {
           setFocusRuntimeReady(true);
           onReady();

@@ -15,6 +15,7 @@ const [
   runtime,
   extension,
   settingsStore,
+  composerLayout,
   packageText,
 ] = await Promise.all([
   read("src/App.tsx"),
@@ -27,6 +28,7 @@ const [
   read("src-tauri/src/sidera_pi_runtime.rs"),
   read("src-tauri/resources/sidera_pi_paper_tools.ts"),
   read("src/data/researchStore.ts"),
+  read("src/lib/sideraComposerLayout.ts"),
   read("package.json"),
 ]);
 const pkg = JSON.parse(packageText);
@@ -107,6 +109,11 @@ assert.ok(page.includes("对话历史"));
 assert.ok(page.includes("上下文不可恢复"));
 assert.ok(page.includes("仅批准本次"));
 assert.ok(page.includes("未检测到"));
+assert.ok(page.includes("requestHistoryOpen(!historyOpen)"));
+assert.ok(page.includes("runDialogGeometryTransition"));
+assert.ok(page.includes("resolveSideraComposerHeight(textarea.value, textarea.scrollHeight)"));
+assert.ok(page.includes("useLayoutEffect(() =>"));
+assert.ok(composerLayout.includes("value.length === 0"));
 
 assert.ok(styles.includes("--sidera-glass-blur: var(--sidera-optical-glass-blur, 18px)"));
 assert.ok(styles.includes("backdrop-filter: blur(var(--sidera-glass-blur))"));
@@ -116,6 +123,11 @@ assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
 assert.ok(styles.includes("prefers-reduced-transparency"));
 assert.ok(styles.includes("forced-colors: active"));
 assert.ok(styles.includes("@supports not ((backdrop-filter"));
+assert.match(
+  styles,
+  /\[data-dialog-motion="geometry"\] \.agent-conversation-drawer > \*[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/u,
+  "history drawer text must stay hidden while the composed geometry moves",
+);
 
 for (const viewport of [1100, 1360, 1920]) {
   const dialog = Math.min(760, Math.max(560, viewport * 0.42));
@@ -135,6 +147,8 @@ console.log(JSON.stringify({
   tools: "rust-hosted-one-shot-approval",
   cacheRetention: ["auto", "long"],
   historyComposition: "centered-assembly-with-overlay-under-960px",
+  historyMotion: "shared-dialog-geometry-gate",
+  composerHeight: "value-only-42-to-100-prepaint",
   material: "static-liquid-glass-with-accessibility-fallbacks",
   providerCalls: 0,
   productAcceptance: "UNVERIFIED",

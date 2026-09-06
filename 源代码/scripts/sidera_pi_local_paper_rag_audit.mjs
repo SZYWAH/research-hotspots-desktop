@@ -16,8 +16,23 @@ const expectedTools = [
   "sidera_get_papers_by_ids",
   "sidera_finalize_evidence",
 ];
+const expectedDocumentTools = [
+  "sidera_search_document_segments",
+  "sidera_get_document_segments_by_ids",
+  "sidera_finalize_document_evidence",
+];
+const expectedSystemTools = [
+  "sidera_list_directory",
+  "sidera_read_file",
+  "sidera_search_files",
+  "sidera_fetch_url",
+  "sidera_write_file",
+  "sidera_edit_file",
+  "sidera_delete_path",
+  "sidera_run_shell",
+];
 
-for (const tool of expectedTools) {
+for (const tool of [...expectedTools, ...expectedDocumentTools]) {
   assert.ok(extensionSource.includes(`"${tool}"`), `extension must register ${tool}`);
   assert.ok(rustRuntime.includes(tool), `Rust runtime must whitelist ${tool}`);
 }
@@ -44,12 +59,18 @@ assert.ok(ragRuntime.includes("MAX_ABSTRACT_CHARS: usize = 4_000"));
 assert.ok(ragRuntime.includes("MAX_TOOL_RESULT_BYTES: usize = 128 * 1024"));
 assert.ok(frontendBridge.includes('type: "tool-stage"'), "frontend must standardize tool stages");
 assert.ok(appSource.includes("event.entityRefs"), "turn completion must attach verified references");
+assert.ok(rustRuntime.includes("turn.rag.has_reading_context() && !DOCUMENT_TOOL_NAMES.contains(&tool)"), "document turns must reject system and library tools");
+assert.ok(ragRuntime.includes("turn.has_reading_context() != DOCUMENT_TOOL_NAMES.contains(&tool)"), "document and paper tool scopes must never mix");
 
 process.env.SIDERA_PI_TOOL_NONCE = "audit-nonce";
 const extension = await import(`${new URL(`file:///${extensionPath.replaceAll("\\", "/")}`).href}?audit=${Date.now()}`);
 const registered = [];
 extension.default({ registerTool(tool) { registered.push(tool); } });
-assert.deepEqual(registered.map((tool) => tool.name), expectedTools);
+assert.deepEqual(registered.map((tool) => tool.name), [
+  ...expectedTools,
+  ...expectedDocumentTools,
+  ...expectedSystemTools,
+]);
 for (const tool of registered) {
   assert.equal(tool.parameters?.additionalProperties, false, `${tool.name} must reject unknown fields`);
   assert.equal(typeof tool.execute, "function", `${tool.name} must provide an execute function`);
@@ -58,6 +79,8 @@ for (const tool of registered) {
 console.log(JSON.stringify({
   status: "PASS",
   tools: expectedTools,
+  documentTools: expectedDocumentTools,
+  scopedSystemToolIsolation: "document-turn-rejects-system-and-library-tools",
   builtInTools: "disabled",
   databaseMode: "read-only",
   retrieval: "weighted-rrf-e5-like",

@@ -63,11 +63,7 @@ pub fn orthogonal_procrustes_3d(
     ) -> ([[f64; 3]; 3], f64) {
         let mut cross = [[0.0; 3]; 3];
         for (from, to) in source.iter().zip(target) {
-            let from = [
-                if reflected { -from[0] } else { from[0] },
-                from[1],
-                from[2],
-            ];
+            let from = [if reflected { -from[0] } else { from[0] }, from[1], from[2]];
             for row in 0..3 {
                 for column in 0..3 {
                     cross[row][column] += from[row] * to[column];
@@ -418,20 +414,22 @@ fn deterministic_component(
         }
         vector = next;
     }
-    let pivot = vector.iter().enumerate().fold(None, |best, (index, value)| {
-        let magnitude = value.abs();
-        match best {
-            None => Some((index, magnitude)),
-            Some((best_index, best_magnitude))
-                if magnitude > best_magnitude + 1e-15
-                    || ((magnitude - best_magnitude).abs() <= 1e-15
-                        && index < best_index) =>
-            {
-                Some((index, magnitude))
+    let pivot = vector
+        .iter()
+        .enumerate()
+        .fold(None, |best, (index, value)| {
+            let magnitude = value.abs();
+            match best {
+                None => Some((index, magnitude)),
+                Some((best_index, best_magnitude))
+                    if magnitude > best_magnitude + 1e-15
+                        || ((magnitude - best_magnitude).abs() <= 1e-15 && index < best_index) =>
+                {
+                    Some((index, magnitude))
+                }
+                Some(previous) => Some(previous),
             }
-            Some(previous) => Some(previous),
-        }
-    });
+        });
     if let Some((pivot, _)) = pivot {
         if vector[pivot] < 0.0 {
             for value in &mut vector {
@@ -479,7 +477,9 @@ fn normalized_centered_rows(
     let dimensions = records[0].vector.len();
     if dimensions == 0
         || expected_dimensions.is_some_and(|expected| expected != dimensions)
-        || records.iter().any(|record| record.vector.len() != dimensions)
+        || records
+            .iter()
+            .any(|record| record.vector.len() != dimensions)
     {
         return Err("SEMANTIC_EMBEDDING_DIMENSIONS_MISMATCH".into());
     }
@@ -548,7 +548,9 @@ pub fn semantic_centroid_record(
     }
     let dimensions = records[0].vector.len();
     if dimensions != SEMANTIC_EMBEDDING_DIMENSIONS
-        || records.iter().any(|record| record.vector.len() != dimensions)
+        || records
+            .iter()
+            .any(|record| record.vector.len() != dimensions)
     {
         return Err("SEMANTIC_EMBEDDING_DIMENSIONS_MISMATCH".into());
     }
@@ -572,7 +574,11 @@ pub fn semantic_centroid_record(
             *target += f64::from(*value) / norm;
         }
     }
-    let norm = centroid.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let norm = centroid
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
     if norm <= 1e-12 {
         return Err("SEMANTIC_HOTSPOT_CENTROID_DEGENERATE".into());
     }
@@ -597,8 +603,7 @@ pub fn project_semantic_hotspot_centroids(
     if records.len() < 4 {
         return Err("SEMANTIC_HOTSPOT_PROJECTION_TOO_SMALL".into());
     }
-    let mut coordinates =
-        project_raw_pca3(records, Some(SEMANTIC_EMBEDDING_DIMENSIONS))?;
+    let mut coordinates = project_raw_pca3(records, Some(SEMANTIC_EMBEDDING_DIMENSIONS))?;
     let radii = coordinates.iter().map(point_radius).collect::<Vec<_>>();
     let p95_radius = percentile(&radii, 0.95);
     let p99_radius = percentile(&radii, 0.99);
@@ -757,8 +762,14 @@ mod tests {
         let minimum = spans.iter().copied().fold(f64::INFINITY, f64::min);
         let maximum = spans.iter().copied().fold(0.0_f64, f64::max);
         let span_ratio = minimum / maximum.max(1e-12);
-        assert!(span_ratio > 0.01, "the fixture must retain a non-zero third axis");
-        assert!(span_ratio < 0.95, "raw PCA amplitudes must not be whitened into a sphere");
+        assert!(
+            span_ratio > 0.01,
+            "the fixture must retain a non-zero third axis"
+        );
+        assert!(
+            span_ratio < 0.95,
+            "raw PCA amplitudes must not be whitened into a sphere"
+        );
     }
 
     #[test]
@@ -774,9 +785,12 @@ mod tests {
                 .map(|points| {
                     let mut values = points
                         .values()
-                        .map(|point| (point.x * point.x + point.y * point.y + point.z * point.z).sqrt())
+                        .map(|point| {
+                            (point.x * point.x + point.y * point.y + point.z * point.z).sqrt()
+                        })
                         .collect::<Vec<_>>();
-                    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+                    values
+                        .sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
                     values[((values.len() - 1) as f64 * 0.90).round() as usize]
                 })
                 .collect::<Vec<_>>();

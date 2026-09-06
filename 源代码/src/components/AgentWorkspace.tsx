@@ -66,6 +66,7 @@ import {
   summarizeEventPayload,
 } from "../lib/agentUiModel";
 import { createAgentVisualReviewClient } from "../lib/agentVisualReview";
+import type { DocumentIndexSnapshot } from "../lib/documentReaderContract";
 import { openExternalUrl } from "../lib/desktop";
 
 const ACTOR_ID = "desktop-user";
@@ -76,6 +77,7 @@ type AgentWorkspaceProps = {
   activeProject: Project;
   libraryStatus: PaperLibraryStatus | null;
   v20Snapshot: V20HotspotSnapshot | null;
+  documentIndexActivity?: DocumentIndexSnapshot | null;
   onNavigate: (view: ActiveView) => void;
   onOpenPaper: (paperId: string, title?: string) => void;
   onNotice: (message: string, kind?: "success" | "info" | "error") => void;
@@ -95,6 +97,28 @@ type NewRunDraft = {
 
 type AgentRunCenterSection = "inbox" | "history";
 type AgentRunHistoryStatus = "all" | "completed" | "failed" | "cancelled";
+
+const DOCUMENT_INDEX_STATE_LABELS: Record<DocumentIndexSnapshot["state"], string> = {
+  queued: "等待中",
+  running: "构建中",
+  paused: "已暂停",
+  ready: "已就绪",
+  failed: "失败",
+  cancelled: "已取消",
+  superseded: "已替换",
+};
+
+const DOCUMENT_INDEX_STAGE_LABELS: Record<DocumentIndexSnapshot["stage"], string> = {
+  segmenting: "文本分段",
+  embedding: "生成向量",
+  complete: "索引完成",
+};
+
+function documentIndexModeLabel(mode: DocumentIndexSnapshot["resolvedMode"]): string {
+  if (mode === "hybrid") return "混合检索";
+  if (mode === "lexical") return "词法检索";
+  return "模式待确定";
+}
 
 const TERMINAL_RUN_STATUSES = new Set<AgentRunStatus>(["completed", "cancelled", "failed"]);
 const RECENT_RUN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -666,6 +690,39 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         <button type="button" onClick={() => switchCenterSection("inbox")}><span>失败待检查</span><strong>{runCenterData.recentFailed.length}</strong><small>最近 7 天，最多显示 3 项</small></button>
         <button type="button" onClick={() => switchCenterSection("history")}><span>最近完成</span><strong>{runCenterData.recentCompleted.length}</strong><small>最近 7 天完成的运行</small></button>
       </section>
+
+      {props.documentIndexActivity ? (
+        <section
+          className="agent-document-index-activity"
+          data-state={props.documentIndexActivity.state}
+          aria-label="文档索引任务"
+          aria-live="polite"
+        >
+          <Database size={16} aria-hidden="true" />
+          <div className="agent-document-index-activity__body">
+            <div className="agent-document-index-activity__heading">
+              <strong>文档索引任务</strong>
+              <span>{DOCUMENT_INDEX_STATE_LABELS[props.documentIndexActivity.state]}</span>
+            </div>
+            <div className="agent-document-index-activity__facts">
+              <span>{DOCUMENT_INDEX_STAGE_LABELS[props.documentIndexActivity.stage]}</span>
+              <span>{props.documentIndexActivity.embeddedCount} / {props.documentIndexActivity.segmentCount} 已向量化</span>
+              <span>{documentIndexModeLabel(props.documentIndexActivity.resolvedMode)}</span>
+              <span title={props.documentIndexActivity.fallbackReason ?? "无降级"}>
+                降级：{props.documentIndexActivity.fallbackReason ?? "无"}
+              </span>
+            </div>
+            <small>仅显示本进程内阅读器已观察的最新任务；重启后由对应阅读器恢复并重新上报。</small>
+          </div>
+          <button
+            type="button"
+            className="secondary-action agent-document-index-activity__return"
+            onClick={() => props.onNavigate("search")}
+          >
+            返回文献工作台
+          </button>
+        </section>
+      ) : null}
 
       {!snapshotReady && (
         <div className="agent-blocker-banner">

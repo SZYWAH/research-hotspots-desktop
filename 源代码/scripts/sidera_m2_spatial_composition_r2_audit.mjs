@@ -193,9 +193,9 @@ for (const azimuth of [0, Math.PI / 2, Math.PI, Math.PI * 1.5, Math.PI * 2]) {
 }
 assert.ok(maximumPivotProjectionError <= 1e-12);
 
-assert.match(dialogCss, /\.agent-dual-dialog__composer\s*\{[\s\S]*?align-items: center;[\s\S]*?min-height: 42px;/u);
-assert.match(dialogCss, /\.agent-dual-dialog__composer > button\s*\{[\s\S]*?width: 30px;[\s\S]*?height: 30px;[\s\S]*?align-self: center;/u);
-assert.match(dialogCss, /\.agent-dual-dialog__composer textarea\s*\{[\s\S]*?height: 42px;[\s\S]*?min-height: 42px;[\s\S]*?max-height: 100px;[\s\S]*?padding: 11px 0;[\s\S]*?line-height: 20px;/u);
+assert.match(dialogCss, /\.agent-dual-dialog__composer-track\s*\{[\s\S]*?align-items: center;[\s\S]*?min-height: 42px;[\s\S]*?max-height: 100px;[\s\S]*?padding: 6px 0;/u);
+assert.match(dialogCss, /\.agent-dual-dialog__composer-track > button\s*\{[\s\S]*?width: 30px;[\s\S]*?height: 30px;[\s\S]*?align-self: center;/u);
+assert.match(dialogCss, /\.agent-dual-dialog__composer-track textarea\s*\{[\s\S]*?height: 20px;[\s\S]*?min-height: 20px;[\s\S]*?max-height: 88px;[\s\S]*?padding: 0;[\s\S]*?line-height: 20px;/u);
 
 const journeyViewport = { width: 1920, height: 1080 };
 const journeyCamera = new THREE.PerspectiveCamera(

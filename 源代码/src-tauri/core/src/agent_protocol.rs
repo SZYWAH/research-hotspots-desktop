@@ -394,9 +394,12 @@ fn validate_flagship_search_query(query: &str) -> Result<(), String> {
         .filter(|term| !term.is_empty())
         .collect::<Vec<_>>();
     if !(2..=8).contains(&terms.len())
-        || !terms
-            .iter()
-            .any(|term| term.chars().filter(|character| character.is_ascii_alphabetic()).count() >= 3)
+        || !terms.iter().any(|term| {
+            term.chars()
+                .filter(|character| character.is_ascii_alphabetic())
+                .count()
+                >= 3
+        })
     {
         return Err("AGENT_PLAN_SEARCH_QUERY_INVALID".into());
     }
@@ -636,8 +639,7 @@ mod tests {
 
     #[test]
     fn executable_action_schema_only_allows_tool_calls() {
-        let schema =
-            executable_action_planner_output_schema("inspect_v20_snapshot", &json!({}));
+        let schema = executable_action_planner_output_schema("inspect_v20_snapshot", &json!({}));
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["properties"]["action"]["const"], "call_tool");
         assert_eq!(
@@ -755,8 +757,7 @@ mod tests {
     #[test]
     fn flagship_plan_rejects_a_full_workflow_objective_as_the_search_query() {
         let registry = AgentToolRegistry::standard().unwrap();
-        let objective =
-            "基于当前本地论文库与 V20 快照，分析检索增强科研智能体并生成可追溯报告";
+        let objective = "基于当前本地论文库与 V20 快照，分析检索增强科研智能体并生成可追溯报告";
         let draft = AgentPlanDraft {
             objective: objective.into(),
             assumptions: vec![],

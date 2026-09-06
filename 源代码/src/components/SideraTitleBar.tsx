@@ -1,5 +1,12 @@
 import { Minus, Square, X } from "lucide-react";
-import { useEffect, useState, type MouseEvent as ReactMouseEvent, type RefCallback } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type RefCallback,
+} from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { isDesktopRuntime } from "../lib/desktop";
@@ -7,11 +14,65 @@ import { isDesktopRuntime } from "../lib/desktop";
 type SideraTitleBarProps = {
   variant: "transparent" | "solid";
   toolsHostRef?: RefCallback<HTMLDivElement>;
+  onBeforeToggleMaximize?: () => Promise<void>;
+  onAfterToggleMaximize?: () => void;
 };
 
-export function SideraTitleBar({ variant, toolsHostRef }: SideraTitleBarProps) {
+const SIDERA_WINDOW_RESIZE_QUIET_MS = 120;
+const SIDERA_WINDOW_RESIZE_FALLBACK_MS = 900;
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function waitForPaintFrames(count: number) {
+  return new Promise<void>((resolve) => {
+    const step = (remaining: number) => {
+      if (remaining <= 0) {
+        resolve();
+        return;
+      }
+      window.requestAnimationFrame(() => step(remaining - 1));
+    };
+    step(count);
+  });
+}
+
+function waitForWindowResizeSettle() {
+  return new Promise<void>((resolve) => {
+    let completed = false;
+    let quietTimer = 0;
+    let fallbackTimer = 0;
+    const finish = () => {
+      if (completed) return;
+      completed = true;
+      window.clearTimeout(quietTimer);
+      window.clearTimeout(fallbackTimer);
+      window.removeEventListener("resize", handleResize);
+      void waitForPaintFrames(prefersReducedMotion() ? 1 : 2).then(resolve);
+    };
+    const armQuietTimer = () => {
+      window.clearTimeout(quietTimer);
+      quietTimer = window.setTimeout(finish, SIDERA_WINDOW_RESIZE_QUIET_MS);
+    };
+    const handleResize = () => armQuietTimer();
+
+    window.addEventListener("resize", handleResize);
+    armQuietTimer();
+    fallbackTimer = window.setTimeout(finish, SIDERA_WINDOW_RESIZE_FALLBACK_MS);
+  });
+}
+
+export function SideraTitleBar({
+  variant,
+  toolsHostRef,
+  onBeforeToggleMaximize,
+  onAfterToggleMaximize,
+}: SideraTitleBarProps) {
   const desktop = isDesktopRuntime();
   const [maximized, setMaximized] = useState(false);
+  const [maximizeToggleActive, setMaximizeToggleActive] = useState(false);
+  const maximizeToggleActiveRef = useRef(false);
 
   useEffect(() => {
     if (!desktop) return undefined;
@@ -40,9 +101,28 @@ export function SideraTitleBar({ variant, toolsHostRef }: SideraTitleBarProps) {
     };
   }, [desktop]);
 
+  const handleToggleMaximize = useCallback(async () => {
+    if (!desktop || maximizeToggleActiveRef.current) return;
+    maximizeToggleActiveRef.current = true;
+    setMaximizeToggleActive(true);
+    try {
+      await onBeforeToggleMaximize?.();
+      const appWindow = getCurrentWindow();
+      await appWindow.toggleMaximize();
+      await waitForWindowResizeSettle();
+      setMaximized(await appWindow.isMaximized());
+    } catch (error) {
+      console.warn("Unable to toggle Sidera window maximize state", error);
+    } finally {
+      onAfterToggleMaximize?.();
+      maximizeToggleActiveRef.current = false;
+      setMaximizeToggleActive(false);
+    }
+  }, [desktop, onAfterToggleMaximize, onBeforeToggleMaximize]);
+
   const handleDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
     if (!desktop || (event.target as HTMLElement).closest("button")) return;
-    void getCurrentWindow().toggleMaximize();
+    void handleToggleMaximize();
   };
 
   return (
@@ -78,11 +158,9 @@ export function SideraTitleBar({ variant, toolsHostRef }: SideraTitleBarProps) {
             type="button"
             aria-label={maximized ? "还原窗口" : "最大化窗口"}
             title={maximized ? "还原" : "最大化"}
-            onClick={async () => {
-              const appWindow = getCurrentWindow();
-              await appWindow.toggleMaximize();
-              setMaximized(await appWindow.isMaximized());
-            }}
+            disabled={maximizeToggleActive}
+            aria-busy={maximizeToggleActive}
+            onClick={() => void handleToggleMaximize()}
           >
             <Square size={12.5} strokeWidth={1.55} />
           </button>

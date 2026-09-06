@@ -193,13 +193,43 @@
   position: absolute;
   top: 38px;
   right: 0;
-  width: 164px;
+  width: min(260px, calc(100vw - 32px));
   padding: 5px;
   border: 1px solid rgba(240, 246, 255, 0.12);
   border-radius: 9px;
-  background: rgba(7, 9, 12, 0.92);
+  background: rgba(0, 0, 0, 0.94);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
   backdrop-filter: blur(18px);
+}
+
+.agent-dual-page__source-summary {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 5px;
+  padding: 8px 9px 10px;
+  border-bottom: 1px solid rgba(240, 246, 255, 0.08);
+}
+
+.agent-dual-page__source-summary > span {
+  color: rgba(228, 235, 244, 0.4);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.agent-dual-page__source-summary strong {
+  color: rgba(246, 249, 253, 0.88);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.agent-dual-page__source-summary small {
+  color: rgba(226, 234, 244, 0.5);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.agent-dual-page__source-summary small.is-stale {
+  color: rgba(224, 181, 100, 0.76);
 }
 
 .agent-dual-page__menu button {
@@ -656,6 +686,68 @@
   );
 }
 
+.agent-dual-dialog__reading-shell,
+.agent-dual-dialog__approval-shell,
+.agent-dual-dialog__footer-shell {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
+  transition: grid-template-rows 400ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-dual-dialog__reading-content,
+.agent-dual-dialog__approval-shell > section,
+.agent-dual-dialog__footer-shell > footer {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.agent-dual-dialog--collapsed .agent-dual-dialog__reading-shell,
+.agent-dual-dialog--collapsed .agent-dual-dialog__approval-shell,
+.agent-dual-dialog--collapsed .agent-dual-dialog__footer-shell {
+  grid-template-rows: minmax(0, 0fr);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.agent-dual-dialog > *,
+.agent-conversation-drawer > * {
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.agent-dual-page[data-dialog-motion="fading-out"] .agent-dual-dialog > *,
+.agent-dual-page[data-dialog-motion="fading-out"] .agent-conversation-drawer > * {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 140ms;
+}
+
+.agent-dual-page[data-dialog-motion="geometry"] .agent-dual-dialog > *,
+.agent-dual-page[data-dialog-motion="geometry"] .agent-conversation-drawer > *,
+.agent-dual-page[data-dialog-motion="settling"] .agent-dual-dialog > *,
+.agent-dual-page[data-dialog-motion="settling"] .agent-conversation-drawer > * {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 0ms;
+}
+
+.agent-dual-page[data-dialog-motion="fading-in"] .agent-dual-dialog > *,
+.agent-dual-page[data-dialog-motion="fading-in"] .agent-conversation-drawer > * {
+  opacity: 1;
+  transition-duration: 180ms;
+}
+
+.agent-dual-page[data-window-geometry-transition="true"] .agent-dual-dialog > *,
+.agent-dual-page[data-window-geometry-transition="true"] .agent-conversation-drawer > * {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 140ms;
+}
+
 .agent-dual-dialog__header {
   display: flex;
   align-items: center;
@@ -806,10 +898,7 @@
 }
 
 .agent-dual-dialog__composer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  gap: 8px;
-  align-items: center;
+  display: block;
   min-height: 42px;
   padding: 0 6px 0 10px;
   border: 1px solid rgba(235, 242, 250, 0.095);
@@ -824,12 +913,30 @@
   backdrop-filter: blur(12px) saturate(110%);
 }
 
-.agent-dual-dialog--collapsed .agent-dual-dialog__composer {
-  grid-template-columns: 30px 30px minmax(0, 1fr) 32px;
+.agent-dual-dialog__composer-track {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
   min-height: 42px;
+  max-height: 100px;
+  padding: 6px 0;
+  box-sizing: border-box;
+}
+
+.agent-dual-dialog--collapsed .agent-dual-dialog__composer {
+  height: auto;
+  min-height: 42px;
+  max-height: 100px;
+  overflow: hidden;
   border: 0;
   border-radius: inherit;
   background: transparent;
+}
+
+.agent-dual-dialog--collapsed .agent-dual-dialog__composer-track {
+  grid-template-columns: 30px 30px minmax(0, 1fr) 32px;
 }
 
 .agent-dual-dialog__restore {
@@ -843,13 +950,14 @@
   color: rgba(226, 234, 244, 0.54);
 }
 
-.agent-dual-dialog__composer textarea {
+.agent-dual-dialog__composer-track textarea {
   width: 100%;
-  height: 42px;
-  min-height: 42px;
-  max-height: 100px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 88px;
+  align-self: center;
   box-sizing: border-box;
-  padding: 11px 0;
+  padding: 0;
   overflow-y: hidden;
   resize: none;
   border: 0;
@@ -861,11 +969,11 @@
   line-height: 20px;
 }
 
-.agent-dual-dialog__composer textarea::placeholder {
+.agent-dual-dialog__composer-track textarea::placeholder {
   color: rgba(209, 220, 233, 0.28);
 }
 
-.agent-dual-dialog__composer > button {
+.agent-dual-dialog__composer-track > button {
   display: grid;
   width: 30px;
   height: 30px;
@@ -877,12 +985,12 @@
   color: rgba(244, 248, 252, 0.74);
 }
 
-.agent-dual-dialog__composer > button:hover:not(:disabled) {
+.agent-dual-dialog__composer-track > button:hover:not(:disabled) {
   background: rgba(236, 242, 250, 0.14);
   color: #fff;
 }
 
-.agent-dual-dialog__composer > button:disabled {
+.agent-dual-dialog__composer-track > button:disabled {
   opacity: 0.24;
 }
 
@@ -1484,13 +1592,6 @@
   background: transparent;
 }
 
-.agent-dual-page--explore .agent-dual-dialog__composer textarea {
-  height: 42px;
-  min-height: 42px;
-  padding: 11px 0;
-  line-height: 20px;
-}
-
 .agent-dual-page--returning .agent-dual-dialog {
   top: var(--agent-return-dialog-top, calc(100% - 21px));
   width: min(
@@ -1518,13 +1619,7 @@
   background: transparent;
 }
 
-.agent-dual-page--returning .agent-dual-dialog__composer textarea {
-  height: 42px;
-  min-height: 42px;
-  padding: 11px 0;
-  line-height: 20px;
-}
-
+.agent-dual-page__availability,
 .agent-dual-page__error {
   position: absolute;
   top: 50%;
@@ -1537,17 +1632,25 @@
   padding: 18px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
-  background: rgba(8, 10, 13, 0.88);
+  background: rgba(0, 0, 0, 0.94);
   color: rgba(236, 241, 247, 0.7);
   font-size: 12px;
   transform: translate(-50%, -50%);
 }
 
+.agent-dual-page__availability strong,
 .agent-dual-page__error strong {
   color: rgba(255, 255, 255, 0.94);
   font-size: 14px;
 }
 
+.agent-dual-page__availability-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-dual-page__availability-actions button,
 .agent-dual-page__error button {
   display: inline-flex;
   width: max-content;
@@ -1559,6 +1662,17 @@
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.8);
   font-size: 11px;
+}
+
+.agent-dual-page__availability-actions button:first-child {
+  border-color: rgba(154, 179, 218, 0.28);
+  background: rgba(111, 139, 181, 0.16);
+  color: rgba(248, 250, 253, 0.94);
+}
+
+.agent-dual-page__availability-actions button:focus-visible {
+  outline: 1px solid rgba(184, 207, 239, 0.74);
+  outline-offset: 3px;
 }
 
 @media (max-width: 959px) {
@@ -1630,6 +1744,11 @@
   .agent-dual-page__focus-dim,
   .agent-dual-dialog,
   .agent-conversation-drawer,
+  .agent-dual-dialog__reading-shell,
+  .agent-dual-dialog__approval-shell,
+  .agent-dual-dialog__footer-shell,
+  .agent-dual-dialog > *,
+  .agent-conversation-drawer > *,
   .sidera-evidence-card {
     transition-duration: 1ms;
     animation-duration: 1ms;

@@ -763,6 +763,7 @@ type App17GalaxyCanvasProps = {
   ) => void;
   agentTheoryFocusVisual?: AgentTheoryFocusVisualState | null;
   onCameraPoseChange?: (pose: GalaxyCameraPose) => void;
+  onFirstFrame?: () => void;
   onReady?: () => void;
   onRuntimeError?: (message: string) => void;
 };
@@ -1643,6 +1644,7 @@ export function App17GalaxyCanvas({
   onAgentTheoryReturnProgress,
   agentTheoryFocusVisual,
   onCameraPoseChange,
+  onFirstFrame,
   onReady,
   onRuntimeError,
 }: App17GalaxyCanvasProps) {
@@ -1680,6 +1682,7 @@ export function App17GalaxyCanvas({
   );
   const agentTheoryFocusVisualRef = useRef(agentTheoryFocusVisual);
   const onCameraPoseChangeRef = useRef(onCameraPoseChange);
+  const onFirstFrameRef = useRef(onFirstFrame);
   const onReadyRef = useRef(onReady);
   const onRuntimeErrorRef = useRef(onRuntimeError);
   const resetDiagnosticsRef = useRef<(() => void) | null>(null);
@@ -1814,6 +1817,10 @@ export function App17GalaxyCanvas({
   useEffect(() => {
     onAgentTheoryReturnProgressRef.current = onAgentTheoryReturnProgress;
   }, [onAgentTheoryReturnProgress]);
+
+  useEffect(() => {
+    onFirstFrameRef.current = onFirstFrame;
+  }, [onFirstFrame]);
 
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -2717,6 +2724,7 @@ export function App17GalaxyCanvas({
     viewportOffsetControllerRef.current(contextRailModeRef.current);
     let runtimeActive = active;
     let renderRequested = true;
+    let firstFrameReported = false;
     let readyReported = false;
     let runtimeFailureReported = false;
     let agentTheoryInitialGateComplete = visualProfile !== "agent-theory";
@@ -11536,6 +11544,10 @@ export function App17GalaxyCanvas({
             return;
           }
         }
+        if (!firstFrameReported) {
+          firstFrameReported = true;
+          onFirstFrameRef.current?.();
+        }
         if (!readyReported) {
           if (visualProfile !== "agent-theory") {
             readyReported = true;
@@ -11789,7 +11801,14 @@ export function App17GalaxyCanvas({
     scheduleSystemPreparation(selectedIdRef.current, false);
     if (runAgentTheoryInitialRuntimeGate()) {
       initializeAgentTheoryScreenLodWorker();
-      invalidate(true);
+      if (document.visibilityState === "hidden") {
+        invalidate(true);
+      } else {
+        // The startup contract is the first error-free WebGL render. Render
+        // synchronously so a cold WebView2 window cannot strand startup while
+        // requestAnimationFrame is temporarily throttled during reveal.
+        render(performance.now());
+      }
     }
 
     return () => {

@@ -1,6 +1,6 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.22.0-beta.2"
+version = "0.22.0-beta.3"
 description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
 authors = ["Research Hotspots Desktop"]
 edition = "2021"
@@ -92,6 +92,11 @@ path = "src/bin/audit_sidera_pi_rag.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "audit_document_ocr_runtime"
+path = "src/bin/audit_document_ocr_runtime.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "rebuild_semantic_galaxy_snapshot"
 path = "src/bin/rebuild_semantic_galaxy_snapshot.rs"
 required-features = ["dev-tools"]
@@ -102,15 +107,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 test = false
 
 [workspace]
-members = ["core", "conversation-store-test-harness"]
+members = ["core", "conversation-store-test-harness", "windows-test-host-smoke"]
 resolver = "2"
 
 [build-dependencies]
-embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "=2.11.5", features = ["unstable"] }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -119,9 +123,15 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 csv = "1"
 sha2 = "0.10"
 fs2 = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
 fastembed = { version = "5.17.3", default-features = false, features = ["ort-download-binaries-rustls-tls", "directml"] }
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["download-binaries", "tls-rustls", "directml"] }
 research-hotspots-core = { path = "core" }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 tokio = { version = "1", features = ["sync", "time", "macros", "rt", "net"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp"] }
+webview2-com = "0.38"
+windows-core = "0.61"

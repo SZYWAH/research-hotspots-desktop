@@ -3,13 +3,17 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   Activity,
   AlertTriangle,
@@ -34,6 +38,8 @@ import {
   Globe2,
   Home,
   Loader2,
+  ListChecks,
+  Link2,
   LocateFixed,
   MoreHorizontal,
   Network,
@@ -46,6 +52,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Trash2,
@@ -68,6 +75,7 @@ import {
   type GalaxyContextRailMode,
 } from "./components/App17GalaxyCanvas";
 import { AgentWorkspace } from "./components/AgentWorkspace";
+import { DocumentReaderShell } from "./components/DocumentReaderShell";
 import {
   AgentDualBackgroundPage,
   type AgentPromptSubmitEvent,
@@ -75,6 +83,14 @@ import {
 } from "./components/AgentDualBackgroundPage";
 import { SideraSplash, type SideraBootPhase } from "./components/SideraSplash";
 import { SideraTitleBar } from "./components/SideraTitleBar";
+import { WorkbenchSideSheet } from "./components/WorkbenchSideSheet";
+import type { BundledPdfJsModule } from "./lib/documentPdfJsAdapter";
+import type {
+  DocumentEvidenceAnchor,
+  DocumentIndexSnapshot,
+  SideraReadingContextScope,
+} from "./lib/documentReaderContract";
+import { createDesktopDocumentReaderComposition } from "./lib/documentReaderDesktopService";
 import { readAgentVisualReviewScenario } from "./lib/agentVisualReview";
 import type {
   SideraNavigationLayout,
@@ -110,6 +126,103 @@ import {
   type SideraConversationSummary,
   type SideraAgentLocalReadiness,
 } from "./lib/sideraConversations";
+import {
+  SIDERA_INSTITUTION_ACADEMIC_ADAPTER_ID,
+  SIDERA_INSTITUTION_CATALOG_ADAPTER_ID,
+  SIDERA_RESEARCH_ACADEMIC_CONNECTOR_ID,
+  beginSideraInstitutionConnection,
+  cancelSideraInstitutionSessionRestore,
+  cancelSideraResearchSearch,
+  cancelSideraInstitutionConnection,
+  cancelSideraInstitutionAuth,
+  cancelSideraInstitutionBrowserAuth,
+  cancelSideraInstitutionDownload,
+  cancelSideraInstitutionSearch,
+  closeSideraInstitutionBrowserTab,
+  createSideraInstitutionBrowserTab,
+  ensureSideraInstitutionSession,
+  ensureSideraInstitutionBrowser,
+  getSideraInstitutionBrowserState,
+  getSideraInstitutionSessionState,
+  getSideraResearchSearchState,
+  goBackSideraInstitutionBrowser,
+  goForwardSideraInstitutionBrowser,
+  listenSideraInstitutionBrowser,
+  listenSideraInstitutionDownloads,
+  listenSideraInstitutionSearch,
+  listenSideraInstitutionSession,
+  listenSideraResearchSearch,
+  navigateSideraInstitutionBrowserTab,
+  listSideraInstitutionDownloads,
+  openSideraInstitutionCurrentSource,
+  openSideraInstitutionDownload,
+  openSideraInstitutionResult,
+  openSideraResearchResult,
+  probeSideraInstitution,
+  reloadSideraInstitutionBrowser,
+  revealSideraInstitutionDownload,
+  resetSideraInstitutionBrowser,
+  resetSideraInstitutionSession,
+  restoreSideraInstitutionSession,
+  retrySideraInstitutionDownload,
+  selectSideraInstitutionBrowserTab,
+  setSideraInstitutionBrowserShellBounds,
+  setSideraInstitutionBrowserShellVisible,
+  setSideraInstitutionBrowserVisible,
+  shouldAcceptSideraResearchSearchState,
+  shouldAcceptSideraInstitutionSearchEvent,
+  sideraResearchSearchStateCursor,
+  sideraInstitutionSearchStreamKey,
+  startSideraInstitutionSearch,
+  startSideraResearchSearch,
+  stopSideraInstitutionBrowser,
+  type SideraInstitutionCapabilityStatus,
+  type SideraInstitutionAuthKind,
+  type SideraInstitutionAuthState,
+  type SideraInstitutionAuthStatus,
+  type SideraInstitutionClientStatus,
+  type SideraInstitutionEndpointStatus,
+  type SideraInstitutionProbeResult,
+  type SideraInstitutionBrowserState,
+  type SideraInstitutionDownloadRecord,
+  type SideraInstitutionSearchSnapshot,
+  type SideraInstitutionSearchSource,
+  type SideraInstitutionSessionState,
+  type SideraInstitutionSearchEventCursor,
+  type SideraNormalizedCandidateDraft,
+  type SideraResearchSearchEventCursor,
+  type SideraResearchSearchFilters,
+  type SideraResearchSearchStartReason,
+  type SideraResearchSearchState,
+  type SideraResearchSearchSnapshot,
+} from "./lib/sideraInstitution";
+import {
+  SIDERA_INSTITUTION_BROWSER_DEFAULT_RATIO,
+  SIDERA_INSTITUTION_BROWSER_DIVIDER_WIDTH,
+  SIDERA_INSTITUTION_BROWSER_LAYOUT_STORAGE_KEY,
+  parseSideraInstitutionBrowserLayout,
+  resolveSideraInstitutionSplitLayout,
+  serializeSideraInstitutionBrowserLayout,
+  type SideraInstitutionBrowserPresentation,
+  type SideraInstitutionNarrowPane,
+} from "./lib/sideraInstitutionLayout";
+import {
+  orderSideraResearchCandidates,
+  paginateSideraResearchCandidates,
+  shouldResetSideraResearchPresentation,
+  sideraResearchFiltersAreActive,
+  sideraResearchSnapshotKey,
+  toggleSideraResearchPageSelection,
+  type SideraResearchDisplayOrder,
+} from "./lib/sideraResearchPresentation";
+
+const SIDERA_AGENT_MOUNT_DEADLINE_MS = 20_000;
+
+const documentReaderComposition = createDesktopDocumentReaderComposition({
+  loadPdfJs: async () => await import("pdfjs-dist") as unknown as BundledPdfJsModule,
+  workerUrl: pdfWorkerUrl,
+  parserVersion: "pdfjs-dist@5.4.149",
+});
 
 const threeConsole = (THREE as unknown as {
   setConsoleFunction?: (handler: ((type: string, message: string, ...args: unknown[]) => void) | null) => void;
@@ -180,12 +293,19 @@ import {
   chooseChromeDriverFile,
   chooseExportDirectory,
   choosePaperImportFile,
+  choosePdfFile,
   chooseSqliteBackupFile,
+  cloneImportReviewBatch,
   confirmDesktopAction,
   controlPaperFileImport,
   controlSemanticModeling,
+  createImportReviewBatch,
+  createImportReviewBatchFromSearch,
   deletePapersFromLibrary,
+  discardImportReviewBatch,
+  executeImportReviewCommit,
   getApp17GalaxyPayload,
+  getImportReviewCommitStatus,
   getV20GalaxyPayload,
   getV20HotspotSnapshot,
   getLibraryMutationStatus,
@@ -200,9 +320,20 @@ import {
   isGalaxyVisualReviewMode,
   isDesktopRuntime,
   initializeLibrary,
+  prepareLibraryDatabase,
   inspectPaperLibraryBackup,
+  getPaperDocumentSnapshot,
+  importLocalPaperDocument,
+  attachInstitutionDownloadToPaper,
+  armImportReadFaultFixture,
+  openInstitutionPaperSource,
+  listImportReviewBatches,
+  listImportReviewCommitHistory,
   loadApp17Galaxy,
   openExternalUrl,
+  openPaperDocumentVersion,
+  openImportReviewBatch,
+  prepareImportReviewCommit,
   queryPaperLibrary,
   readMarkdownExports,
   runCleanerWorker,
@@ -215,16 +346,32 @@ import {
   startPaperFileImport,
   startMysqlPaperImport,
   restorePaperLibrary,
+  rollbackImportReviewCommit,
+  clearImportReadFaultFixture,
+  saveImportReviewDecision,
   validateLibraryLocation,
   upsertPaperLibrary,
   writeTextFile,
   type DesktopHealthResult,
+  type LibraryLocationValidation,
   type LibraryPressureTestResult,
   type LibrarySetupMode,
   type LibrarySetupState,
   type LibraryMutationStatus,
   type InitializeLibraryResult,
   type PaperFileImportProgress,
+  type SideraImportCommitHistory,
+  type SideraImportCommitPreview,
+  type SideraImportCommitResult,
+  type SideraImportCommitStatus,
+  type SideraImportRollbackResult,
+  type SideraImportCandidate,
+  type SideraImportDecisionKind,
+  type SideraImportReadFaultTarget,
+  type SideraImportReviewBatch,
+  type SideraDocumentVersionKind,
+  type SideraPaperDocumentSnapshot,
+  type SideraPaperSourceRecord,
   type SemanticEmbeddingCapabilities,
   type SemanticModelingStatus,
 } from "./lib/desktop";
@@ -245,6 +392,7 @@ import type {
   Paper,
   PaperLibraryFacets,
   PaperLibraryStatus,
+  PaperQueryInput,
   PaperQueryResult,
   PipelineJob,
   Project,
@@ -276,6 +424,14 @@ const sourceOptions: Array<{ id: SourceKind; label: string; description: string 
   { id: "openalex", label: "OpenAlex", description: "开放学术知识图谱" },
   { id: "arxiv", label: "arXiv", description: "预印本与前沿论文" },
   { id: "cnki", label: "CNKI", description: "桌面端后台检索" },
+];
+
+const paperSourceOptions: Array<{ value: SourceKind; label: string }> = [
+  { value: "openalex", label: "OpenAlex" },
+  { value: "arxiv", label: "arXiv" },
+  { value: "cnki", label: "CNKI" },
+  { value: "local", label: "本地导入" },
+  { value: "institution", label: "机构资源" },
 ];
 
 const defaultReportOptions: ReportGenerationOptions = {
@@ -337,14 +493,35 @@ type SearchFocusIntent = {
 };
 
 type AppNoticeKind = "success" | "info" | "error";
+type AppNoticeScope = "institution-sso" | "institution-search" | "import-review";
 
 type AppNotice = {
   id: number;
   message: string;
   kind: AppNoticeKind;
+  scope?: AppNoticeScope;
+  scopeRevision?: number;
+  dismissAfterMs?: number;
 };
 
-type AppNoticeHandler = (message: string, kind?: AppNoticeKind) => void;
+type AppNoticeHandler = (
+  message: string,
+  kind?: AppNoticeKind,
+  options?: { scope?: AppNoticeScope; scopeRevision?: number; dismissAfterMs?: number },
+) => void;
+
+type AppNoticeScopeClearHandler = (scope: AppNoticeScope) => number;
+
+type ImportReviewReadDiagnostic = {
+  state: "idle" | "ready" | "error";
+  message?: string;
+};
+
+type ImportReviewReadDiagnostics = {
+  batches: ImportReviewReadDiagnostic;
+  status: ImportReviewReadDiagnostic;
+  history: ImportReviewReadDiagnostic;
+};
 
 type SideraAgentActivityStatus =
   | "idle"
@@ -386,7 +563,29 @@ type HotspotFocusIntent = {
   timestamp: number;
 };
 
-type LiteratureWorkspaceTab = "library" | "ingest" | "analysis";
+type DocumentEvidenceFocusIntent = {
+  paperId: string;
+  versionId: string;
+  title: string;
+  anchor: DocumentEvidenceAnchor;
+  timestamp: number;
+};
+
+type LiteratureWorkspaceTab = "library" | "institution" | "ingest" | "analysis";
+
+type PaperLibraryBootstrapSnapshot = {
+  identity: string;
+  databasePath: string;
+  projectId: string;
+  libraryRevision: number;
+  facets: PaperLibraryFacets;
+  page: PaperQueryResult;
+};
+
+type PaperDocumentPanelLoadResult = {
+  snapshot: SideraPaperDocumentSnapshot;
+  downloads: SideraInstitutionDownloadRecord[];
+};
 
 type PipelineStepId = "prepare" | "clean" | "cluster" | "result";
 
@@ -454,6 +653,113 @@ function galaxySessionCacheKey(databaseDir: string, projectId: string) {
   return `${databaseDir.trim().toLowerCase()}::${projectId}`;
 }
 
+function normalizePaperLibraryPath(value?: string) {
+  return (value ?? "").trim().replace(/\\/g, "/").toLowerCase();
+}
+
+function paperLibraryReadIdentity(databasePath: string, projectId: string, libraryRevision: number) {
+  return `${normalizePaperLibraryPath(databasePath)}::${projectId}::r${libraryRevision}`;
+}
+
+function paperLibraryQueryKey(identity: string, input: PaperQueryInput) {
+  return JSON.stringify([
+    identity,
+    input.query?.trim() ?? "",
+    input.source ?? "all",
+    input.field ?? "all",
+    input.year ?? null,
+    input.limit ?? 20,
+    input.offset ?? 0,
+    input.sort ?? "newest",
+  ]);
+}
+
+function paperPageFromBootstrap(
+  bootstrap: PaperLibraryBootstrapSnapshot | null,
+  input: PaperQueryInput,
+) {
+  if (!bootstrap) return null;
+  if (
+    input.query?.trim()
+    || (input.source && input.source !== "all")
+    || (input.field && input.field !== "all")
+    || input.year !== undefined
+    || (input.sort && input.sort !== "newest")
+  ) return null;
+  const limit = Math.max(1, input.limit ?? 20);
+  const offset = Math.max(0, input.offset ?? 0);
+  const requiredRows = Math.min(bootstrap.page.total, offset + limit);
+  if (offset < bootstrap.page.total && requiredRows > bootstrap.page.rows.length) return null;
+  return {
+    rows: bootstrap.page.rows.slice(offset, offset + limit),
+    total: bootstrap.page.total,
+    limit,
+    offset,
+    queryMs: bootstrap.page.queryMs,
+  } satisfies PaperQueryResult;
+}
+
+type SharedInFlightRequest<T> = {
+  promise: Promise<T>;
+  started: boolean;
+};
+
+function shareInFlight<T>(
+  requests: Map<string, Promise<T>>,
+  key: string,
+  start: () => Promise<T>,
+): SharedInFlightRequest<T> {
+  const current = requests.get(key);
+  if (current) return { promise: current, started: false };
+  const promise = start();
+  requests.set(key, promise);
+  const clear = () => {
+    if (requests.get(key) === promise) requests.delete(key);
+  };
+  void promise.then(clear, clear);
+  return { promise, started: true };
+}
+
+const paperLibraryPageRequests = new Map<string, Promise<PaperQueryResult>>();
+const paperDocumentPanelRequests = new Map<string, Promise<PaperDocumentPanelLoadResult>>();
+
+function requestPaperLibraryPageOnce(identity: string, input: PaperQueryInput) {
+  return shareInFlight(
+    paperLibraryPageRequests,
+    paperLibraryQueryKey(identity, input),
+    () => queryPaperLibrary(input),
+  );
+}
+
+function requestPaperDocumentPanelOnce(input: {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+  refreshRevision: number;
+}) {
+  const key = JSON.stringify([
+    normalizePaperLibraryPath(input.databaseDir),
+    input.projectId,
+    input.paperId,
+    input.refreshRevision,
+  ]);
+  return shareInFlight(
+    paperDocumentPanelRequests,
+    key,
+    async () => {
+      const [snapshot, downloads] = await Promise.all([
+        getPaperDocumentSnapshot({
+          databaseDir: input.databaseDir,
+          projectId: input.projectId,
+          paperId: input.paperId,
+        }),
+        listSideraInstitutionDownloads(),
+      ]);
+      return { snapshot, downloads };
+    },
+  ).promise;
+}
+
 export default function App() {
   const galaxyVisualReview = isGalaxyVisualReviewMode();
   const agentVisualReviewScenario = useMemo(readAgentVisualReviewScenario, []);
@@ -465,6 +771,7 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
+  const [libraryBootstrap, setLibraryBootstrap] = useState<PaperLibraryBootstrapSnapshot | null>(null);
   const [libraryStatus, setLibraryStatus] = useState<PaperLibraryStatus | null>(null);
   const [librarySetupState, setLibrarySetupState] = useState<LibrarySetupState | null>(null);
   const [librarySetupRequired, setLibrarySetupRequired] = useState(false);
@@ -488,6 +795,21 @@ export default function App() {
   const [piAgentTerminalActivity, setPiAgentTerminalActivity] =
     useState<SideraAgentTerminalActivity>(null);
   const [searchFocusIntent, setSearchFocusIntent] = useState<SearchFocusIntent | null>(null);
+  const [documentEvidenceFocusIntent, setDocumentEvidenceFocusIntent] =
+    useState<DocumentEvidenceFocusIntent | null>(null);
+  const [literatureWorkspaceTab, setLiteratureWorkspaceTab] = useState<LiteratureWorkspaceTab | null>(null);
+  const [documentReaderActive, setDocumentReaderActive] = useState(false);
+  const [documentIndexActivity, setDocumentIndexActivity] = useState<DocumentIndexSnapshot | null>(null);
+  const [institutionSession, setInstitutionSession] = useState<SideraInstitutionSessionState | null>(null);
+  const [institutionSearchSnapshots, setInstitutionSearchSnapshots] = useState<
+    Record<SideraInstitutionSearchSource, SideraInstitutionSearchSnapshot | null>
+  >({ "academic-discovery": null, catalog: null });
+  const [researchSearchState, setResearchSearchState] = useState<SideraResearchSearchState | null>(null);
+  const [researchSearchQuery, setResearchSearchQuery] = useState("人工智能");
+  const [selectedResearchCandidateIds, setSelectedResearchCandidateIds] = useState<string[]>([]);
+  const [institutionBrowserPresentation, setInstitutionBrowserPresentation] =
+    useState<SideraInstitutionBrowserPresentation>("closed");
+  const [institutionTerminalActivity, setInstitutionTerminalActivity] = useState<"complete" | "failed" | null>(null);
   const [hotspotFocusIntent, setHotspotFocusIntent] =
     useState<HotspotFocusIntent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -496,6 +818,7 @@ export default function App() {
   const [edgeNavigationPhase, setEdgeNavigationPhase] = useState<"idle" | "arming" | "open">("idle");
   const [edgeNavigationOpenedBy, setEdgeNavigationOpenedBy] = useState<"edge" | "keyboard" | null>(null);
   const [titleBarToolsHost, setTitleBarToolsHost] = useState<HTMLDivElement | null>(null);
+  const [windowGeometryTransitionActive, setWindowGeometryTransitionActive] = useState(false);
   const [sideraBootPhase, setSideraBootPhase] = useState<SideraBootPhase>(
     bypassSideraBoot ? "ready" : "booting-data",
   );
@@ -514,9 +837,13 @@ export default function App() {
   });
   const sideraBootStartedAtRef = useRef(performance.now());
   const sideraSplashMountedRef = useRef(!bypassSideraBoot);
+  const sideraAgentStartupSettledRef = useRef(bypassSideraBoot);
+  const sideraAgentFirstFrameReadyRef = useRef(bypassSideraBoot);
   const edgeNavigationTimerRef = useRef<number | null>(null);
   const edgeNavigationCloseTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const institutionWorkbenchScrollTopRef = useRef(0);
+  const institutionBrowserImmersiveActiveRef = useRef(false);
   const galaxySessionsRef = useRef(new Map<string, GalaxySessionState>());
   const galaxyRequestsRef = useRef(new Map<string, Promise<void>>());
   const refreshRequestSequenceRef = useRef(0);
@@ -532,16 +859,182 @@ export default function App() {
   const piConfigKeyRef = useRef("");
   const activeViewRef = useRef(activeView);
   const piAgentActivityTimerRef = useRef(0);
+  const institutionActivityTimerRef = useRef(0);
+  const institutionSearchEventCursorsRef = useRef(
+    new Map<string, SideraInstitutionSearchEventCursor>(),
+  );
+  const institutionSessionRef = useRef<SideraInstitutionSessionState | null>(null);
+  const institutionRestoreAttemptedRef = useRef(false);
+  const researchSearchEventCursorRef = useRef<SideraResearchSearchEventCursor | null>(null);
+  const researchSearchStateRef = useRef<SideraResearchSearchState | null>(null);
+  const researchSearchSubmitRef = useRef<{
+    query: string;
+    requestKey: string;
+    startReason: SideraResearchSearchStartReason;
+    clientRequestId: string;
+    pending: boolean;
+  } | null>(null);
+  const researchDisplayedSnapshotKeyRef = useRef<string | null>(null);
   const noticeSequenceRef = useRef(0);
+  const noticeScopeRevisionsRef = useRef(new Map<AppNoticeScope, number>());
   const [, refreshGalaxySessions] = useState(0);
+  const piDatabaseDir = libraryStatus?.databaseDir.trim()
+    || settings?.databaseDir.trim()
+    || "";
 
-  const showNotice = useCallback<AppNoticeHandler>((message, kind = "info") => {
+  const showNotice = useCallback<AppNoticeHandler>((message, kind = "info", options) => {
+    if (
+      kind === "error"
+      && options?.scope === "institution-sso"
+      && institutionSessionRef.current?.databaseAuth.status === "ready"
+    ) return;
+    const currentScopeRevision = options?.scope
+      ? noticeScopeRevisionsRef.current.get(options.scope) ?? 0
+      : undefined;
+    if (
+      options?.scope
+      && options.scopeRevision !== undefined
+      && options.scopeRevision !== currentScopeRevision
+    ) return;
     noticeSequenceRef.current += 1;
+    const scopeRevision = options?.scope
+      ? options.scopeRevision ?? (currentScopeRevision ?? 0) + 1
+      : undefined;
+    if (options?.scope && scopeRevision !== undefined) {
+      noticeScopeRevisionsRef.current.set(options.scope, scopeRevision);
+    }
     setNotice({
       id: noticeSequenceRef.current,
       message,
       kind,
+      scope: options?.scope,
+      scopeRevision,
+      dismissAfterMs: options?.dismissAfterMs,
     });
+  }, []);
+
+  const clearNoticeScope = useCallback<AppNoticeScopeClearHandler>((scope) => {
+    const scopeRevision = (noticeScopeRevisionsRef.current.get(scope) ?? 0) + 1;
+    noticeScopeRevisionsRef.current.set(scope, scopeRevision);
+    setNotice((current) => current?.scope === scope ? null : current);
+    return scopeRevision;
+  }, []);
+
+  const dismissNotice = useCallback((noticeId?: number) => {
+    setNotice((current) => {
+      if (!current || (noticeId !== undefined && current.id !== noticeId)) return current;
+      if (current.scope) {
+        const nextRevision = Math.max(
+          noticeScopeRevisionsRef.current.get(current.scope) ?? 0,
+          current.scopeRevision ?? 0,
+        ) + 1;
+        noticeScopeRevisionsRef.current.set(current.scope, nextRevision);
+      }
+      return null;
+    });
+  }, []);
+
+  const acceptResearchSearchState = useCallback((next: SideraResearchSearchState) => {
+    if (!shouldAcceptSideraResearchSearchState(researchSearchEventCursorRef.current, next)) return;
+    researchSearchEventCursorRef.current = sideraResearchSearchStateCursor(next);
+    researchSearchStateRef.current = next;
+    if (next.displayedSnapshot) {
+      const nextKey = sideraResearchSnapshotKey(next.displayedSnapshot);
+      const previousKey = researchDisplayedSnapshotKeyRef.current;
+      researchDisplayedSnapshotKeyRef.current = nextKey;
+      if (shouldResetSideraResearchPresentation(previousKey, next.displayedSnapshot)) {
+        setSelectedResearchCandidateIds([]);
+      }
+    }
+    setResearchSearchState(next);
+    if (next.displayedSnapshot && (
+      next.displayedSnapshot.status === "complete"
+      || next.displayedSnapshot.status === "partial"
+    )) {
+      clearNoticeScope("institution-sso");
+      clearNoticeScope("institution-search");
+    }
+  }, [clearNoticeScope]);
+
+  const applyInstitutionSessionState = useCallback((next: SideraInstitutionSessionState) => {
+    if (!shouldAcceptInstitutionSessionState(institutionSessionRef.current, next)) return;
+    institutionSessionRef.current = next;
+    setInstitutionSession(next);
+    if (next.databaseAuth.status === "ready") clearNoticeScope("institution-sso");
+  }, [clearNoticeScope]);
+
+  const submitResearchSearch = useCallback(async (
+    query: string,
+    startReason: SideraResearchSearchStartReason,
+    filters: SideraResearchSearchFilters,
+    resultLimit: 40 | 100,
+  ) => {
+    const normalizedQuery = query.trim();
+    const requestKey = JSON.stringify([normalizedQuery, filters, resultLimit]);
+    const currentAttempt = researchSearchStateRef.current?.activeAttempt;
+    const pending = researchSearchSubmitRef.current;
+    const currentAttemptKey = currentAttempt
+      ? JSON.stringify([currentAttempt.request.query, currentAttempt.request.filters, currentAttempt.request.resultLimit])
+      : null;
+    const clientRequestId = currentAttempt && currentAttemptKey === requestKey
+      ? currentAttempt.clientRequestId
+      : pending?.pending && pending.requestKey === requestKey && pending.startReason === startReason
+        ? pending.clientRequestId
+        : globalThis.crypto?.randomUUID?.()
+          ?? `research-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    researchSearchSubmitRef.current = {
+      query: normalizedQuery,
+      requestKey,
+      startReason,
+      clientRequestId,
+      pending: true,
+    };
+    try {
+      const next = await startSideraResearchSearch({
+        query: normalizedQuery,
+        clientRequestId,
+        startReason,
+        filters,
+        resultLimit,
+      });
+      acceptResearchSearchState(next);
+      return next;
+    } finally {
+      if (researchSearchSubmitRef.current?.clientRequestId === clientRequestId) {
+        researchSearchSubmitRef.current = {
+          query: normalizedQuery,
+          requestKey,
+          startReason,
+          clientRequestId,
+          pending: false,
+        };
+      }
+    }
+  }, [acceptResearchSearchState]);
+
+  const stopResearchSearch = useCallback(async () => {
+    const next = await cancelSideraResearchSearch(
+      researchSearchStateRef.current?.activeAttempt?.taskId,
+    );
+    acceptResearchSearchState(next);
+    return next;
+  }, [acceptResearchSearchState]);
+
+  const handleBeforeToggleMaximize = useCallback(async () => {
+    setWindowGeometryTransitionActive(true);
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+          resolve();
+          return;
+        }
+        window.setTimeout(resolve, 140);
+      });
+    });
+  }, []);
+
+  const handleAfterToggleMaximize = useCallback(() => {
+    setWindowGeometryTransitionActive(false);
   }, []);
 
   activeViewRef.current = activeView;
@@ -575,9 +1068,9 @@ export default function App() {
   }, [replacePiConversationTurns]);
 
   const refreshPiConversationList = useCallback(async () => {
-    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !isDesktopRuntime()) return;
     const rows = await listSideraConversations({
-      databaseDir: settings.databaseDir,
+      databaseDir: piDatabaseDir,
       projectId: activeProject.id,
       status: "all",
     });
@@ -590,13 +1083,13 @@ export default function App() {
         setPiActiveConversation(refreshed);
       }
     }
-  }, [activeProject, settings]);
+  }, [activeProject, piDatabaseDir, settings]);
 
   const persistPiTurn = useCallback(async (turn: SideraConversationTurn) => {
     const conversation = piActiveConversationRef.current;
-    if (!settings || !activeProject || !conversation || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !conversation || !isDesktopRuntime()) return;
     await upsertSideraConversationTurn({
-      databaseDir: settings.databaseDir,
+      databaseDir: piDatabaseDir,
       projectId: activeProject.id,
       conversationId: conversation.id,
       id: turn.id,
@@ -610,7 +1103,7 @@ export default function App() {
       evidenceGateStatus: turn.assistant.evidenceGateStatus,
       usage: turn.assistant.usage,
     });
-  }, [activeProject, settings]);
+  }, [activeProject, piDatabaseDir, settings]);
 
   const flushPiTurnCheckpoints = useCallback(async () => {
     window.clearTimeout(piCheckpointTimerRef.current);
@@ -655,13 +1148,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!notice || notice.kind === "error") return undefined;
+    if (!notice) return undefined;
+    const dismissAfterMs = notice.dismissAfterMs
+      ?? (notice.kind === "error" ? undefined : 3000);
+    if (dismissAfterMs === undefined) return undefined;
     const noticeId = notice.id;
     const timer = window.setTimeout(() => {
-      setNotice((current) => current?.id === noticeId ? null : current);
-    }, 3000);
+      dismissNotice(noticeId);
+    }, dismissAfterMs);
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [dismissNotice, notice]);
 
   function updateGalaxySession(key: string, next: GalaxySessionState) {
     galaxySessionsRef.current.set(key, next);
@@ -785,6 +1281,18 @@ export default function App() {
     setActiveProject(nextProject);
     setDashboard(buildDashboardFromLibrary(nextStatus, nextFacets, nextHotspots, nextReports, nextJobs));
     setPapers(paperPage.rows);
+    setLibraryBootstrap({
+      identity: paperLibraryReadIdentity(
+        nextStatus.databasePath,
+        nextProject.id,
+        nextStatus.libraryRevision,
+      ),
+      databasePath: nextStatus.databasePath,
+      projectId: nextProject.id,
+      libraryRevision: nextStatus.libraryRevision,
+      facets: nextFacets,
+      page: paperPage,
+    });
     setLibraryStatus(nextStatus);
     setLibraryFacets(nextFacets);
     setHotspots(nextHotspots);
@@ -821,6 +1329,8 @@ export default function App() {
     let mounted = true;
     async function boot() {
       if (!bypassSideraBoot) {
+        sideraAgentStartupSettledRef.current = false;
+        sideraAgentFirstFrameReadyRef.current = false;
         setSideraBootPhase("booting-data");
         setSideraBootError("");
         setSideraStaticFallbackAllowed(false);
@@ -851,18 +1361,21 @@ export default function App() {
             nextSettings = await saveAiSettings({ ...nextSettings, manualApiKey: "", apiCredentialConfigured, mysql: { ...nextSettings.mysql, password: "", credentialConfigured: mysqlCredentialConfigured } });
           }
         }
-        if (isDesktopRuntime() && !galaxyVisualReview) {
-          const nextSetupState = await getLibrarySetupState(nextSettings.databaseDir);
-          if (!nextSetupState.configured || (!import.meta.env.DEV && !nextSettings.librarySetupCompleted && !nextSettings.databaseDir.trim())) {
-            if (mounted) {
+        if (isDesktopRuntime()) {
+          if (!galaxyVisualReview) {
+            const nextSetupState = await getLibrarySetupState(nextSettings.databaseDir);
+            if (!mounted) return;
+            if (!nextSetupState.configured || (!import.meta.env.DEV && !nextSettings.librarySetupCompleted && !nextSettings.databaseDir.trim())) {
               setSettings(nextSettings);
               setLibrarySetupState(nextSetupState);
               setLibrarySetupRequired(true);
               if (!bypassSideraBoot) setSideraBootPhase("ready");
+              return;
             }
-            return;
           }
-          if (!nextSettings.librarySetupCompleted && nextSettings.databaseDir.trim()) {
+          await prepareLibraryDatabase(nextSettings.databaseDir);
+          if (!mounted) return;
+          if (!galaxyVisualReview && !nextSettings.librarySetupCompleted && nextSettings.databaseDir.trim()) {
             await saveAiSettings({
               ...nextSettings,
               librarySetupCompleted: true,
@@ -872,7 +1385,13 @@ export default function App() {
         }
         if (mounted) {
           await refreshAll();
-          if (!bypassSideraBoot) setSideraBootPhase("mounting-agent");
+          if (!bypassSideraBoot) {
+            if (sideraAgentFirstFrameReadyRef.current) {
+              setSideraBootPhase("ready");
+            } else if (!sideraAgentStartupSettledRef.current) {
+              setSideraBootPhase("mounting-agent");
+            }
+          }
         }
       } catch (error) {
         if (!mounted) return;
@@ -910,6 +1429,29 @@ export default function App() {
   }, [sideraBootPhase, sideraSplashMounted]);
 
   useEffect(() => {
+    if (
+      bypassSideraBoot
+      || !sideraSplashMounted
+      || sideraBootPhase !== "mounting-agent"
+    ) return undefined;
+    const timer = window.setTimeout(() => {
+      if (
+        sideraAgentStartupSettledRef.current
+        || !sideraSplashMountedRef.current
+      ) return;
+      sideraAgentStartupSettledRef.current = true;
+      const message = `SIDERA_AGENT_MOUNT_TIMEOUT:${SIDERA_AGENT_MOUNT_DEADLINE_MS}ms:`
+        + "动态背景未在期限内提交首个真实帧。";
+      setSideraBootError(message);
+      setSideraStaticFallbackAllowed(true);
+      setSideraBootPhase((current) => (
+        current === "mounting-agent" ? "failed" : current
+      ));
+    }, SIDERA_AGENT_MOUNT_DEADLINE_MS);
+    return () => window.clearTimeout(timer);
+  }, [bypassSideraBoot, sideraBootPhase, sideraSplashMounted]);
+
+  useEffect(() => {
     if (!sideraSplashMounted || sideraBootPhase !== "ready") return undefined;
     const elapsed = performance.now() - sideraBootStartedAtRef.current;
     let unmountTimer = 0;
@@ -934,7 +1476,94 @@ export default function App() {
   }, [activeView]);
 
   useEffect(() => {
-    if (!settings || !activeProject || !isDesktopRuntime() || !settings.databaseDir.trim()) return;
+    if (!isDesktopRuntime()) return undefined;
+    let disposed = false;
+    const unlistens: Array<() => void> = [];
+    void Promise.all([
+      listenSideraInstitutionSession((next) => {
+        if (!disposed) applyInstitutionSessionState(next);
+      }),
+      listenSideraInstitutionSearch((next) => {
+        if (disposed) return;
+        const streamKey = sideraInstitutionSearchStreamKey(next);
+        const cursor = institutionSearchEventCursorsRef.current.get(streamKey);
+        if (!shouldAcceptSideraInstitutionSearchEvent(cursor, next)) return;
+        institutionSearchEventCursorsRef.current.set(streamKey, {
+          epoch: next.epoch,
+          sequence: next.sequence,
+        });
+        setInstitutionSearchSnapshots((current) => ({ ...current, [next.source]: next }));
+        window.clearTimeout(institutionActivityTimerRef.current);
+        if (next.status === "searching") {
+          setInstitutionTerminalActivity(null);
+        } else if (next.status === "complete" || next.status === "partial") {
+          setInstitutionTerminalActivity("complete");
+          institutionActivityTimerRef.current = window.setTimeout(
+            () => setInstitutionTerminalActivity((current) => current === "complete" ? null : current),
+            3_000,
+          );
+        } else if (next.status === "failed") {
+          setInstitutionTerminalActivity("failed");
+        }
+      }),
+      listenSideraResearchSearch((next) => {
+        if (!disposed) acceptResearchSearchState(next);
+      }),
+    ]).then((rows) => unlistens.push(...rows)).catch(() => undefined);
+    void getSideraInstitutionSessionState().then((next) => {
+      if (!disposed) applyInstitutionSessionState(next);
+    }).catch(() => undefined);
+    void getSideraResearchSearchState().then((next) => {
+      if (!disposed) acceptResearchSearchState(next);
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlistens.forEach((unlisten) => unlisten());
+    };
+  }, [acceptResearchSearchState, applyInstitutionSessionState]);
+
+  const resolvedLiteratureWorkspaceTab = literatureWorkspaceTab
+    ?? ((libraryStatus?.paperCount ?? 0) > 0 ? "library" : "ingest");
+  const institutionBrowserVisible = activeView === "search"
+    && resolvedLiteratureWorkspaceTab === "institution"
+    && institutionBrowserPresentation !== "closed"
+    && !agentNavigationOpen;
+  const institutionBrowserImmersiveVisible = institutionBrowserVisible
+    && institutionBrowserPresentation === "immersive";
+
+  function updateInstitutionBrowserPresentation(next: SideraInstitutionBrowserPresentation) {
+    if (next === "immersive" && institutionBrowserPresentation !== "immersive") {
+      institutionWorkbenchScrollTopRef.current = workspaceRef.current?.scrollTop ?? 0;
+    }
+    setInstitutionBrowserPresentation(next);
+  }
+
+  useLayoutEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const wasImmersive = institutionBrowserImmersiveActiveRef.current;
+    if (institutionBrowserImmersiveVisible && !wasImmersive) {
+      workspace.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    } else if (!institutionBrowserImmersiveVisible && wasImmersive) {
+      workspace.scrollTo({
+        top: institutionWorkbenchScrollTopRef.current,
+        left: 0,
+        behavior: "auto",
+      });
+    }
+    institutionBrowserImmersiveActiveRef.current = institutionBrowserImmersiveVisible;
+  }, [institutionBrowserImmersiveVisible]);
+
+  useLayoutEffect(() => {
+    if (!isDesktopRuntime()) return;
+    void setSideraInstitutionBrowserVisible(false).catch(() => undefined);
+    if (!institutionBrowserVisible) {
+      void setSideraInstitutionBrowserShellVisible(false).catch(() => undefined);
+    }
+  }, [institutionBrowserVisible]);
+
+  useEffect(() => {
+    if (!settings || !activeProject || !isDesktopRuntime() || !piDatabaseDir) return;
     const revision = piConversationScopeRevisionRef.current + 1;
     piConversationScopeRevisionRef.current = revision;
     let disposed = false;
@@ -947,12 +1576,12 @@ export default function App() {
     void (async () => {
       try {
         let snapshot = await openRecentSideraConversation({
-          databaseDir: settings.databaseDir,
+          databaseDir: piDatabaseDir,
           projectId: activeProject.id,
         });
         if (!snapshot) {
           snapshot = await createSideraConversation({
-            databaseDir: settings.databaseDir,
+            databaseDir: piDatabaseDir,
             projectId: activeProject.id,
             conversationId: globalThis.crypto?.randomUUID?.(),
             provider: settings.provider,
@@ -960,7 +1589,7 @@ export default function App() {
           });
         }
         const conversations = await listSideraConversations({
-          databaseDir: settings.databaseDir,
+          databaseDir: piDatabaseDir,
           projectId: activeProject.id,
           status: "all",
         });
@@ -979,7 +1608,7 @@ export default function App() {
   }, [
     activeProject?.id,
     applyPiConversationSnapshot,
-    settings?.databaseDir,
+    piDatabaseDir,
     settings?.model,
     settings?.provider,
   ]);
@@ -987,6 +1616,8 @@ export default function App() {
   useEffect(() => () => {
     window.clearTimeout(piCheckpointTimerRef.current);
     window.clearTimeout(piAgentActivityTimerRef.current);
+    window.clearTimeout(institutionActivityTimerRef.current);
+    if (isDesktopRuntime()) void setSideraInstitutionBrowserVisible(false).catch(() => undefined);
     void flushPiTurnCheckpoints();
   }, [flushPiTurnCheckpoints]);
 
@@ -1155,6 +1786,7 @@ export default function App() {
   const piConfigKey = settings && activeProject
     ? [
         activeProject.id,
+        piDatabaseDir,
         settings.provider,
         settings.baseUrl.trim(),
         settings.model.trim(),
@@ -1190,7 +1822,7 @@ export default function App() {
     if (!conversation && settings && activeProject) {
       try {
         const snapshot = await createSideraConversation({
-          databaseDir: settings.databaseDir,
+          databaseDir: piDatabaseDir,
           projectId: activeProject.id,
           conversationId: globalThis.crypto?.randomUUID?.(),
           provider: settings.provider,
@@ -1243,7 +1875,7 @@ export default function App() {
       const session = await startSideraPiSession({
         projectId: activeProject.id,
         conversationId: conversation!.id,
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         provider: settings.provider,
         baseUrl: settings.baseUrl,
         model: settings.model,
@@ -1260,6 +1892,7 @@ export default function App() {
         sessionId: session.sessionId,
         messageId,
         prompt: event.text,
+        readingContext: event.readingContext,
       });
     } catch (error) {
       const message = describeSideraPiError(error);
@@ -1277,6 +1910,7 @@ export default function App() {
     activeProject,
     applyPiConversationSnapshot,
     persistPiTurn,
+    piDatabaseDir,
     piGenerating,
     publishPiAgentTerminalActivity,
     replacePiConversationTurns,
@@ -1353,12 +1987,12 @@ export default function App() {
   }, [flushPiTurnCheckpoints]);
 
   const createNewPiConversation = useCallback(async () => {
-    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !isDesktopRuntime()) return;
     if (!await preparePiConversationChange("新建对话")) return;
     setPiConversationLoading(true);
     try {
       const snapshot = await createSideraConversation({
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         projectId: activeProject.id,
         conversationId: globalThis.crypto?.randomUUID?.(),
         provider: settings.provider,
@@ -1371,16 +2005,16 @@ export default function App() {
     } finally {
       setPiConversationLoading(false);
     }
-  }, [activeProject, applyPiConversationSnapshot, preparePiConversationChange, refreshPiConversationList, settings]);
+  }, [activeProject, applyPiConversationSnapshot, piDatabaseDir, preparePiConversationChange, refreshPiConversationList, settings]);
 
   const openPiConversationById = useCallback(async (conversationId: string) => {
-    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !isDesktopRuntime()) return;
     if (piActiveConversationRef.current?.id === conversationId) return;
     if (!await preparePiConversationChange("切换对话")) return;
     setPiConversationLoading(true);
     try {
       const snapshot = await openSideraConversation({
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         projectId: activeProject.id,
         conversationId,
       });
@@ -1391,13 +2025,13 @@ export default function App() {
     } finally {
       setPiConversationLoading(false);
     }
-  }, [activeProject, applyPiConversationSnapshot, preparePiConversationChange, refreshPiConversationList, settings]);
+  }, [activeProject, applyPiConversationSnapshot, piDatabaseDir, preparePiConversationChange, refreshPiConversationList, settings]);
 
   const renamePiConversationById = useCallback(async (conversationId: string, title: string) => {
-    if (!settings || !activeProject || !title.trim() || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !title.trim() || !isDesktopRuntime()) return;
     try {
       const summary = await renameSideraConversation({
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         projectId: activeProject.id,
         conversationId,
         title: title.trim(),
@@ -1410,27 +2044,27 @@ export default function App() {
     } catch (error) {
       setPiConversationError(`重命名失败：${describeSideraPiError(error)}`);
     }
-  }, [activeProject, settings]);
+  }, [activeProject, piDatabaseDir, settings]);
 
   const archivePiConversationById = useCallback(async (conversationId: string) => {
-    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !isDesktopRuntime()) return;
     const isCurrent = piActiveConversationRef.current?.id === conversationId;
     if (isCurrent && !await preparePiConversationChange("归档当前对话")) return;
     setPiConversationLoading(true);
     try {
       await archiveSideraConversation({
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         projectId: activeProject.id,
         conversationId,
       });
       if (isCurrent) {
         let snapshot = await openRecentSideraConversation({
-          databaseDir: settings.databaseDir,
+          databaseDir: piDatabaseDir,
           projectId: activeProject.id,
         });
         if (!snapshot) {
           snapshot = await createSideraConversation({
-            databaseDir: settings.databaseDir,
+            databaseDir: piDatabaseDir,
             projectId: activeProject.id,
             conversationId: globalThis.crypto?.randomUUID?.(),
             provider: settings.provider,
@@ -1445,13 +2079,13 @@ export default function App() {
     } finally {
       setPiConversationLoading(false);
     }
-  }, [activeProject, applyPiConversationSnapshot, preparePiConversationChange, refreshPiConversationList, settings]);
+  }, [activeProject, applyPiConversationSnapshot, piDatabaseDir, preparePiConversationChange, refreshPiConversationList, settings]);
 
   const restorePiConversationById = useCallback(async (conversationId: string) => {
-    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !isDesktopRuntime()) return;
     try {
       await restoreSideraConversation({
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         projectId: activeProject.id,
         conversationId,
       });
@@ -1459,10 +2093,10 @@ export default function App() {
     } catch (error) {
       setPiConversationError(`恢复失败：${describeSideraPiError(error)}`);
     }
-  }, [activeProject, refreshPiConversationList, settings]);
+  }, [activeProject, piDatabaseDir, refreshPiConversationList, settings]);
 
   const deletePiConversationById = useCallback(async (conversationId: string) => {
-    if (!settings || !activeProject || !isDesktopRuntime()) return;
+    if (!settings || !activeProject || !piDatabaseDir || !isDesktopRuntime()) return;
     const row = piConversations.find((conversation) => conversation.id === conversationId);
     if (!row || row.status !== "archived") return;
     if (!window.confirm(`永久删除“${row.title}”？该操作会同时删除对应的 Pi 上下文文件，且无法恢复。`)) return;
@@ -1471,18 +2105,18 @@ export default function App() {
     setPiConversationLoading(true);
     try {
       await deleteSideraConversation({
-        databaseDir: settings.databaseDir,
+        databaseDir: piDatabaseDir,
         projectId: activeProject.id,
         conversationId,
       });
       if (isCurrent) {
         let snapshot = await openRecentSideraConversation({
-          databaseDir: settings.databaseDir,
+          databaseDir: piDatabaseDir,
           projectId: activeProject.id,
         });
         if (!snapshot) {
           snapshot = await createSideraConversation({
-            databaseDir: settings.databaseDir,
+            databaseDir: piDatabaseDir,
             projectId: activeProject.id,
             conversationId: globalThis.crypto?.randomUUID?.(),
             provider: settings.provider,
@@ -1497,7 +2131,7 @@ export default function App() {
     } finally {
       setPiConversationLoading(false);
     }
-  }, [activeProject, applyPiConversationSnapshot, piConversations, preparePiConversationChange, refreshPiConversationList, settings]);
+  }, [activeProject, applyPiConversationSnapshot, piConversations, piDatabaseDir, preparePiConversationChange, refreshPiConversationList, settings]);
 
   const decidePiToolApproval = useCallback(async (decision: "approved" | "rejected") => {
     const approval = piToolApproval;
@@ -1525,6 +2159,9 @@ export default function App() {
     if (edgeNavigationCloseTimerRef.current !== null) {
       window.clearTimeout(edgeNavigationCloseTimerRef.current);
       edgeNavigationCloseTimerRef.current = null;
+    }
+    if (isDesktopRuntime()) {
+      void setSideraInstitutionBrowserVisible(false).catch(() => undefined);
     }
     setAgentNavigationOpen(true);
     setEdgeNavigationPhase("open");
@@ -1591,12 +2228,21 @@ export default function App() {
   }, [agentNavigationOpen, closeAgentNavigation, openAgentNavigation]);
 
   const handleAgentInitialReady = useCallback(() => {
-    if (bypassSideraBoot) return;
-    setSideraBootPhase((current) => current === "failed" ? current : "ready");
+    if (bypassSideraBoot || sideraAgentStartupSettledRef.current) return;
+    sideraAgentStartupSettledRef.current = true;
+    sideraAgentFirstFrameReadyRef.current = true;
+    setSideraBootPhase((current) => (
+      current === "mounting-agent" ? "ready" : current
+    ));
   }, [bypassSideraBoot]);
 
   const handleAgentInitialError = useCallback((message: string) => {
-    if (!sideraSplashMountedRef.current || bypassSideraBoot) return;
+    if (
+      !sideraSplashMountedRef.current
+      || bypassSideraBoot
+      || sideraAgentStartupSettledRef.current
+    ) return;
+    sideraAgentStartupSettledRef.current = true;
     setSideraBootError(message);
     setSideraStaticFallbackAllowed(true);
     setSideraBootPhase("failed");
@@ -1604,6 +2250,8 @@ export default function App() {
 
   const retrySideraBoot = () => {
     sideraBootStartedAtRef.current = performance.now();
+    sideraAgentStartupSettledRef.current = false;
+    sideraAgentFirstFrameReadyRef.current = false;
     setSideraSplashMounted(true);
     setSideraSplashExiting(false);
     setSideraBootStatusVisible(false);
@@ -1620,6 +2268,7 @@ export default function App() {
       if (!settings) setSettings(await getAiSettings());
       if (!activeProject) setActiveProject(await getActiveProject());
       setActiveView("settings");
+      sideraAgentStartupSettledRef.current = true;
       setSideraBootPhase("ready");
     } catch (error) {
       setSideraBootError(error instanceof Error ? error.message : "无法打开设置。");
@@ -1637,6 +2286,8 @@ export default function App() {
       onRetry={retrySideraBoot}
       onOpenSettings={() => void openSettingsFromSplash()}
       onUseStaticBackground={() => {
+        sideraAgentStartupSettledRef.current = false;
+        sideraAgentFirstFrameReadyRef.current = false;
         setSideraStaticBackground(true);
         setSideraBootError("");
         setSideraBootPhase("mounting-agent");
@@ -1662,10 +2313,13 @@ export default function App() {
               });
               setLoading(true);
               try {
+                await prepareLibraryDatabase(result.databaseDir);
                 await refreshAll();
                 setLibrarySetupRequired(false);
                 setLibrarySetupState(null);
                 showNotice(result.summary, "success");
+                sideraAgentStartupSettledRef.current = false;
+                sideraAgentFirstFrameReadyRef.current = false;
                 setSideraBootPhase("mounting-agent");
               } finally {
                 setLoading(false);
@@ -1751,6 +2405,54 @@ export default function App() {
     toolApproval: piToolApproval,
     terminal: piAgentTerminalActivity,
   });
+  const activeInstitutionSearch = Object.values(institutionSearchSnapshots)
+    .find((snapshot) => snapshot?.status === "searching") ?? null;
+  const institutionActivity = activeInstitutionSearch?.status === "searching"
+    ? { status: "generating" as const, label: "机构资源正在检索", canStop: true }
+    : institutionTerminalActivity === "complete"
+      ? { status: "complete" as const, label: "机构检索已完成", canStop: false }
+      : institutionTerminalActivity === "failed"
+        ? { status: "failed" as const, label: "机构检索失败", canStop: false }
+        : { status: "idle" as const, label: "", canStop: false };
+  const institutionWorkspaceVisible = activeView === "search"
+    && resolvedLiteratureWorkspaceTab === "institution";
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || !institutionWorkspaceVisible) return undefined;
+    if (institutionRestoreAttemptedRef.current) return undefined;
+    let disposed = false;
+    let restoreStarted = false;
+    // Defer the command until after React StrictMode's development-only
+    // setup/cleanup probe. Otherwise the probe cancels the first restore and
+    // leaves the one-shot ref set, so the real effect never starts it again.
+    const restoreTimer = window.setTimeout(() => {
+      if (disposed || institutionRestoreAttemptedRef.current) return;
+      const current = institutionSessionRef.current;
+      institutionRestoreAttemptedRef.current = true;
+      if (current && current.status !== "uninitialized") return;
+      restoreStarted = true;
+      void restoreSideraInstitutionSession()
+        .then((next) => {
+          if (!disposed) applyInstitutionSessionState(next);
+        })
+        .catch((error) => {
+          if (!disposed) {
+            showNotice(
+              error instanceof Error ? error.message : "机构会话静默恢复启动失败。",
+              "error",
+              { scope: "institution-sso" },
+            );
+          }
+        });
+    }, 0);
+    return () => {
+      disposed = true;
+      window.clearTimeout(restoreTimer);
+      if (restoreStarted) {
+        void cancelSideraInstitutionSessionRestore().catch(() => undefined);
+      }
+    };
+  }, [applyInstitutionSessionState, institutionWorkspaceVisible, showNotice]);
 
   return (
     <main
@@ -1760,7 +2462,12 @@ export default function App() {
       data-navigation-layout={navigationLayout}
       data-navigation-opened-by={edgeNavigationOpenedBy ?? "none"}
     >
-      <SideraTitleBar variant="transparent" toolsHostRef={setTitleBarToolsHost} />
+      <SideraTitleBar
+        variant="transparent"
+        toolsHostRef={setTitleBarToolsHost}
+        onBeforeToggleMaximize={handleBeforeToggleMaximize}
+        onAfterToggleMaximize={handleAfterToggleMaximize}
+      />
       {activeView !== "agent" && titleBarToolsHost && piAgentActivity.status !== "idle" ? createPortal(
         <div
           className="sidera-agent-activity"
@@ -1796,6 +2503,42 @@ export default function App() {
         </div>,
         titleBarToolsHost,
       ) : null}
+      {!institutionWorkspaceVisible && titleBarToolsHost && institutionActivity.status !== "idle" ? createPortal(
+        <div
+          className="sidera-agent-activity sidera-institution-activity"
+          data-status={institutionActivity.status}
+          role={institutionActivity.status === "failed" ? "alert" : "status"}
+          aria-live={institutionActivity.status === "failed" ? "assertive" : "polite"}
+        >
+          <button
+            type="button"
+            className="sidera-agent-activity__return"
+            title="返回机构资源"
+            onClick={() => {
+              setInstitutionTerminalActivity(null);
+              setLiteratureWorkspaceTab("institution");
+              setActiveView("search");
+            }}
+          >
+            {institutionActivity.status === "generating" ? <Loader2 className="sidera-agent-activity__spinner" size={12} /> : null}
+            {institutionActivity.status === "failed" ? <AlertTriangle size={12} /> : null}
+            {institutionActivity.status === "complete" ? <Check size={12} /> : null}
+            <span>{institutionActivity.label}</span>
+          </button>
+          {institutionActivity.canStop ? (
+            <button
+              type="button"
+              className="sidera-agent-activity__stop"
+              title="停止当前机构检索"
+              aria-label="停止当前机构检索"
+              onClick={() => void cancelSideraInstitutionSearch(activeInstitutionSearch?.taskId)}
+            >
+              <Square size={10} fill="currentColor" />
+            </button>
+          ) : null}
+        </div>,
+        titleBarToolsHost,
+      ) : null}
       <div
         className="sidera-edge-navigation-hotzone"
         data-phase={edgeNavigationPhase}
@@ -1823,7 +2566,7 @@ export default function App() {
 
       <section
         ref={workspaceRef}
-        className={`workspace workspace--${shellScene} ${usesWorkbenchBackground ? "workspace--workbench" : ""}`}
+        className={`workspace workspace--${shellScene} ${usesWorkbenchBackground ? "workspace--workbench" : ""} ${documentReaderActive ? "workspace--reader-active" : ""} ${institutionBrowserVisible ? `workspace--institution-browser-${institutionBrowserPresentation}` : ""}`}
       >
         {settings && activeProject && (
           <div
@@ -1835,7 +2578,8 @@ export default function App() {
               settings={settings}
               activeProject={activeProject}
               hotspots={hotspots}
-              shellPresentation={activeView === "agent" ? "agent" : usesWorkbenchBackground ? "workbench" : "suspended"}
+              shellPresentation={institutionBrowserVisible || documentReaderActive ? "suspended" : activeView === "agent" ? "agent" : usesWorkbenchBackground ? "workbench" : "suspended"}
+              windowGeometryTransitionActive={windowGeometryTransitionActive}
               navigationOpen={agentNavigationOpen}
               onCloseNavigation={closeAgentNavigation}
               onPromptSubmit={(event) => void submitSideraPrompt(event)}
@@ -1867,7 +2611,20 @@ export default function App() {
                 setHotspotFocusIntent({ hotspotId, timestamp: Date.now() });
                 setActiveView("hotspots");
               }}
+              onOpenDocumentEvidence={(reference) => {
+                if (!reference.paperId || !reference.documentVersionId || !reference.anchor) return;
+                setDocumentEvidenceFocusIntent({
+                  paperId: reference.paperId,
+                  versionId: reference.documentVersionId,
+                  title: papers.find((paper) => paper.id === reference.paperId)?.title ?? "文档证据",
+                  anchor: reference.anchor,
+                  timestamp: Date.now(),
+                });
+                setLiteratureWorkspaceTab("library");
+                setActiveView("search");
+              }}
               onOpenRunCenter={() => setActiveView("agent-runs")}
+              onOpenPipeline={() => setActiveView("pipeline")}
             />
           </div>
         )}
@@ -1880,6 +2637,7 @@ export default function App() {
             activeProject={activeProject}
             libraryStatus={libraryStatus}
             v20Snapshot={v20Snapshot}
+            documentIndexActivity={documentIndexActivity}
             visualReviewScenario={agentVisualReviewScenario}
             onNavigate={setActiveView}
             onOpenPaper={(paperId, title) => {
@@ -1889,7 +2647,51 @@ export default function App() {
             onNotice={showNotice}
           />
         )}
-        {activeView === "search" && settings && activeProject && <SearchWorkspace settings={settings} activeProject={activeProject} libraryStatus={libraryStatus} libraryFacets={libraryFacets} searchFocusIntent={searchFocusIntent} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={showNotice} />}
+        {activeView === "search" && settings && activeProject && (
+          <SearchWorkspace
+            settings={settings}
+            activeProject={activeProject}
+            libraryStatus={libraryStatus}
+            libraryFacets={libraryFacets}
+            libraryBootstrap={libraryBootstrap}
+            searchFocusIntent={searchFocusIntent}
+            documentEvidenceFocusIntent={documentEvidenceFocusIntent}
+            onClearDocumentEvidenceFocus={() => setDocumentEvidenceFocusIntent(null)}
+            workspaceTab={literatureWorkspaceTab}
+            onWorkspaceTabChange={setLiteratureWorkspaceTab}
+            institutionSession={institutionSession}
+            institutionSearchSnapshots={institutionSearchSnapshots}
+            researchSearchState={researchSearchState}
+            researchSearchQuery={researchSearchQuery}
+            selectedResearchCandidateIds={selectedResearchCandidateIds}
+            institutionBrowserPresentation={institutionBrowserPresentation}
+            onInstitutionSessionChange={applyInstitutionSessionState}
+            onInstitutionSearchSnapshotChange={(next) => {
+              setInstitutionSearchSnapshots((current) => ({ ...current, [next.source]: next }));
+            }}
+            onResearchSearchQueryChange={setResearchSearchQuery}
+            onSelectedResearchCandidateIdsChange={setSelectedResearchCandidateIds}
+            onStartResearchSearch={submitResearchSearch}
+            onStopResearchSearch={stopResearchSearch}
+            onInstitutionBrowserPresentationChange={updateInstitutionBrowserPresentation}
+            onDocumentReaderActiveChange={setDocumentReaderActive}
+            onDocumentIndexActivityChange={setDocumentIndexActivity}
+            agentConversationTurns={piConversationTurns}
+            agentGenerating={piGenerating}
+            agentError={piConversationError}
+            onAskEvidence={(prompt, readingContext) => void submitSideraPrompt({
+              text: prompt,
+              backgroundMode: "immersive",
+              submittedAtMs: Date.now(),
+              readingContext,
+            })}
+            onStopEvidenceAnswer={stopSideraGeneration}
+            onNavigate={setActiveView}
+            onRefresh={refreshAll}
+            onNotice={showNotice}
+            onClearNoticeScope={clearNoticeScope}
+          />
+        )}
         {(activeView === "galaxy" || galaxyVisited) && settings && activeProject && (
           <div className={activeView === "galaxy" ? "contents" : "hidden"} aria-hidden={activeView !== "galaxy"}>
             <GalaxyView
@@ -1927,7 +2729,19 @@ export default function App() {
         {activeView === "logs" && settings && <LogsView taskLogs={taskLogs} allTaskLogs={allTaskLogs} projects={projects} activeProject={activeProject} papers={papers} settings={settings} onRefresh={refreshAll} onNotice={showNotice} />}
         {activeView === "health" && settings && <HealthView settings={settings} papers={papers} libraryStatus={libraryStatus} onNavigate={setActiveView} onRefresh={refreshAll} onNotice={showNotice} />}
         {activeView === "about" && <AboutView settings={settings} libraryStatus={libraryStatus} hotspots={hotspots} reports={reports} />}
-        {activeView === "settings" && settings && <SettingsView settings={settings} onSave={saveSettings} onRefresh={refreshAll} onNotice={showNotice} />}
+        {activeView === "settings" && settings && (
+          <SettingsView
+            settings={settings}
+            institutionSession={institutionSession}
+            onOpenInstitutionResources={() => {
+              setLiteratureWorkspaceTab("institution");
+              setActiveView("search");
+            }}
+            onSave={saveSettings}
+            onRefresh={refreshAll}
+            onNotice={showNotice}
+          />
+        )}
       </section>
 
       {loading && !sideraSplashMounted && (
@@ -1948,16 +2762,22 @@ export default function App() {
           role={notice.kind === "error" ? "alert" : "status"}
           aria-live={notice.kind === "error" ? "assertive" : "polite"}
           tabIndex={0}
-          title="点击关闭"
-          onClick={() => setNotice(null)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
+            if (event.key === "Escape") {
               event.preventDefault();
-              setNotice(null);
+              dismissNotice(notice.id);
             }
           }}
         >
-          {notice.message}
+          <span className="toast__message">{notice.message}</span>
+          <button
+            type="button"
+            className="toast__close"
+            aria-label="关闭通知"
+            onClick={() => dismissNotice(notice.id)}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
         </div>
       )}
       {sideraSplash}
@@ -2013,6 +2833,7 @@ export default function App() {
           projectId: settings.projectId,
         });
       }
+      await prepareLibraryDatabase(nextDir);
       effectiveSettings = {
         ...effectiveSettings,
         dataDir: nextDir,
@@ -2073,10 +2894,66 @@ function LibrarySetupView({
   onComplete: (result: InitializeLibraryResult) => Promise<void>;
 }) {
   const [databaseDir, setDatabaseDir] = useState(state.databaseDir ?? "");
-  const [mode, setMode] = useState<LibrarySetupMode>(state.seedAvailable ? "seed" : "empty");
+  const [mode, setMode] = useState<LibrarySetupMode>(state.databaseExists ? "existing" : state.seedAvailable ? "seed" : "empty");
+  const [validation, setValidation] = useState<LibraryLocationValidation | null>(null);
+  const [validationBusy, setValidationBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(state.message);
   const [error, setError] = useState("");
+  const validationRequestRef = useRef(0);
+
+  const normalizedDatabaseDir = databaseDir.trim().replace(/[\\/]+$/, "").toLocaleLowerCase();
+  const normalizedInitialDatabaseDir = (state.databaseDir ?? "").trim().replace(/[\\/]+$/, "").toLocaleLowerCase();
+  const validationMatchesCurrentDir = Boolean(
+    validation
+      && validation.databaseDir.trim().replace(/[\\/]+$/, "").toLocaleLowerCase() === normalizedDatabaseDir,
+  );
+  const existingDatabaseDetected = Boolean(
+    (validationMatchesCurrentDir && validation?.existingDatabase)
+    || (state.databaseExists && normalizedInitialDatabaseDir && normalizedInitialDatabaseDir === normalizedDatabaseDir),
+  );
+  const knownPrecontractV14 = validationMatchesCurrentDir
+    && validation?.schemaContractStatus === "known-precontract-v14";
+
+  useEffect(() => {
+    const trimmedDir = databaseDir.trim();
+    const requestId = ++validationRequestRef.current;
+    if (!trimmedDir) {
+      setValidation(null);
+      setValidationBusy(false);
+      return;
+    }
+
+    setValidationBusy(true);
+    const timer = window.setTimeout(() => {
+      setError("");
+      void validateLibraryLocation(trimmedDir, mode)
+        .then((result) => {
+          if (requestId !== validationRequestRef.current) return;
+          setValidation(result);
+          if (result.existingDatabase && mode !== "existing") {
+            setMode("existing");
+            setMessage(
+              result.schemaContractStatus === "known-precontract-v14"
+                ? "检测到开发版早期 v14，可先备份并安全补全；现有论文不会被覆盖。"
+                : "所选目录已包含论文库，已切换为“使用现有 SQLite 论文库”；默认数据和空白库不会覆盖它。",
+            );
+            return;
+          }
+          setMessage(result.message);
+        })
+        .catch((reason) => {
+          if (requestId !== validationRequestRef.current) return;
+          setValidation(null);
+          setMessage(reason instanceof Error ? reason.message : String(reason));
+        })
+        .finally(() => {
+          if (requestId === validationRequestRef.current) setValidationBusy(false);
+        });
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [databaseDir, mode]);
 
   const options: Array<{ id: LibrarySetupMode; title: string; description: string; disabled?: boolean }> = [
     {
@@ -2085,10 +2962,21 @@ function LibrarySetupView({
       description: state.seedAvailable
         ? `V20 快照包含 ${state.seedPaperCount?.toLocaleString("zh-CN") ?? "-"} 篇论文、${state.seedHotspotCount?.toLocaleString("zh-CN") ?? "-"} 个热点与 ${state.seedMembershipCount?.toLocaleString("zh-CN") ?? "-"} 条归属，约 ${formatBytes(state.seedSizeBytes ?? 0)}。`
         : "当前 Lite 安装包未包含默认数据。",
-      disabled: !state.seedAvailable,
+      disabled: !state.seedAvailable || existingDatabaseDetected,
     },
-    { id: "empty", title: "空白开始", description: "创建完整但不含论文的本地 SQLite 库，稍后自行导入数据。" },
-    { id: "existing", title: "使用现有 SQLite 论文库", description: "所选目录必须包含 research-hotspots-v7.sqlite。合法旧库可接入，但没有 V20 快照时需稍后显式运行热点建模。" },
+    {
+      id: "empty",
+      title: "空白开始",
+      description: "创建完整但不含论文的本地 SQLite 库，稍后自行导入数据。",
+      disabled: existingDatabaseDetected,
+    },
+    {
+      id: "existing",
+      title: "使用现有 SQLite 论文库",
+      description: knownPrecontractV14
+        ? "检测到开发版早期 v14；完成配置时会先生成带 SHA-256 的独立备份，再原地补全最终契约。"
+        : "所选目录必须包含 research-hotspots-v7.sqlite。合法旧库可接入，但没有 V20 快照时需稍后显式运行热点建模。",
+    },
   ];
 
   async function chooseDirectory() {
@@ -2110,7 +2998,15 @@ function LibrarySetupView({
     try {
       const validation = await validateLibraryLocation(databaseDir, mode);
       if (!validation.valid) throw new Error(validation.message);
-      setMessage(mode === "seed" ? "正在复制并校验默认论文库，请勿关闭应用..." : mode === "empty" ? "正在创建空白论文库..." : "正在验证并接入现有论文库...");
+      setMessage(
+        mode === "seed"
+          ? "正在复制并校验默认论文库，请勿关闭应用..."
+          : mode === "empty"
+            ? "正在创建空白论文库..."
+            : validation.schemaContractStatus === "known-precontract-v14"
+              ? "正在备份并安全补全开发版早期 v14；现有论文不会被覆盖..."
+              : "正在迁移、严格校验并接入现有论文库...",
+      );
       const result = await initializeLibrary(databaseDir, mode);
       setMessage(result.summary);
       await onComplete(result);
@@ -2167,6 +3063,12 @@ function LibrarySetupView({
               </button>
             ))}
           </div>
+          {knownPrecontractV14 && (
+            <div className="library-setup-message" role="status">
+              <ShieldCheck size={16} />
+              <span>检测到开发版早期 v14，可先备份并安全补全；现有论文不会被覆盖。</span>
+            </div>
+          )}
         </div>
 
         <footer className="library-setup-footer">
@@ -2174,9 +3076,9 @@ function LibrarySetupView({
             {error ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />}
             <span>{error || message}</span>
           </div>
-          <button className="primary-button" type="button" disabled={busy || !databaseDir.trim()} onClick={submit}>
+          <button className="primary-button" type="button" disabled={busy || validationBusy || !databaseDir.trim()} onClick={submit}>
             {busy ? <Loader2 className="animate-spin" size={16} /> : <Database size={16} />}
-            {busy ? "正在初始化" : "完成配置并进入应用"}
+            {busy ? "正在初始化" : validationBusy ? "正在检查目录" : "完成配置并进入应用"}
           </button>
         </footer>
       </section>
@@ -2437,6 +3339,7 @@ function dashboardSourceLabel(source: SourceKind) {
   if (source === "arxiv") return "arXiv";
   if (source === "openalex") return "OpenAlex";
   if (source === "cnki") return "CNKI";
+  if (source === "institution") return "机构资源";
   return "本地导入";
 }
 
@@ -2800,25 +3703,107 @@ function SearchWorkspace({
   activeProject,
   libraryStatus,
   libraryFacets,
+  libraryBootstrap,
   searchFocusIntent,
+  documentEvidenceFocusIntent,
+  onClearDocumentEvidenceFocus,
+  workspaceTab,
+  onWorkspaceTabChange,
+  institutionSession,
+  institutionSearchSnapshots,
+  researchSearchState,
+  researchSearchQuery,
+  selectedResearchCandidateIds,
+  institutionBrowserPresentation,
+  onInstitutionSessionChange,
+  onInstitutionSearchSnapshotChange,
+  onResearchSearchQueryChange,
+  onSelectedResearchCandidateIdsChange,
+  onStartResearchSearch,
+  onStopResearchSearch,
+  onInstitutionBrowserPresentationChange,
+  onDocumentReaderActiveChange,
+  onDocumentIndexActivityChange,
+  agentConversationTurns,
+  agentGenerating,
+  agentError,
+  onAskEvidence,
+  onStopEvidenceAnswer,
   onNavigate,
   onRefresh,
   onNotice,
+  onClearNoticeScope,
 }: {
   settings: AiSettings;
   activeProject: Project;
   libraryStatus: PaperLibraryStatus | null;
   libraryFacets: PaperLibraryFacets | null;
+  libraryBootstrap: PaperLibraryBootstrapSnapshot | null;
   searchFocusIntent: SearchFocusIntent | null;
+  documentEvidenceFocusIntent: DocumentEvidenceFocusIntent | null;
+  onClearDocumentEvidenceFocus: () => void;
+  workspaceTab: LiteratureWorkspaceTab | null;
+  onWorkspaceTabChange: (tab: LiteratureWorkspaceTab) => void;
+  institutionSession: SideraInstitutionSessionState | null;
+  institutionSearchSnapshots: Record<
+    SideraInstitutionSearchSource,
+    SideraInstitutionSearchSnapshot | null
+  >;
+  researchSearchState: SideraResearchSearchState | null;
+  researchSearchQuery: string;
+  selectedResearchCandidateIds: string[];
+  institutionBrowserPresentation: SideraInstitutionBrowserPresentation;
+  onInstitutionSessionChange: (state: SideraInstitutionSessionState) => void;
+  onInstitutionSearchSnapshotChange: (snapshot: SideraInstitutionSearchSnapshot) => void;
+  onResearchSearchQueryChange: (query: string) => void;
+  onSelectedResearchCandidateIdsChange: (ids: string[]) => void;
+  onStartResearchSearch: (
+    query: string,
+    startReason: SideraResearchSearchStartReason,
+    filters: SideraResearchSearchFilters,
+    resultLimit: 40 | 100,
+  ) => Promise<SideraResearchSearchState>;
+  onStopResearchSearch: () => Promise<SideraResearchSearchState>;
+  onInstitutionBrowserPresentationChange: (presentation: SideraInstitutionBrowserPresentation) => void;
+  onDocumentReaderActiveChange: (active: boolean) => void;
+  onDocumentIndexActivityChange: (snapshot: DocumentIndexSnapshot) => void;
+  agentConversationTurns: SideraConversationTurn[];
+  agentGenerating: boolean;
+  agentError: string;
+  onAskEvidence: (prompt: string, scope: SideraReadingContextScope) => void;
+  onStopEvidenceAnswer: () => void;
   onNavigate: (view: ActiveView) => void;
   onRefresh: () => Promise<void>;
   onNotice: AppNoticeHandler;
+  onClearNoticeScope: AppNoticeScopeClearHandler;
 }) {
+  const libraryReadIdentity = libraryStatus
+    ? paperLibraryReadIdentity(
+        libraryStatus.databasePath,
+        activeProject.id,
+        libraryStatus.libraryRevision,
+      )
+    : "";
+  const matchingLibraryBootstrap = libraryBootstrap?.identity === libraryReadIdentity
+    ? libraryBootstrap
+    : null;
+  const initialLibraryPage = paperPageFromBootstrap(matchingLibraryBootstrap, {
+    databaseDir: settings.databaseDir,
+    projectId: activeProject.id,
+    source: "all",
+    field: "all",
+    limit: 20,
+    offset: 0,
+    sort: "newest",
+  });
   const [query, setQuery] = useState("verifiable scientific agents");
   const [discipline, setDiscipline] = useState<string>(DISCIPLINES[2]);
   const [sources, setSources] = useState<SourceKind[]>(["openalex", "arxiv"]);
   const [maxResults, setMaxResults] = useState(12);
+  const [libraryQueryDraft, setLibraryQueryDraft] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
+  const [libraryQueryComposing, setLibraryQueryComposing] = useState(false);
+  const [libraryQueryExecutionCount, setLibraryQueryExecutionCount] = useState(0);
   const [librarySource, setLibrarySource] = useState<SourceKind | "all">("all");
   const [libraryField, setLibraryField] = useState("all");
   const [libraryYear, setLibraryYear] = useState("all");
@@ -2834,11 +3819,10 @@ function SearchWorkspace({
   const [pendingFocusPaperId, setPendingFocusPaperId] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedPapers, setSelectedPapers] = useState<Paper[]>([]);
-  const [libraryPage, setLibraryPage] = useState<PaperQueryResult>({ rows: [], total: 0, limit: 20, offset: 0, queryMs: 0 });
-  const [facets, setFacets] = useState<PaperLibraryFacets>(libraryFacets ?? { sources: [], fields: [], years: [] });
+  const [libraryPage, setLibraryPage] = useState<PaperQueryResult>(initialLibraryPage ?? { rows: [], total: 0, limit: 20, offset: 0, queryMs: 0 });
+  const [facets, setFacets] = useState<PaperLibraryFacets>(matchingLibraryBootstrap?.facets ?? libraryFacets ?? { sources: [], fields: [], years: [] });
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [busy, setBusy] = useState("");
-  const [workspaceTab, setWorkspaceTab] = useState<LiteratureWorkspaceTab | null>(null);
   const [reportMode, setReportMode] = useState<"simple" | "deep">("deep");
   const [searchRows, setSearchRows] = useState<Paper[]>([]);
   const [currentReport, setCurrentReport] = useState<ResearchReport | null>(null);
@@ -2846,6 +3830,45 @@ function SearchWorkspace({
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importProgress, setImportProgress] = useState("");
   const [importJob, setImportJob] = useState<ImportJobState | null>(null);
+  const [importReviewBatches, setImportReviewBatches] = useState<SideraImportReviewBatch[]>([]);
+  const [activeImportReviewBatch, setActiveImportReviewBatch] = useState<SideraImportReviewBatch | null>(null);
+  const [importReviewBusy, setImportReviewBusy] = useState("");
+  const [importCommitPreview, setImportCommitPreview] = useState<SideraImportCommitPreview | null>(null);
+  const [importCommitStatus, setImportCommitStatus] = useState<SideraImportCommitStatus | null>(null);
+  const [importCommitHistory, setImportCommitHistory] = useState<SideraImportCommitHistory>({ entries: [] });
+  const [importCommitReadDiagnostics, setImportCommitReadDiagnostics] = useState<ImportReviewReadDiagnostics>({
+    batches: { state: "idle" },
+    status: { state: "idle" },
+    history: { state: "idle" },
+  });
+  const [importCommitResult, setImportCommitResult] = useState<SideraImportCommitResult | null>(null);
+  const [importRollbackResult, setImportRollbackResult] = useState<SideraImportRollbackResult | null>(null);
+  const [pendingLocalPdf, setPendingLocalPdf] = useState<{ filePath: string; fileName: string } | null>(null);
+  const [pendingLocalPdfVersionKind, setPendingLocalPdfVersionKind] = useState<SideraDocumentVersionKind>("user-import");
+  const [pendingLocalPdfBusy, setPendingLocalPdfBusy] = useState(false);
+  const [documentRefreshRevision, setDocumentRefreshRevision] = useState(0);
+  const [documentReaderTarget, setDocumentReaderTarget] = useState<{
+    paperId: string;
+    versionId: string;
+    title: string;
+    initialEvidenceAnchor?: DocumentEvidenceAnchor;
+  } | null>(() => documentEvidenceFocusIntent
+    ? {
+        paperId: documentEvidenceFocusIntent.paperId,
+        versionId: documentEvidenceFocusIntent.versionId,
+        title: documentEvidenceFocusIntent.title,
+        initialEvidenceAnchor: documentEvidenceFocusIntent.anchor,
+      }
+    : null);
+
+  useEffect(() => {
+    onDocumentReaderActiveChange(Boolean(documentReaderTarget));
+    return () => onDocumentReaderActiveChange(false);
+  }, [documentReaderTarget, onDocumentReaderActiveChange]);
+  const importCommitClientIdRef = useRef<{ previewId: string; clientCommitId: string } | null>(null);
+  const importRollbackClientIdsRef = useRef<Map<string, string>>(new Map());
+  const importReviewNoticeRevisionRef = useRef(0);
+  const libraryLoadSequenceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const literaturePageRef = useRef<HTMLDivElement | null>(null);
   const paperListScrollRef = useRef<HTMLDivElement | null>(null);
@@ -2854,6 +3877,14 @@ function SearchWorkspace({
   const unsavedPaperDialogRef = useRef<HTMLDialogElement | null>(null);
   const importControlRef = useRef({ paused: false, cancelled: false });
   const desktopImportTaskIdRef = useRef("");
+  const setWorkspaceTab = (tab: LiteratureWorkspaceTab) => {
+    if (tab !== "institution") {
+      if (isDesktopRuntime()) {
+        void setSideraInstitutionBrowserVisible(false).catch(() => undefined);
+      }
+    }
+    onWorkspaceTabChange(tab);
+  };
 
   const fields = useMemo(() => facets.fields.map((row) => row.value).sort(), [facets]);
   const years = useMemo(() => facets.years.map((row) => Number(row.value)).filter((year) => Number.isFinite(year)).sort((a, b) => b - a), [facets]);
@@ -2885,7 +3916,7 @@ function SearchWorkspace({
       ].filter(Boolean),
     [libraryField, libraryQuery, librarySort, librarySource, libraryYear],
   );
-  const selectedPaper = visibleLibraryPapers.find((paper) => paper.id === selectedPaperId) ?? visibleLibraryPapers[0];
+  const selectedPaper = visibleLibraryPapers.find((paper) => paper.id === selectedPaperId);
   const reportPapers = useMemo(() => {
     if (selectedIds.length === 0) return [];
     if (selectedPapers.length > 0) return selectedPapers;
@@ -2952,8 +3983,141 @@ function SearchWorkspace({
         ];
 
   useEffect(() => {
-    setFacets(libraryFacets ?? { sources: [], fields: [], years: [] });
-  }, [libraryFacets]);
+    importReviewNoticeRevisionRef.current = onClearNoticeScope("import-review");
+    setImportCommitReadDiagnostics({
+      batches: { state: "idle" },
+      status: { state: "idle" },
+      history: { state: "idle" },
+    });
+    return () => {
+      importReviewNoticeRevisionRef.current = onClearNoticeScope("import-review");
+    };
+  }, [activeProject.id, activeWorkspaceTab, onClearNoticeScope, settings.databaseDir]);
+
+  useEffect(() => {
+    if (activeWorkspaceTab !== "ingest" || !isDesktopRuntime()) return;
+    let disposed = false;
+    void listImportReviewBatches({ databaseDir: settings.databaseDir, projectId: activeProject.id })
+      .then(async (batches) => {
+        if (disposed) return;
+        setImportReviewBatches(batches);
+        setImportCommitReadDiagnostics((current) => ({
+          ...current,
+          batches: { state: "ready" },
+        }));
+        const currentId = activeImportReviewBatch?.projectId === activeProject.id
+          ? activeImportReviewBatch.id
+          : "";
+        const selected = batches.find((batch) => batch.id === currentId)
+          ?? batches.find((batch) => matchesEditableImportReviewStatus(batch.status))
+          ?? batches[0];
+        if (!selected) {
+          setActiveImportReviewBatch(null);
+          return;
+        }
+        const opened = await openImportReviewBatch({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          batchId: selected.id,
+        });
+        if (!disposed) {
+          setActiveImportReviewBatch(opened);
+          setImportCommitReadDiagnostics((current) => ({
+            ...current,
+            batches: { state: "ready" },
+          }));
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          const message = error instanceof Error ? error.message : "题录审查批次读取失败。";
+          setImportCommitReadDiagnostics((current) => ({
+            ...current,
+            batches: { state: "error", message },
+          }));
+          onNotice("题录审查批次读取失败，请查看读取诊断。", "error", {
+            scope: "import-review",
+            scopeRevision: importReviewNoticeRevisionRef.current,
+            dismissAfterMs: 8000,
+          });
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [activeProject.id, activeWorkspaceTab, settings.databaseDir]);
+
+  useEffect(() => {
+    if (activeWorkspaceTab !== "ingest" || !isDesktopRuntime()) return;
+    let disposed = false;
+    const noticeScopeRevision = onClearNoticeScope("import-review");
+    importReviewNoticeRevisionRef.current = noticeScopeRevision;
+    const isCurrent = () => !disposed
+      && importReviewNoticeRevisionRef.current === noticeScopeRevision;
+    const batchId = activeImportReviewBatch?.id;
+    void (async () => {
+      const readErrors = await refreshImportReviewCommitState(
+        batchId,
+        (_kind, noticeMessage) => {
+          if (disposed) return;
+          onNotice(noticeMessage, "error", {
+            scope: "import-review",
+            scopeRevision: noticeScopeRevision,
+            dismissAfterMs: 8000,
+          });
+        },
+        isCurrent,
+      );
+      if (disposed || readErrors.stale) return;
+      let batchError: string | undefined;
+      try {
+        await refreshImportReviewBatches(batchId, isCurrent);
+        if (!isCurrent()) return;
+        setImportCommitReadDiagnostics((current) => ({
+          ...current,
+          batches: { state: "ready" },
+        }));
+      } catch (error) {
+        if (!isCurrent()) return;
+        batchError = error instanceof Error ? error.message : "审查批次对账读取失败。";
+        setImportCommitReadDiagnostics((current) => ({
+          ...current,
+          batches: { state: "error", message: batchError },
+        }));
+        onNotice("题录审查批次对账读取失败，请查看读取诊断。", "error", {
+          scope: "import-review",
+          scopeRevision: noticeScopeRevision,
+          dismissAfterMs: 8000,
+        });
+      }
+      if (!isCurrent()) return;
+      if (!readErrors.statusError && !readErrors.historyError && !batchError) {
+        importReviewNoticeRevisionRef.current = onClearNoticeScope("import-review");
+      }
+    })();
+    return () => {
+      disposed = true;
+      importReviewNoticeRevisionRef.current = onClearNoticeScope("import-review");
+    };
+  }, [
+    activeImportReviewBatch?.id,
+    activeProject.id,
+    activeWorkspaceTab,
+    onClearNoticeScope,
+    onNotice,
+    settings.databaseDir,
+  ]);
+
+  useEffect(() => {
+    setImportCommitPreview(null);
+    setImportCommitResult(null);
+    setImportRollbackResult(null);
+    importCommitClientIdRef.current = null;
+  }, [activeImportReviewBatch?.id]);
+
+  useEffect(() => {
+    setFacets(matchingLibraryBootstrap?.facets ?? libraryFacets ?? { sources: [], fields: [], years: [] });
+  }, [libraryFacets, matchingLibraryBootstrap]);
 
   useEffect(() => {
     setPage(1);
@@ -2966,6 +4130,7 @@ function SearchWorkspace({
   useEffect(() => {
     if (!searchFocusIntent) return;
     setWorkspaceTab("library");
+    setLibraryQueryDraft(searchFocusIntent.query);
     setLibraryQuery(searchFocusIntent.query);
     if (searchFocusIntent.field) setLibraryField(searchFocusIntent.field);
     setPendingFocusPaperId(searchFocusIntent.paperId ?? "");
@@ -2973,8 +4138,22 @@ function SearchWorkspace({
   }, [searchFocusIntent]);
 
   useEffect(() => {
+    if (activeWorkspaceTab !== "library") return;
     void loadLibraryPage();
-  }, [activeProject.id, settings.databaseDir, libraryField, libraryQuery, librarySource, libraryYear, librarySort, page, pageSize]);
+  }, [
+    activeProject.id,
+    activeWorkspaceTab,
+    settings.databaseDir,
+    libraryReadIdentity,
+    matchingLibraryBootstrap,
+    libraryField,
+    libraryQuery,
+    librarySource,
+    libraryYear,
+    librarySort,
+    page,
+    pageSize,
+  ]);
 
   useEffect(() => {
     if (pendingFocusPaperId) {
@@ -2989,8 +4168,8 @@ function SearchWorkspace({
       }
       return;
     }
-    if (!selectedPaperId || !visibleLibraryPapers.some((paper) => paper.id === selectedPaperId)) {
-      setSelectedPaperId(visibleLibraryPapers[0]?.id ?? "");
+    if (selectedPaperId && !visibleLibraryPapers.some((paper) => paper.id === selectedPaperId)) {
+      setSelectedPaperId("");
     }
   }, [pendingFocusPaperId, selectedPaperId, visibleLibraryPapers]);
 
@@ -3060,7 +4239,7 @@ function SearchWorkspace({
         if (finalStatus) {
           setBusy("");
           void (async () => {
-            await loadLibraryPage();
+            await loadLibraryPage({ force: true });
             await onRefresh();
             await saveTaskLog({
               stage: "crawl",
@@ -3097,31 +4276,685 @@ function SearchWorkspace({
     };
   }, [activeProject.id, settings.databaseDir]);
 
-  async function loadLibraryPage() {
+  async function loadLibraryPage(options?: { force?: boolean }) {
+    const requestSequence = ++libraryLoadSequenceRef.current;
+    const input: PaperQueryInput = {
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+      query: libraryQuery,
+      source: librarySource,
+      field: libraryField,
+      year: libraryYear === "all" ? undefined : Number(libraryYear),
+      limit: pageSize,
+      offset: (Math.max(1, page) - 1) * pageSize,
+      sort: librarySort,
+    };
+    const bootstrapPage = options?.force
+      ? null
+      : paperPageFromBootstrap(matchingLibraryBootstrap, input);
+    if (bootstrapPage) {
+      if (requestSequence !== libraryLoadSequenceRef.current) return;
+      setLibraryPage(bootstrapPage);
+      setLibraryLoading(false);
+      const nextPageCount = Math.max(1, Math.ceil(bootstrapPage.total / pageSize));
+      if (page > nextPageCount) setPage(nextPageCount);
+      return;
+    }
+    const request = options?.force
+      ? { promise: queryPaperLibrary(input), started: true }
+      : requestPaperLibraryPageOnce(libraryReadIdentity, input);
+    if (request.started) {
+      setLibraryQueryExecutionCount((current) => current + 1);
+    }
     setLibraryLoading(true);
     try {
-      const [nextFacets, nextPage] = await Promise.all([
-        getPaperLibraryFacets(settings.databaseDir, activeProject.id),
-        queryPaperLibrary({
-          databaseDir: settings.databaseDir,
-          projectId: activeProject.id,
-          query: libraryQuery,
-          source: librarySource,
-          field: libraryField,
-          year: libraryYear === "all" ? undefined : Number(libraryYear),
-          limit: pageSize,
-          offset: (Math.max(1, page) - 1) * pageSize,
-          sort: librarySort,
-        }),
-      ]);
-      setFacets(nextFacets);
+      const nextPage = await request.promise;
+      if (requestSequence !== libraryLoadSequenceRef.current) return;
       setLibraryPage(nextPage);
       const nextPageCount = Math.max(1, Math.ceil(nextPage.total / pageSize));
       if (page > nextPageCount) setPage(nextPageCount);
     } catch (error) {
+      if (requestSequence !== libraryLoadSequenceRef.current) return;
       onNotice(error instanceof Error ? error.message : "文献库分页查询失败。", "error");
     } finally {
-      setLibraryLoading(false);
+      if (requestSequence === libraryLoadSequenceRef.current) setLibraryLoading(false);
+    }
+  }
+
+  function executeLibraryKeywordSearch() {
+    if (libraryQueryComposing) return;
+    const nextQuery = libraryQueryDraft.trim();
+    if (!nextQuery || nextQuery === libraryQuery.trim()) return;
+    setPage(1);
+    setLibraryQuery(nextQuery);
+  }
+
+  function refreshLibraryKeywordSearch() {
+    if (libraryQueryComposing || libraryLoading) return;
+    void loadLibraryPage({ force: true });
+  }
+
+  async function stageLocalPdfImport() {
+    const filePath = await choosePdfFile("选择待关联的本地 PDF");
+    if (!filePath) return;
+    const fileName = filePath.split(/[\\/]/).pop() || "PDF 文件";
+    setPendingLocalPdf({ filePath, fileName });
+    setWorkspaceTab("library");
+    onNotice("PDF 已选择；请在文献列表中选择目标论文，再确认关联。", "info");
+  }
+
+  async function associatePendingLocalPdf() {
+    if (!pendingLocalPdf || !selectedPaper || pendingLocalPdfBusy) return;
+    const confirmed = window.confirm(
+      `确认将本地文件“${pendingLocalPdf.fileName}”关联到论文《${selectedPaper.title}》？\n\nSidera 不会根据文件名自动判断论文身份。`,
+    );
+    if (!confirmed) return;
+    setPendingLocalPdfBusy(true);
+    try {
+      await importLocalPaperDocument({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        paperId: selectedPaper.id,
+        filePath: pendingLocalPdf.filePath,
+        versionKind: pendingLocalPdfVersionKind,
+      });
+      setPendingLocalPdf(null);
+      setDocumentRefreshRevision((current) => current + 1);
+      onNotice("本地 PDF 已按 SHA-256 保存，并明确关联到所选论文。", "success");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "本地 PDF 关联失败。", "error");
+    } finally {
+      setPendingLocalPdfBusy(false);
+    }
+  }
+
+  async function refreshImportReviewBatches(
+    preferredBatchId?: string,
+    isCurrent: () => boolean = () => true,
+  ) {
+    const batches = await listImportReviewBatches({
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+    });
+    if (!isCurrent()) return;
+    setImportReviewBatches(batches);
+    const selected = batches.find((batch) => batch.id === preferredBatchId)
+      ?? batches.find((batch) => batch.id === activeImportReviewBatch?.id)
+      ?? batches.find((batch) => matchesEditableImportReviewStatus(batch.status))
+      ?? batches[0];
+    if (!selected) {
+      if (!isCurrent()) return;
+      setActiveImportReviewBatch(null);
+      return;
+    }
+    const opened = await openImportReviewBatch({
+      databaseDir: settings.databaseDir,
+      projectId: activeProject.id,
+      batchId: selected.id,
+    });
+    if (!isCurrent()) return;
+    setActiveImportReviewBatch(opened);
+  }
+
+  async function createReviewBatchFromFile() {
+    const filePath = await choosePaperImportFile("选择待审查的 CSV / JSON / JSONL / BibTeX / RIS 题录文件");
+    if (!filePath) return;
+    setImportReviewBusy("正在解析候选并比对身份...");
+    try {
+      const batch = await createImportReviewBatch({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        filePath,
+      });
+      setActiveImportReviewBatch(batch);
+      await refreshImportReviewBatches(batch.id);
+      onNotice(`已创建题录审查批次：${batch.counts.total} 条候选，尚未写入论文库。`, "success");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "题录审查批次创建失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function createReviewBatchFromInstitutionSearch(
+    snapshot: SideraResearchSearchSnapshot,
+    candidateIds: string[],
+  ) {
+    if (candidateIds.length === 0) {
+      onNotice("请至少选择一条论文候选。", "info");
+      return;
+    }
+    const selectedCandidates = snapshot.candidates.filter((candidate) => candidateIds.includes(candidate.id));
+    const selectedSourceIds = new Set(selectedCandidates.flatMap((candidate) => candidate.sourceIds));
+    const producerVersions = new Set(
+      selectedCandidates.flatMap((candidate) => candidate.producerVersions ?? []),
+    );
+    if (producerVersions.size === 0) {
+      snapshot.sourceReports
+        .filter((report) => selectedSourceIds.has(report.sourceId))
+        .forEach((report) => {
+          if (report.connectorVersion) producerVersions.add(report.connectorVersion);
+        });
+    }
+    if (producerVersions.size !== 1) {
+      onNotice("所选候选来自不同或未确认的生产适配器，不能合并为一个审查批次。", "error");
+      return;
+    }
+    const connectorVersion = Array.from(producerVersions)[0];
+    setImportReviewBusy("正在保存机构检索候选并比对身份...");
+    try {
+      const batch = await createImportReviewBatchFromSearch({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        searchId: snapshot.taskId,
+        generation: snapshot.epoch,
+        connectorVersion,
+        candidateIds,
+      });
+      setActiveImportReviewBatch(batch);
+      setImportReviewBatches((current) => [
+        { ...batch, candidates: [] },
+        ...current.filter((item) => item.id !== batch.id),
+      ]);
+      setWorkspaceTab("ingest");
+      onNotice(`已将 ${candidateIds.length} 条机构候选加入导入审查；主论文库尚未写入。`, "success");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构检索候选加入审查失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function openReviewBatch(batchId: string) {
+    setImportReviewBusy("正在恢复审查批次...");
+    try {
+      const batch = await openImportReviewBatch({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId,
+      });
+      setActiveImportReviewBatch(batch);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "题录审查批次打开失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function cloneReadOnlyReviewBatch() {
+    if (!activeImportReviewBatch
+      || (activeImportReviewBatch.status !== "committed" && activeImportReviewBatch.status !== "rolled-back")) return;
+    setImportReviewBusy("正在复制为新的审查批次...");
+    try {
+      const batch = await cloneImportReviewBatch({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId: activeImportReviewBatch.id,
+      });
+      setActiveImportReviewBatch(batch);
+      await refreshImportReviewBatches(batch.id);
+      setImportCommitPreview(null);
+      setImportCommitStatus(null);
+      setImportCommitResult(null);
+      setImportRollbackResult(null);
+      importCommitClientIdRef.current = null;
+      onNotice("已复制为新的可编辑审查批次；原提交与回滚历史保持不变。", "success");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "审查批次复制失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function decideImportCandidate(
+    candidate: SideraImportCandidate,
+    decision?: SideraImportDecisionKind,
+    targetPaperId?: string,
+  ) {
+    if (!activeImportReviewBatch || !matchesEditableImportReviewStatus(activeImportReviewBatch.status)) return;
+    const mergeTarget = decision === "accept-merge"
+      ? targetPaperId
+        ?? candidate.identityMatches.find((match) => match.preferred)?.paperId
+        ?? candidate.identityMatches[0]?.paperId
+      : undefined;
+    setImportReviewBusy(`正在保存第 ${candidate.rowIndex} 条决定...`);
+    try {
+      const batch = await saveImportReviewDecision({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId: activeImportReviewBatch.id,
+        candidateId: candidate.id,
+        decision,
+        targetPaperId: mergeTarget,
+      });
+      setActiveImportReviewBatch(batch);
+      setImportCommitPreview(null);
+      setImportCommitResult(null);
+      setImportRollbackResult(null);
+      importCommitClientIdRef.current = null;
+      setImportReviewBatches((current) => current.map((item) => (
+        item.id === batch.id ? { ...batch, candidates: [] } : item
+      )));
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "审查决定保存失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function discardActiveReviewBatch() {
+    if (!activeImportReviewBatch || !matchesEditableImportReviewStatus(activeImportReviewBatch.status)) return;
+    const confirmed = await confirmDesktopAction(
+      `放弃审查批次“${activeImportReviewBatch.fileName}”？这不会修改主论文库。`,
+      "放弃题录审查批次",
+    );
+    if (!confirmed) return;
+    setImportReviewBusy("正在放弃审查批次...");
+    try {
+      await discardImportReviewBatch({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId: activeImportReviewBatch.id,
+      });
+      await refreshImportReviewBatches();
+      setImportCommitPreview(null);
+      setImportCommitStatus(null);
+      setImportCommitResult(null);
+      setImportRollbackResult(null);
+      importCommitClientIdRef.current = null;
+      onNotice("审查批次已放弃，主论文库未发生变化。", "success");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "审查批次放弃失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function refreshImportReviewCommitState(
+    batchId?: string,
+    reportError?: (kind: "status" | "history", message: string) => void,
+    isCurrent: () => boolean = () => true,
+  ) {
+    let statusError: string | undefined;
+    let historyError: string | undefined;
+    if (batchId) {
+      try {
+        const status = await getImportReviewCommitStatus({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          batchId,
+        });
+        if (!isCurrent()) return { statusError, historyError, stale: true };
+        setImportCommitStatus(status ?? null);
+        setImportCommitReadDiagnostics((current) => ({
+          ...current,
+          status: { state: "ready" },
+        }));
+      } catch (error) {
+        if (!isCurrent()) return { statusError, historyError, stale: true };
+        statusError = error instanceof Error ? error.message : "题录提交状态读取失败。";
+        setImportCommitReadDiagnostics((current) => ({
+          ...current,
+          status: { state: "error", message: statusError },
+        }));
+        reportError?.("status", "题录提交状态读取失败，请查看读取诊断。");
+      }
+    } else {
+      if (!isCurrent()) return { statusError, historyError, stale: true };
+      setImportCommitStatus(null);
+      setImportCommitReadDiagnostics((current) => ({
+        ...current,
+        status: { state: "idle" },
+      }));
+    }
+    if (!isCurrent()) return { statusError, historyError, stale: true };
+    try {
+      const history = await listImportReviewCommitHistory({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId,
+        limit: 50,
+      });
+      if (!isCurrent()) return { statusError, historyError, stale: true };
+      setImportCommitHistory(history);
+      setImportCommitReadDiagnostics((current) => ({
+        ...current,
+        history: { state: "ready" },
+      }));
+    } catch (error) {
+      if (!isCurrent()) return { statusError, historyError, stale: true };
+      historyError = error instanceof Error ? error.message : "题录提交历史读取失败。";
+      setImportCommitReadDiagnostics((current) => ({
+        ...current,
+        history: { state: "error", message: historyError },
+      }));
+      reportError?.("history", "题录提交历史读取失败，请查看读取诊断。");
+    }
+    return { statusError, historyError, stale: false };
+  }
+
+  async function runImportReadFaultFixture(target: SideraImportReadFaultTarget) {
+    if (!import.meta.env.DEV || !isDesktopRuntime() || importReviewBusy) return;
+    const noticeScopeRevision = onClearNoticeScope("import-review");
+    importReviewNoticeRevisionRef.current = noticeScopeRevision;
+    const labels: Record<SideraImportReadFaultTarget, string> = {
+      "batch-list": "题录审查批次读取失败，请查看读取诊断。",
+      "commit-status": "题录提交状态读取失败，请查看读取诊断。",
+      "commit-history": "题录提交历史读取失败，请查看读取诊断。",
+    };
+    const diagnosticKey = target === "batch-list"
+      ? "batches"
+      : target === "commit-status"
+        ? "status"
+        : "history";
+    setImportReviewBusy("正在运行一次性只读故障夹具…");
+    try {
+      await armImportReadFaultFixture({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        target,
+      });
+      if (target === "batch-list") {
+        await listImportReviewBatches({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+        });
+      } else if (target === "commit-status") {
+        await getImportReviewCommitStatus({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          batchId: activeImportReviewBatch?.id ?? "fixture-read",
+        });
+      } else {
+        await listImportReviewCommitHistory({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          batchId: activeImportReviewBatch?.id,
+          limit: 50,
+        });
+      }
+      throw new Error("SIDERA_IMPORT_READ_FAULT_FIXTURE_NOT_TRIGGERED");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "SIDERA_IMPORT_READ_FAULT_FIXTURE_FAILED";
+      setImportCommitReadDiagnostics((current) => ({
+        ...current,
+        [diagnosticKey]: { state: "error", message },
+      }));
+      onNotice(labels[target], "error", {
+        scope: "import-review",
+        scopeRevision: noticeScopeRevision,
+        dismissAfterMs: 8000,
+      });
+    } finally {
+      await clearImportReadFaultFixture().catch(() => undefined);
+      setImportReviewBusy("");
+    }
+  }
+
+  async function rereadImportReviewState() {
+    if (importReviewBusy) return;
+    const noticeScopeRevision = onClearNoticeScope("import-review");
+    importReviewNoticeRevisionRef.current = noticeScopeRevision;
+    setImportReviewBusy("正在重新读取题录状态…");
+    try {
+      const readErrors = await refreshImportReviewCommitState(activeImportReviewBatch?.id);
+      await refreshImportReviewBatches(activeImportReviewBatch?.id);
+      setImportCommitReadDiagnostics((current) => ({
+        ...current,
+        batches: { state: "ready" },
+      }));
+      if (!readErrors.statusError && !readErrors.historyError) {
+        importReviewNoticeRevisionRef.current = onClearNoticeScope("import-review");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "题录状态重新读取失败。";
+      setImportCommitReadDiagnostics((current) => ({
+        ...current,
+        batches: { state: "error", message },
+      }));
+      onNotice("题录状态重新读取失败，请查看读取诊断。", "error", {
+        scope: "import-review",
+        scopeRevision: noticeScopeRevision,
+        dismissAfterMs: 8000,
+      });
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function refreshAfterImportMutation(batchId: string) {
+    const readErrors = await refreshImportReviewCommitState(batchId);
+    const errors = [
+      readErrors.statusError ? "题录提交状态刷新失败，请查看读取诊断。" : "",
+      readErrors.historyError ? "题录提交历史刷新失败，请查看读取诊断。" : "",
+    ].filter(Boolean);
+    const refreshSteps = [
+      ["审查批次", () => refreshImportReviewBatches(batchId)],
+      ["本地文献页", () => loadLibraryPage({ force: true })],
+      ["论文库状态", () => onRefresh()],
+    ] as const;
+    for (const [label, refresh] of refreshSteps) {
+      try {
+        await refresh();
+      } catch (error) {
+        errors.push(`${label}刷新失败：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+    }
+    return errors;
+  }
+
+  async function prepareActiveImportCommit() {
+    if (!activeImportReviewBatch || !matchesEditableImportReviewStatus(activeImportReviewBatch.status)) return;
+    setImportReviewBusy("正在核对主论文库 revision、身份匹配与字段变更...");
+    try {
+      const preview = await prepareImportReviewCommit({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId: activeImportReviewBatch.id,
+      });
+      setImportCommitPreview(preview);
+      importCommitClientIdRef.current = {
+        previewId: preview.previewId,
+        clientCommitId: globalThis.crypto?.randomUUID?.()
+          ?? `commit-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      };
+      setImportCommitResult(null);
+      setImportRollbackResult(null);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "正式提交预览生成失败。", "error");
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function executeActiveImportCommit() {
+    if (!activeImportReviewBatch || !importCommitPreview) return;
+    if (importCommitPreview.batchId !== activeImportReviewBatch.id) {
+      onNotice("提交预览与当前审查批次不一致，请重新生成预览。", "error");
+      return;
+    }
+    const blockingCount = importCommitPreview.counts.unresolvedCount
+      + importCommitPreview.items.filter((item) => item.blockingCodes.length > 0).length;
+    if (blockingCount > 0) {
+      onNotice("当前预览仍有待处理或身份漂移项，不能正式提交。无效候选必须明确跳过。", "error");
+      return;
+    }
+    const confirmed = await confirmDesktopAction(
+      importCommitPreview.counts.changedCount === 0
+        ? "确认关闭这个全跳过审查批次？本次操作不会新增或合并论文，也不会修改主论文库 revision。"
+        : `确认将 ${importCommitPreview.counts.changedCount} 条已审查决定一次性提交到主论文库？提交后不会自动运行热点建模。`,
+      importCommitPreview.counts.changedCount === 0 ? "确认全跳过并关闭批次" : "确认正式提交题录",
+    );
+    if (!confirmed) return;
+    setImportReviewBusy("正在以单一事务写入主论文库...");
+    try {
+      const clientCommitId = importCommitClientIdRef.current?.previewId === importCommitPreview.previewId
+        ? importCommitClientIdRef.current.clientCommitId
+        : globalThis.crypto?.randomUUID?.()
+          ?? `commit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      importCommitClientIdRef.current = { previewId: importCommitPreview.previewId, clientCommitId };
+      const result = await executeImportReviewCommit({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId: activeImportReviewBatch.id,
+        previewId: importCommitPreview.previewId,
+        previewHash: importCommitPreview.previewHash,
+        batchVersion: importCommitPreview.batchVersion,
+        expectedRevision: importCommitPreview.expectedRevision,
+        clientCommitId,
+      });
+      setImportCommitResult(result);
+      setImportCommitPreview(null);
+      importCommitClientIdRef.current = null;
+      setImportRollbackResult(null);
+      const refreshErrors = await refreshAfterImportMutation(activeImportReviewBatch.id);
+      if (refreshErrors.length > 0) {
+        onNotice(
+          `题录已由主库账本确认提交（revision ${result.beforeRevision} → ${result.afterRevision}）；${refreshErrors.join("；")}`,
+          "info",
+        );
+      } else {
+        onNotice(
+          result.counts.changedCount === 0
+            ? `全跳过审查批次已关闭，主论文库 revision 保持 ${result.afterRevision}。`
+            : `题录已提交：新增 ${result.counts.insertCount} 条，合并 ${result.counts.mergeCount} 条，主库 revision ${result.beforeRevision} → ${result.afterRevision}。`,
+          "success",
+        );
+      }
+    } catch (error) {
+      const failureMessage = error instanceof Error ? error.message : "题录正式提交失败。";
+      try {
+        const reconciled = await getImportReviewCommitStatus({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          batchId: activeImportReviewBatch.id,
+        });
+        if (reconciled?.batchStatus === "committed" && reconciled.commitId) {
+          setImportCommitStatus(reconciled);
+          setImportCommitPreview(null);
+          setImportCommitResult(null);
+          importCommitClientIdRef.current = null;
+          const refreshErrors = await refreshAfterImportMutation(activeImportReviewBatch.id);
+          onNotice(
+            refreshErrors.length === 0
+              ? `提交响应异常，但主库账本已确认提交 ${reconciled.commitId}，界面已完成对账。`
+              : `主库账本已确认提交 ${reconciled.commitId}；${refreshErrors.join("；")}`,
+            refreshErrors.length === 0 ? "success" : "info",
+          );
+        } else {
+          onNotice(failureMessage, "error");
+        }
+      } catch {
+        onNotice(`${failureMessage}；提交状态自动对账也未完成，请重新打开批次核对提交历史。`, "error");
+      }
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function rollbackImportCommit(entry: SideraImportCommitStatus) {
+    if (!entry.commitId || entry.afterRevision === undefined || entry.batchStatus !== "committed") return;
+    const confirmed = await confirmDesktopAction(
+      "确认整次回滚该提交？若任一论文在提交后又被修改，回滚会整体停止并列出冲突，不会强制覆盖。",
+      "确认回滚题录提交",
+    );
+    if (!confirmed) return;
+    setImportReviewBusy("正在校验提交后的论文指纹并准备整次回滚...");
+    try {
+      const clientRollbackId = importRollbackClientIdsRef.current.get(entry.commitId)
+        ?? globalThis.crypto?.randomUUID?.()
+        ?? `rollback-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      importRollbackClientIdsRef.current.set(entry.commitId, clientRollbackId);
+      const result = await rollbackImportReviewCommit({
+        databaseDir: settings.databaseDir,
+        projectId: activeProject.id,
+        batchId: entry.batchId,
+        commitId: entry.commitId,
+        expectedRevision: entry.afterRevision,
+        clientRollbackId,
+      });
+      setImportRollbackResult(result);
+      if (result.rollbackConflicts.length > 0 || result.status === "blocked") {
+        onNotice("回滚被后续修改阻止；主论文库未被强制覆盖，请查看冲突详情。", "error");
+        await refreshImportReviewCommitState(entry.batchId);
+        return;
+      }
+      setImportCommitResult(null);
+      setImportCommitPreview(null);
+      importRollbackClientIdsRef.current.delete(entry.commitId);
+      const refreshErrors = await refreshAfterImportMutation(entry.batchId);
+      if (refreshErrors.length > 0) {
+        onNotice(
+          `主库账本已确认整次回滚（新 revision ${result.rollbackRevision ?? "已生成"}）；${refreshErrors.join("；")}`,
+          "info",
+        );
+      } else {
+        onNotice(
+          `整次提交已回滚：恢复 ${result.restoredCount} 条，删除 ${result.deletedCount} 条；未自动运行热点建模。`,
+          "success",
+        );
+      }
+    } catch (error) {
+      const failureMessage = error instanceof Error ? error.message : "题录提交回滚失败。";
+      try {
+        const reconciled = await getImportReviewCommitStatus({
+          databaseDir: settings.databaseDir,
+          projectId: activeProject.id,
+          batchId: entry.batchId,
+        });
+        if (reconciled?.batchStatus === "rolled-back" || reconciled?.rolledBackAtMs !== undefined) {
+          setImportCommitStatus(reconciled ?? null);
+          setImportCommitPreview(null);
+          setImportCommitResult(null);
+          importRollbackClientIdsRef.current.delete(entry.commitId);
+          const refreshErrors = await refreshAfterImportMutation(entry.batchId);
+          onNotice(
+            refreshErrors.length === 0
+              ? `回滚响应异常，但主库账本已确认提交 ${entry.commitId} 已回滚，界面已完成对账。`
+              : `主库账本已确认提交 ${entry.commitId} 已回滚；${refreshErrors.join("；")}`,
+            refreshErrors.length === 0 ? "success" : "info",
+          );
+        } else {
+          onNotice(failureMessage, "error");
+        }
+      } catch {
+        onNotice(`${failureMessage}；回滚状态自动对账也未完成，请重新打开批次核对提交历史。`, "error");
+      }
+    } finally {
+      setImportReviewBusy("");
+    }
+  }
+
+  async function viewCommittedImportPapers(inputPaperIds: string[]) {
+    const paperIds = Array.from(new Set(inputPaperIds.filter(Boolean)));
+    if (paperIds.length === 0) {
+      onNotice("该提交没有可定位的入库论文；全跳过批次不会产生论文实体。", "info");
+      return;
+    }
+
+    setImportReviewBusy("正在本地论文库中定位已提交论文...");
+    try {
+      const rows = await getPapersByIds(settings.databaseDir, activeProject.id, paperIds);
+      const firstPaper = rows[0];
+      setLibraryQueryDraft(firstPaper?.title ?? "");
+      setLibraryQuery(firstPaper?.title ?? "");
+      setLibrarySource("all");
+      setLibraryField("all");
+      setLibraryYear("all");
+      setLibrarySort("newest");
+      setPage(1);
+      setSelectedIds(paperIds);
+      setSelectedPapers(rows);
+      setPendingFocusPaperId(firstPaper?.id ?? paperIds[0]);
+      setWorkspaceTab("library");
+      onNotice(
+        `已进入本地文献库，并保留 ${paperIds.length} 个已提交论文 ID${firstPaper ? "；当前定位到首条记录" : ""}。`,
+        "success",
+      );
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "已提交论文定位失败。", "error");
+    } finally {
+      setImportReviewBusy("");
     }
   }
 
@@ -3155,7 +4988,7 @@ function SearchWorkspace({
       await upsertPaperLibrary(settings.databaseDir, activeProject.id, savedRows);
       setSearchRows(savedRows);
       setSelectedIds((current) => Array.from(new Set([...current, ...savedRows.map((paper) => paper.id)])));
-      await loadLibraryPage();
+      await loadLibraryPage({ force: true });
       await onRefresh();
       onNotice(`检索完成：${rows.length} 篇文献已入库。`, "success");
     } catch (error) {
@@ -3307,7 +5140,7 @@ function SearchWorkspace({
           const summary = `导入已取消：已写入 ${written} / ${importPreview.validRows.length}，新增 ${inserted}，更新 ${updated}。`;
           setImportJob((current) => current ? { ...current, status: "cancelled", written, inserted, updated } : current);
           setImportProgress(summary);
-          await loadLibraryPage();
+          await loadLibraryPage({ force: true });
           await onRefresh();
           onNotice(summary);
           return;
@@ -3322,7 +5155,7 @@ function SearchWorkspace({
         setImportJob((current) => current ? { ...current, status: "running", written, inserted, updated } : current);
         await sleep(0);
       }
-      await loadLibraryPage();
+      await loadLibraryPage({ force: true });
       await onRefresh();
       onNotice(`导入完成：新增 ${inserted} 篇，更新 ${updated} 篇，文件内重复 ${importPreview.duplicateRows.length} 篇，无效 ${importPreview.invalidRows.length} 行。`);
       setImportJob((current) => current ? { ...current, status: "done", written: importPreview.validRows.length, inserted, updated } : current);
@@ -3370,7 +5203,7 @@ function SearchWorkspace({
     try {
       const count = await deletePapersFromLibrary(settings.databaseDir, activeProject.id, selectedIds);
       setSelectedIds([]);
-      await loadLibraryPage();
+      await loadLibraryPage({ force: true });
       await onRefresh();
       onNotice(`已删除 ${count} 篇文献。`);
     } catch (error) {
@@ -3507,6 +5340,7 @@ function SearchWorkspace({
   }
 
   function clearLibraryFilters() {
+    setLibraryQueryDraft("");
     setLibraryQuery("");
     setLibrarySource("all");
     setLibraryField("all");
@@ -3533,8 +5367,40 @@ function SearchWorkspace({
     void startDesktopFileImport();
   }
 
+  if (documentReaderTarget) {
+    const returnVersionId = documentReaderTarget.versionId;
+    return (
+      <DocumentReaderShell
+        databaseDir={settings.databaseDir}
+        projectId={activeProject.id}
+        paperId={documentReaderTarget.paperId}
+        versionId={documentReaderTarget.versionId}
+        title={documentReaderTarget.title}
+        initialEvidenceAnchor={documentReaderTarget.initialEvidenceAnchor}
+        service={documentReaderComposition.service}
+        pdfAdapter={documentReaderComposition.pdfAdapter}
+        onNotice={onNotice}
+        onBack={() => {
+          setDocumentReaderTarget(null);
+          onClearDocumentEvidenceFocus();
+          requestAnimationFrame(() => {
+            const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-document-reader-version]"))
+              .find((button) => button.dataset.documentReaderVersion === returnVersionId);
+            trigger?.focus();
+          });
+        }}
+        onIndexActivityChange={onDocumentIndexActivityChange}
+        agentConversationTurns={agentConversationTurns}
+        agentGenerating={agentGenerating}
+        agentError={agentError}
+        onAskEvidence={onAskEvidence}
+        onStopEvidenceAnswer={onStopEvidenceAnswer}
+      />
+    );
+  }
+
   return (
-    <div ref={literaturePageRef} className={`page-grid literature-workspace-page ${activeWorkspaceTab === "library" ? "literature-workspace-library" : ""}`}>
+    <div ref={literaturePageRef} className={`page-grid literature-workspace-page ${activeWorkspaceTab === "library" ? "literature-workspace-library" : ""} ${activeWorkspaceTab === "institution" ? "literature-workspace-institution" : ""}`}>
       <header className="page-header">
         <div>
           <p className="eyebrow">文献中心</p>
@@ -3546,6 +5412,7 @@ function SearchWorkspace({
       <nav className="literature-tabs" aria-label="文献工作台任务">
         {([
           ["library", "本地文献库"],
+          ["institution", "机构资源"],
           ["ingest", "检索与导入"],
           ["analysis", "批量分析"],
         ] as Array<[LiteratureWorkspaceTab, string]>).map(([value, label]) => (
@@ -3562,8 +5429,52 @@ function SearchWorkspace({
         ))}
       </nav>
 
+      {activeWorkspaceTab === "institution" && (
+        <InstitutionResourceWorkspace
+          session={institutionSession}
+          snapshots={institutionSearchSnapshots}
+          researchSearchState={researchSearchState}
+          researchSearchQuery={researchSearchQuery}
+          selectedResearchCandidateIds={selectedResearchCandidateIds}
+          browserPresentation={institutionBrowserPresentation}
+          onSessionChange={onInstitutionSessionChange}
+          onSnapshotChange={onInstitutionSearchSnapshotChange}
+          onResearchSearchQueryChange={onResearchSearchQueryChange}
+          onSelectedResearchCandidateIdsChange={onSelectedResearchCandidateIdsChange}
+          onStartResearchSearch={onStartResearchSearch}
+          onStopResearchSearch={onStopResearchSearch}
+          onBrowserPresentationChange={onInstitutionBrowserPresentationChange}
+          onCreateReviewBatch={createReviewBatchFromInstitutionSearch}
+          onNotice={onNotice}
+        />
+      )}
+
       {activeWorkspaceTab === "ingest" && (
         <>
+          <ImportReviewWorkspace
+            batches={importReviewBatches}
+            activeBatch={activeImportReviewBatch}
+            busy={importReviewBusy}
+            commitPreview={importCommitPreview}
+            commitStatus={importCommitStatus}
+            commitHistory={importCommitHistory}
+            readDiagnostics={importCommitReadDiagnostics}
+            commitResult={importCommitResult}
+            rollbackResult={importRollbackResult}
+            onCreate={() => void createReviewBatchFromFile()}
+            onOpen={(batchId) => void openReviewBatch(batchId)}
+            onDecide={(candidate, decision, targetPaperId) => void decideImportCandidate(candidate, decision, targetPaperId)}
+            onDiscard={() => void discardActiveReviewBatch()}
+            onClone={() => void cloneReadOnlyReviewBatch()}
+            onPrepareCommit={() => void prepareActiveImportCommit()}
+            onExecuteCommit={() => void executeActiveImportCommit()}
+            onRollback={(entry) => void rollbackImportCommit(entry)}
+            onViewImportedPapers={(paperIds) => void viewCommittedImportPapers(paperIds)}
+            onRefreshReads={() => void rereadImportReviewState()}
+            onRunReadFaultFixture={import.meta.env.DEV
+              ? (target) => void runImportReadFaultFixture(target)
+              : undefined}
+          />
           <section className="panel-card">
             <div className="panel-title">
               <Search size={17} />
@@ -3619,6 +5530,7 @@ function SearchWorkspace({
                 </button>
               </div>
               <p className="mt-3 text-xs leading-5 text-ink/45">大文件直导支持 CSV、JSON、JSONL、NDJSON、BibTeX 和 RIS。</p>
+              <p className="mt-2 text-xs leading-5 text-amber">正式题录导入将从上方审查批次进入；这里的既有直导入口仅保留兼容用途，P2a 不会自动触发。</p>
             </FoldSection>
           </section>
 
@@ -3677,6 +5589,15 @@ function SearchWorkspace({
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
+                    className="primary-action h-8 gap-2 px-3"
+                    onClick={() => void stageLocalPdfImport()}
+                    disabled={pendingLocalPdfBusy}
+                  >
+                    <FileUp size={14} />
+                    导入本地 PDF
+                  </button>
+                  <button
+                    type="button"
                     className="secondary-action h-8 gap-2 px-3"
                     aria-expanded={libraryDiagnosticsOpen}
                     aria-controls="library-diagnostics-panel"
@@ -3703,15 +5624,96 @@ function SearchWorkspace({
                 </div>
               </div>
 
+              {pendingLocalPdf && (
+                <div className="mt-4 rounded-[9px] border border-cyan/30 bg-cyan/5 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-ink">待关联文件：{pendingLocalPdf.fileName}</div>
+                      <p className="mt-1 text-xs leading-5 text-ink/50">
+                        请先在下方列表中明确选择论文。Sidera 不会依据文件名、目录名或 PDF 文本自动推断身份。
+                      </p>
+                      <p className="mt-1 text-xs text-cyan">
+                        当前目标：{selectedPaper ? `《${selectedPaper.title}》` : "尚未选择论文"}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="field-control h-9 min-w-[150px] px-3 text-xs"
+                        value={pendingLocalPdfVersionKind}
+                        onChange={(event) => setPendingLocalPdfVersionKind(event.target.value as SideraDocumentVersionKind)}
+                        aria-label="选择待关联 PDF 的版本类型"
+                      >
+                        {Object.entries(documentVersionKindLabels).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="primary-action h-9 gap-2 px-3"
+                        onClick={() => void associatePendingLocalPdf()}
+                        disabled={!selectedPaper || pendingLocalPdfBusy}
+                      >
+                        {pendingLocalPdfBusy ? <Loader2 className="animate-spin" size={14} /> : <Link2 size={14} />}
+                        确认关联
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-action h-9 px-3"
+                        onClick={() => setPendingLocalPdf(null)}
+                        disabled={pendingLocalPdfBusy}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="library-toolbar-sticky">
-                <div className="grid gap-2 lg:grid-cols-[1fr_128px_150px_128px_128px]">
-                  <input className="field-control h-10 px-3 text-sm" value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} placeholder="筛选标题、摘要、作者" />
-                  <SelectControl className="h-10 text-sm" value={librarySource} options={[{ value: "all", label: "全部来源" }, ...(["openalex", "arxiv", "cnki", "local"] as SourceKind[]).map((source) => ({ value: source, label: source }))]} onChange={(value) => setLibrarySource(value as SourceKind | "all")} />
-                  <SelectControl className="h-10 text-sm" value={libraryField} options={[{ value: "all", label: "全部学科" }, ...fields.map((field) => ({ value: field, label: field }))]} onChange={setLibraryField} />
-                  <SelectControl className="h-10 text-sm" value={libraryYear} options={[{ value: "all", label: "全部年份" }, ...years.map((year) => ({ value: String(year), label: String(year) }))]} onChange={setLibraryYear} />
-                  <SelectControl className="h-10 text-sm" value={librarySort} options={[{ value: "newest", label: "最新" }, { value: "oldest", label: "最早" }, { value: "title", label: "标题" }]} onChange={(value) => setLibrarySort(value as "newest" | "oldest" | "title")} />
+                <div className="grid gap-2 lg:grid-cols-[minmax(280px,1fr)_128px_150px_128px_128px]">
+                  <div className="flex min-w-0 gap-2">
+                    <input
+                      className="field-control h-9 min-w-0 flex-1 px-3 text-sm"
+                      value={libraryQueryDraft}
+                      onChange={(event) => setLibraryQueryDraft(event.target.value)}
+                      onCompositionStart={() => setLibraryQueryComposing(true)}
+                      onCompositionEnd={(event) => {
+                        setLibraryQueryComposing(false);
+                        setLibraryQueryDraft(event.currentTarget.value);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.nativeEvent.isComposing) executeLibraryKeywordSearch();
+                      }}
+                      placeholder="输入后按 Enter 或点击检索"
+                      aria-label="本地文献关键词"
+                    />
+                    <button
+                      type="button"
+                      className="primary-action h-9 shrink-0 gap-1.5 px-3"
+                      onClick={executeLibraryKeywordSearch}
+                      disabled={libraryQueryComposing || !libraryQueryDraft.trim() || libraryQueryDraft.trim() === libraryQuery.trim()}
+                    >
+                      <Search size={14} />
+                      检索
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-action h-9 w-9 shrink-0 p-0"
+                      aria-label="重新检索当前条件"
+                      title="重新检索当前条件"
+                      onClick={refreshLibraryKeywordSearch}
+                      disabled={libraryQueryComposing || libraryLoading}
+                    >
+                      <RefreshCw className={libraryLoading ? "animate-spin" : ""} size={14} />
+                    </button>
+                  </div>
+                  <SelectControl className="h-9 text-sm" value={librarySource} options={[{ value: "all", label: "全部来源" }, ...paperSourceOptions]} onChange={(value) => setLibrarySource(value as SourceKind | "all")} />
+                  <SelectControl className="h-9 text-sm" value={libraryField} options={[{ value: "all", label: "全部学科" }, ...fields.map((field) => ({ value: field, label: field }))]} onChange={setLibraryField} />
+                  <SelectControl className="h-9 text-sm" value={libraryYear} options={[{ value: "all", label: "全部年份" }, ...years.map((year) => ({ value: String(year), label: String(year) }))]} onChange={setLibraryYear} />
+                  <SelectControl className="h-9 text-sm" value={librarySort} options={[{ value: "newest", label: "最新" }, { value: "oldest", label: "最早" }, { value: "title", label: "标题" }]} onChange={(value) => setLibrarySort(value as "newest" | "oldest" | "title")} />
                 </div>
                 <div className="library-filter-strip">
+                  {libraryQueryDraft.trim() !== libraryQuery.trim() && <span>待检索：{libraryQueryDraft.trim() || "空"}</span>}
                   {activeFilterLabels.length > 0 ? activeFilterLabels.map((label) => <span key={label}>{label}</span>) : <span>当前为全库视图</span>}
                   {activeFilterLabels.length > 0 && <button type="button" onClick={clearLibraryFilters}>清空筛选</button>}
                   <strong>{pageStart.toLocaleString()}-{pageEnd.toLocaleString()} / {libraryPage.total.toLocaleString()}</strong>
@@ -3721,6 +5723,8 @@ function SearchWorkspace({
               {libraryDiagnosticsOpen && <div id="library-diagnostics-panel" className="library-diagnostics-panel">
                 <div className="library-diagnostics">
                   <span>查询耗时：{libraryLoading ? "查询中" : `${libraryPage.queryMs} ms`}</span>
+                  <span>本次会话查询次数：{libraryQueryExecutionCount}</span>
+                  <span>排序标准：{librarySort === "newest" ? "年份从新到旧" : librarySort === "oldest" ? "年份从旧到新" : "题名字母序"}</span>
                   <span>来源索引：{filterIndex.sources}</span>
                   <span>学科索引：{filterIndex.fields}</span>
                   <span>年份索引：{filterIndex.years}</span>
@@ -3802,7 +5806,7 @@ function SearchWorkspace({
                 onSave={async (paper) => {
                   try {
                     await upsertPaperLibrary(settings.databaseDir, activeProject.id, [paper]);
-                    await loadLibraryPage();
+                    await loadLibraryPage({ force: true });
                     await onRefresh();
                     onNotice("文献详情已保存。");
                   } catch (error) {
@@ -3811,6 +5815,24 @@ function SearchWorkspace({
                   }
                 }}
               />
+              {selectedPaper && (
+                <PaperDocumentPanel
+                  databaseDir={settings.databaseDir}
+                  projectId={activeProject.id}
+                  paper={selectedPaper}
+                  refreshRevision={documentRefreshRevision}
+                  onReadVersion={(versionId) => setDocumentReaderTarget({
+                    paperId: selectedPaper.id,
+                    versionId,
+                    title: selectedPaper.title,
+                  })}
+                  onInstitutionSourceOpened={() => {
+                    setWorkspaceTab("institution");
+                    onInstitutionBrowserPresentationChange("split");
+                  }}
+                  onNotice={onNotice}
+                />
+              )}
             </section>
           </div>
         </>
@@ -3931,6 +5953,2588 @@ function SearchWorkspace({
       )}
     </div>
   );
+}
+
+type SideraResearchFilterKind = SideraResearchSearchFilters["recordKinds"][number];
+
+function isTerminalInstitutionConnectionPhase(
+  phase: NonNullable<SideraInstitutionSessionState["activeConnection"]>["phase"],
+) {
+  return phase === "ready" || phase === "cancelled" || phase === "failed";
+}
+
+function shouldAcceptInstitutionSessionState(
+  current: SideraInstitutionSessionState | null,
+  next: SideraInstitutionSessionState,
+) {
+  if (!current) return true;
+  if (next.updatedAtMs < current.updatedAtMs) return false;
+
+  const currentConnection = current.activeConnection;
+  const nextConnection = next.activeConnection;
+  if (!currentConnection || !nextConnection
+    || currentConnection.transactionId !== nextConnection.transactionId) {
+    return true;
+  }
+  if (isTerminalInstitutionConnectionPhase(currentConnection.phase)
+    && nextConnection.phase !== currentConnection.phase) {
+    return false;
+  }
+  if (nextConnection.updatedAtMs < currentConnection.updatedAtMs) return false;
+
+  const phaseOrder: Record<NonNullable<SideraInstitutionSessionState["activeConnection"]>["phase"], number> = {
+    opening: 0,
+    "awaiting-user": 1,
+    verifying: 2,
+    "refreshing-parent": 3,
+    ready: 4,
+    cancelled: 4,
+    failed: 4,
+  };
+  return phaseOrder[nextConnection.phase] >= phaseOrder[currentConnection.phase];
+}
+
+const DEFAULT_SIDERA_RESEARCH_FILTERS: SideraResearchSearchFilters = {
+  recordKinds: ["journal-article", "conference-paper", "thesis"],
+  yearFrom: null,
+  yearTo: null,
+  fullTextOnly: false,
+};
+
+function InstitutionResourceWorkspace({
+  session,
+  snapshots,
+  researchSearchState,
+  researchSearchQuery,
+  selectedResearchCandidateIds,
+  browserPresentation,
+  onSessionChange,
+  onSnapshotChange,
+  onResearchSearchQueryChange,
+  onSelectedResearchCandidateIdsChange,
+  onStartResearchSearch,
+  onStopResearchSearch,
+  onBrowserPresentationChange,
+  onCreateReviewBatch,
+  onNotice,
+}: {
+  session: SideraInstitutionSessionState | null;
+  snapshots: Record<SideraInstitutionSearchSource, SideraInstitutionSearchSnapshot | null>;
+  researchSearchState: SideraResearchSearchState | null;
+  researchSearchQuery: string;
+  selectedResearchCandidateIds: string[];
+  browserPresentation: SideraInstitutionBrowserPresentation;
+  onSessionChange: (state: SideraInstitutionSessionState) => void;
+  onSnapshotChange: (snapshot: SideraInstitutionSearchSnapshot) => void;
+  onResearchSearchQueryChange: (query: string) => void;
+  onSelectedResearchCandidateIdsChange: (ids: string[]) => void;
+  onStartResearchSearch: (
+    query: string,
+    startReason: SideraResearchSearchStartReason,
+    filters: SideraResearchSearchFilters,
+    resultLimit: 40 | 100,
+  ) => Promise<SideraResearchSearchState>;
+  onStopResearchSearch: () => Promise<SideraResearchSearchState>;
+  onBrowserPresentationChange: (presentation: SideraInstitutionBrowserPresentation) => void;
+  onCreateReviewBatch: (
+    snapshot: SideraResearchSearchSnapshot,
+    candidateIds: string[],
+  ) => Promise<void>;
+  onNotice: AppNoticeHandler;
+}) {
+  type InstitutionWorkspaceMode = SideraInstitutionSearchSource | "database-direct";
+  const [selectedSource, setSelectedSource] = useState<InstitutionWorkspaceMode>("academic-discovery");
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [researchReviewBusy, setResearchReviewBusy] = useState(false);
+  const [connectionDrawerOpen, setConnectionDrawerOpen] = useState(false);
+  const [connectionDrawerSurfaceHeld, setConnectionDrawerSurfaceHeld] = useState(false);
+  const connectionDrawerReleaseTimerRef = useRef<number | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [researchRecordKinds, setResearchRecordKinds] = useState<SideraResearchFilterKind[]>(
+    DEFAULT_SIDERA_RESEARCH_FILTERS.recordKinds,
+  );
+  const [researchYearFrom, setResearchYearFrom] = useState("");
+  const [researchYearTo, setResearchYearTo] = useState("");
+  const [researchResultLimit, setResearchResultLimit] = useState<40 | 100>(40);
+  const [researchDisplayOrder, setResearchDisplayOrder] = useState<SideraResearchDisplayOrder>("source-return-order");
+  const [browserState, setBrowserState] = useState<SideraInstitutionBrowserState | null>(null);
+  const [browserAddressDraft, setBrowserAddressDraft] = useState("");
+  const [browserBusy, setBrowserBusy] = useState(false);
+  const [browserVisibilityDiagnostic, setBrowserVisibilityDiagnostic] = useState<{
+    target: "visible" | "hidden";
+    attempts: number;
+    message: string;
+  } | null>(null);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(() => {
+    try {
+      return parseSideraInstitutionBrowserLayout(
+        window.localStorage.getItem(SIDERA_INSTITUTION_BROWSER_LAYOUT_STORAGE_KEY),
+      );
+    } catch {
+      return SIDERA_INSTITUTION_BROWSER_DEFAULT_RATIO;
+    }
+  });
+  const [splitHostWidth, setSplitHostWidth] = useState(() => window.innerWidth);
+  const [narrowPane, setNarrowPane] = useState<SideraInstitutionNarrowPane>("native");
+  const browserHostRef = useRef<HTMLDivElement | null>(null);
+  const splitHostRef = useRef<HTMLDivElement | null>(null);
+  const browserBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const browserVisibilitySequenceRef = useRef(0);
+  const browserVisibilityDesiredRef = useRef(false);
+  const dividerFrameRef = useRef(0);
+  const dividerClientXRef = useRef<number | null>(null);
+  const searchSource = selectedSource === "database-direct" ? null : selectedSource;
+  const snapshot = searchSource ? snapshots[searchSource] : null;
+  const activeSearch = snapshots.catalog?.status === "searching" ? snapshots.catalog : null;
+  const displayedResearchSnapshot = researchSearchState?.displayedSnapshot ?? null;
+  const activeResearchAttempt = researchSearchState?.activeAttempt ?? null;
+  const researchSearchActive = Boolean(activeResearchAttempt);
+  const searching = researchSearchActive || Boolean(activeSearch);
+  const databaseAuth = session?.databaseAuth;
+  const academicDiscoveryAuth = session?.academicDiscoveryAuth;
+  const libraryAccountAuth = session?.libraryAccountAuth;
+  const databaseSessionReady = databaseAuth?.status === "ready";
+  const activeConnection = session?.activeConnection ?? null;
+  const activeDatabaseConnection = activeConnection?.goal === "database-access"
+    ? activeConnection
+    : null;
+  const activeDiscoveryConnection = activeConnection?.goal === "discovery-fulltext"
+    && !isTerminalInstitutionConnectionPhase(activeConnection.phase)
+    && session?.discoveryAuthWindowVisible
+    ? activeConnection
+    : null;
+  const activeAuth = session?.authModalVisible && session.activeAuthKind === "library-account"
+    ? libraryAccountAuth
+    : selectedSource === "academic-discovery"
+      ? academicDiscoveryAuth
+      : databaseAuth;
+  const sourceReadiness = searchSource
+    ? session?.sourceReadiness?.find((value) => value.source === searchSource)
+    : null;
+  const academicBackendReadiness = researchSearchActive
+    ? "starting"
+    : displayedResearchSnapshot?.status === "complete"
+      ? "ready"
+      : displayedResearchSnapshot?.status === "partial"
+        ? "partial"
+        : researchSearchState?.lastFailure?.status === "failed"
+          ? "failed"
+          : "uninitialized";
+  const adapterId = selectedSource === "academic-discovery"
+    ? SIDERA_RESEARCH_ACADEMIC_CONNECTOR_ID
+    : selectedSource === "catalog"
+      ? SIDERA_INSTITUTION_CATALOG_ADAPTER_ID
+      : "whu-database-directory-v1";
+  const activeBrowserTab = browserState?.tabs.find((tab) => tab.id === browserState.activeTabId) ?? null;
+  const managedPopupNotices = (browserState?.popups ?? [])
+    .filter((popup) => popup.phase !== "closed")
+    .slice(-3);
+  const splitLayout = useMemo(
+    () => resolveSideraInstitutionSplitLayout(splitHostWidth, splitRatio),
+    [splitHostWidth, splitRatio],
+  );
+  const setConnectionDrawerPresentation = useCallback((open: boolean) => {
+    if (connectionDrawerReleaseTimerRef.current !== null) {
+      window.clearTimeout(connectionDrawerReleaseTimerRef.current);
+      connectionDrawerReleaseTimerRef.current = null;
+    }
+    if (open) {
+      setConnectionDrawerSurfaceHeld(true);
+      setConnectionDrawerOpen(true);
+      return;
+    }
+    setConnectionDrawerOpen(false);
+    const releaseDelay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 230;
+    connectionDrawerReleaseTimerRef.current = window.setTimeout(() => {
+      setConnectionDrawerSurfaceHeld(false);
+      connectionDrawerReleaseTimerRef.current = null;
+    }, releaseDelay);
+  }, []);
+
+  useEffect(() => () => {
+    if (connectionDrawerReleaseTimerRef.current !== null) {
+      window.clearTimeout(connectionDrawerReleaseTimerRef.current);
+    }
+  }, []);
+
+  const browserSurfaceVisible = browserPresentation !== "closed"
+    && !connectionDrawerSurfaceHeld
+    && (browserPresentation === "immersive" || !splitLayout.narrow || narrowPane === "browser");
+  const workspaceStyle = {
+    "--institution-native-pane-width": `${splitLayout.nativeWidth}px`,
+  } as CSSProperties;
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return undefined;
+    let disposed = false;
+    const unlistens: Array<() => void> = [];
+    void Promise.all([
+      listenSideraInstitutionBrowser((next) => {
+        if (!disposed) setBrowserState(next);
+      }),
+      listenSideraInstitutionDownloads((record) => {
+        if (disposed) return;
+        setBrowserState((current) => current ? {
+          ...current,
+          downloads: [record, ...current.downloads.filter((item) => item.id !== record.id)]
+            .sort((left, right) => right.createdAtMs - left.createdAtMs),
+          updatedAtMs: Date.now(),
+        } : current);
+      }),
+    ]).then((rows) => unlistens.push(...rows)).catch(() => undefined);
+    void getSideraInstitutionBrowserState().then((next) => {
+      if (!disposed) setBrowserState(next);
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlistens.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    setBrowserAddressDraft(activeBrowserTab?.address ?? "");
+  }, [activeBrowserTab?.id, activeBrowserTab?.address]);
+
+  const reconcileBrowserSurfaceVisibility = useCallback(async (
+    visible: boolean,
+    reportFailure = true,
+  ) => {
+    const sequence = browserVisibilitySequenceRef.current + 1;
+    browserVisibilitySequenceRef.current = sequence;
+    browserVisibilityDesiredRef.current = visible;
+    const retryDelays = visible ? [0] : [0, 45, 120];
+    let failureMessage = visible
+      ? "SIDERA_INSTITUTION_BROWSER_SHOW_FAILED"
+      : "SIDERA_INSTITUTION_BROWSER_HIDE_FAILED";
+    for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+      const delay = retryDelays[attempt];
+      if (delay > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+      }
+      if (
+        sequence !== browserVisibilitySequenceRef.current
+        || browserVisibilityDesiredRef.current !== visible
+      ) return false;
+      try {
+        const next = await setSideraInstitutionBrowserShellVisible(visible);
+        if (
+          sequence !== browserVisibilitySequenceRef.current
+          || browserVisibilityDesiredRef.current !== visible
+        ) return false;
+        if (next.visible !== visible) {
+          failureMessage = visible
+            ? "SIDERA_INSTITUTION_BROWSER_SHOW_STATE_MISMATCH"
+            : "SIDERA_INSTITUTION_BROWSER_HIDE_STATE_MISMATCH";
+          continue;
+        }
+        setBrowserState(next);
+        setBrowserVisibilityDiagnostic(null);
+        return true;
+      } catch (error) {
+        failureMessage = error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : failureMessage;
+      }
+    }
+    if (
+      sequence !== browserVisibilitySequenceRef.current
+      || browserVisibilityDesiredRef.current !== visible
+    ) return false;
+    setBrowserVisibilityDiagnostic({
+      target: visible ? "visible" : "hidden",
+      attempts: retryDelays.length,
+      message: failureMessage,
+    });
+    if (reportFailure) {
+      onNotice(
+        visible
+          ? "机构浏览器显示失败，请查看技术诊断后重试。"
+          : "机构浏览器未能安全隐藏；页面保持当前布局，请查看技术诊断后重试。",
+        "error",
+        { dismissAfterMs: 8_000 },
+      );
+    }
+    return false;
+  }, [onNotice]);
+
+  async function setBrowserPresentation(next: SideraInstitutionBrowserPresentation) {
+    if (next === "closed" && isDesktopRuntime()) {
+      const hidden = await reconcileBrowserSurfaceVisibility(false);
+      if (!hidden) return false;
+    }
+    if (next !== "closed" && splitLayout.narrow) setNarrowPane("browser");
+    onBrowserPresentationChange(next);
+    return true;
+  }
+
+  useLayoutEffect(() => {
+    const host = splitHostRef.current;
+    if (!host) return undefined;
+    const update = () => {
+      const width = host.getBoundingClientRect().width;
+      if (width > 0) setSplitHostWidth((current) => Math.abs(current - width) < 1 ? current : width);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(host);
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isDesktopRuntime()) return undefined;
+    void reconcileBrowserSurfaceVisibility(browserSurfaceVisible);
+    return undefined;
+  }, [browserSurfaceVisible, reconcileBrowserSurfaceVisibility]);
+
+  useEffect(() => () => {
+    if (!isDesktopRuntime()) return;
+    const sequence = browserVisibilitySequenceRef.current + 1;
+    browserVisibilitySequenceRef.current = sequence;
+    browserVisibilityDesiredRef.current = false;
+    void (async () => {
+      for (const delay of [0, 45, 120]) {
+        if (delay > 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+        }
+        if (sequence !== browserVisibilitySequenceRef.current) return;
+        try {
+          await setSideraInstitutionBrowserShellVisible(false);
+          return;
+        } catch {
+          // Unmount cleanup is bounded; an active workspace reports its own diagnostic.
+        }
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!browserSurfaceVisible || !browserHostRef.current || !isDesktopRuntime()) return undefined;
+    let frame = 0;
+    browserBoundsRef.current = null;
+    const update = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const rect = browserHostRef.current?.getBoundingClientRect();
+        if (!rect || rect.width < 120 || rect.height < 120) return;
+        const nextBounds = {
+          x: Math.max(0, rect.left),
+          y: Math.max(0, rect.top),
+          width: rect.width,
+          height: rect.height,
+        };
+        const currentBounds = browserBoundsRef.current;
+        if (currentBounds && [
+          Math.abs(currentBounds.x - nextBounds.x),
+          Math.abs(currentBounds.y - nextBounds.y),
+          Math.abs(currentBounds.width - nextBounds.width),
+          Math.abs(currentBounds.height - nextBounds.height),
+        ].every((delta) => delta < 1)) return;
+        browserBoundsRef.current = nextBounds;
+        void setSideraInstitutionBrowserShellBounds(nextBounds).catch(() => undefined);
+      });
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(browserHostRef.current);
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [browserSurfaceVisible]);
+
+  function persistSplitRatio(nextRatio: number) {
+    try {
+      window.localStorage.setItem(
+        SIDERA_INSTITUTION_BROWSER_LAYOUT_STORAGE_KEY,
+        serializeSideraInstitutionBrowserLayout(nextRatio),
+      );
+    } catch {
+      // A blocked storage backend must not prevent the workspace from resizing.
+    }
+  }
+
+  function ratioFromClientX(clientX: number) {
+    const rect = splitHostRef.current?.getBoundingClientRect();
+    if (!rect) return splitLayout.ratio;
+    const availableWidth = Math.max(1, rect.width - SIDERA_INSTITUTION_BROWSER_DIVIDER_WIDTH);
+    return resolveSideraInstitutionSplitLayout(
+      rect.width,
+      (clientX - rect.left) / availableWidth,
+    ).ratio;
+  }
+
+  function handleDividerPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    dividerClientXRef.current = event.clientX;
+    if (dividerFrameRef.current) return;
+    dividerFrameRef.current = window.requestAnimationFrame(() => {
+      dividerFrameRef.current = 0;
+      const clientX = dividerClientXRef.current;
+      if (clientX !== null) setSplitRatio(ratioFromClientX(clientX));
+    });
+  }
+
+  function finishDividerDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dividerFrameRef.current) window.cancelAnimationFrame(dividerFrameRef.current);
+    dividerFrameRef.current = 0;
+    dividerClientXRef.current = null;
+    const nextRatio = ratioFromClientX(event.clientX);
+    setSplitRatio(nextRatio);
+    persistSplitRatio(nextRatio);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleDividerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    const requestedRatio = event.key === "Home"
+      ? SIDERA_INSTITUTION_BROWSER_DEFAULT_RATIO
+      : splitLayout.ratio + (event.key === "ArrowLeft" ? -0.02 : 0.02);
+    const nextRatio = resolveSideraInstitutionSplitLayout(splitHostWidth, requestedRatio).ratio;
+    setSplitRatio(nextRatio);
+    persistSplitRatio(nextRatio);
+  }
+
+  async function openInstitutionConnection(
+    goal: "database-access" | "library-account" | "discovery-fulltext" = "database-access",
+  ) {
+    setSessionBusy(true);
+    try {
+      const next = await beginSideraInstitutionConnection(goal);
+      onSessionChange(next);
+    } catch (error) {
+      onNotice(
+        error instanceof Error
+          ? error.message
+          : goal === "database-access"
+            ? "机构连接初始化失败。"
+            : goal === "library-account"
+              ? "个人图书馆连接初始化失败。"
+              : "统一发现全文认证初始化失败。",
+        "error",
+        goal === "database-access" ? { scope: "institution-sso" } : undefined,
+      );
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function cancelActiveInstitutionConnection() {
+    const transactionId = session?.activeConnection?.transactionId;
+    if (!transactionId) {
+      onNotice("当前没有可取消的机构连接事务。", "info");
+      return;
+    }
+    try {
+      const next = await cancelSideraInstitutionConnection(transactionId);
+      onSessionChange(next);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "取消机构连接失败。", "error");
+    }
+  }
+
+  async function cancelLegacyInstitutionAuthModal() {
+    try {
+      const next = await cancelSideraInstitutionAuth(session?.activeAuthKind ?? "library-account");
+      onSessionChange(next);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "取消旧版认证窗口失败。", "error");
+    }
+  }
+
+  async function cancelInstitutionBrowserAuthModal() {
+    setBrowserBusy(true);
+    try {
+      setBrowserState(await cancelSideraInstitutionBrowserAuth());
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "取消机构浏览器认证窗口失败。", "error");
+    } finally {
+      setBrowserBusy(false);
+    }
+  }
+
+  function selectedResearchFilters(): SideraResearchSearchFilters | null {
+    if (researchRecordKinds.length === 0) {
+      onNotice("请至少选择一种文献类型。", "info");
+      return null;
+    }
+    const yearFrom = researchYearFrom.trim() ? Number(researchYearFrom) : null;
+    const yearTo = researchYearTo.trim() ? Number(researchYearTo) : null;
+    if ((yearFrom !== null && !Number.isInteger(yearFrom)) || (yearTo !== null && !Number.isInteger(yearTo))) {
+      onNotice("年份必须填写为整数。", "info");
+      return null;
+    }
+    if (yearFrom !== null && yearTo !== null && yearFrom > yearTo) {
+      onNotice("起始年份不能晚于结束年份。", "info");
+      return null;
+    }
+    return {
+      recordKinds: researchRecordKinds,
+      yearFrom,
+      yearTo,
+      fullTextOnly: false,
+    };
+  }
+
+  async function runInstitutionSearch(
+    startReason: SideraResearchSearchStartReason = "user-search",
+  ) {
+    if (!searchSource) return;
+    if (searching) return;
+    if (!researchSearchQuery.trim()) {
+      onNotice("请输入机构检索词。", "info");
+      return;
+    }
+    try {
+      if (searchSource === "academic-discovery") {
+        const filters = selectedResearchFilters();
+        if (!filters) return;
+        await onStartResearchSearch(
+          researchSearchQuery.trim(),
+          startReason,
+          filters,
+          researchResultLimit,
+        );
+        return;
+      }
+      let nextSession = session;
+      if (!nextSession || nextSession.databaseAuth.status !== "ready") {
+        nextSession = await beginSideraInstitutionConnection("database-access");
+        onSessionChange(nextSession);
+      }
+      if (nextSession.databaseAuth.status !== "ready") {
+        onNotice("请先完成数据库 SSO 登录；个人图书馆登录不能替代数据库检索会话。", "info");
+        return;
+      }
+      const next = await startSideraInstitutionSearch(researchSearchQuery, searchSource);
+      onSnapshotChange(next);
+    } catch (error) {
+      onNotice(
+        error instanceof Error ? error.message : "机构检索启动失败。",
+        "error",
+        { scope: session?.databaseAuth.status === "ready" ? "institution-search" : "institution-sso" },
+      );
+    }
+  }
+
+  async function stopInstitutionSearch() {
+    try {
+      if (selectedSource === "academic-discovery" && researchSearchActive) {
+        await onStopResearchSearch();
+        return;
+      }
+      const next = await cancelSideraInstitutionSearch(activeSearch?.taskId);
+      onSnapshotChange(next);
+    } catch (error) {
+      onNotice(
+        error instanceof Error ? error.message : "停止机构检索失败。",
+        "error",
+        { scope: "institution-search" },
+      );
+    }
+  }
+
+  async function openRawResult(
+    resultId: string,
+    target: "record" | "full-text" = "record",
+    mode: "embedded" | "system" = "embedded",
+  ) {
+    if (!searchSource) return;
+    try {
+      if (searchSource === "academic-discovery" && displayedResearchSnapshot) {
+        const candidate = displayedResearchSnapshot.candidates.find((item) =>
+          item.id === resultId
+          || item.detailLocator === resultId
+          || item.fullTextLocator === resultId
+        );
+        if (!candidate) throw new Error("原生论文候选已失效，请重新检索。");
+        await openSideraResearchResult({
+          candidateId: candidate.id,
+          target,
+          mode,
+        });
+        setBrowserState(await getSideraInstitutionBrowserState());
+        void setBrowserPresentation("split");
+        return;
+      }
+      await openSideraInstitutionResult({
+        resultId,
+        mode,
+        source: searchSource,
+        target,
+      });
+      setBrowserState(await getSideraInstitutionBrowserState());
+      void setBrowserPresentation("split");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "原始记录已失效，请重新检索。", "error");
+    }
+  }
+
+  async function addSelectedResearchCandidatesToReview() {
+    if (!displayedResearchSnapshot || selectedResearchCandidateIds.length === 0) {
+      onNotice("请先选择要加入审查的论文候选。", "info");
+      return;
+    }
+    setResearchReviewBusy(true);
+    try {
+      await onCreateReviewBatch(displayedResearchSnapshot, selectedResearchCandidateIds);
+    } finally {
+      setResearchReviewBusy(false);
+    }
+  }
+
+  async function resetInstitutionSession() {
+    const previousPresentation = browserPresentation;
+    const hidden = await setBrowserPresentation("closed");
+    if (!hidden) return;
+    if (!window.confirm("清除机构会话会移除 Sidera 内独立保存的武汉大学登录数据。论文库、设置和系统浏览器会话不受影响。是否继续？")) {
+      void setBrowserPresentation(previousPresentation);
+      return;
+    }
+    setSessionBusy(true);
+    try {
+      setBrowserState(await resetSideraInstitutionBrowser());
+      const next = await resetSideraInstitutionSession();
+      onSessionChange(next);
+      for (const source of ["academic-discovery", "catalog"] as const) {
+        onSnapshotChange({
+          institutionId: "whu",
+          adapterId: source === "academic-discovery"
+            ? SIDERA_INSTITUTION_ACADEMIC_ADAPTER_ID
+            : SIDERA_INSTITUTION_CATALOG_ADAPTER_ID,
+          source,
+          taskId: null,
+          epoch: 0,
+          sequence: 0,
+          query: "",
+          status: "idle",
+          stage: "idle",
+          sourceBuckets: [],
+          items: [],
+          code: "SIDERA_INSTITUTION_SEARCH_IDLE",
+          message: "尚未开始机构检索。",
+          startedAtMs: null,
+          updatedAtMs: Date.now(),
+          finishedAtMs: null,
+        });
+      }
+      onNotice("机构会话数据已清除；下次使用需要重新认证。", "success");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构会话清除失败。", "error");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function openBlockedFallback() {
+    if (!session?.fallbackTargetId) return;
+    try {
+      await openSideraInstitutionResult({
+        resultId: session.fallbackTargetId,
+        mode: "embedded",
+      });
+      setBrowserState(await getSideraInstitutionBrowserState());
+      void setBrowserPresentation("split");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构浏览器备用入口打开失败。", "error");
+    }
+  }
+
+  async function showCurrentInstitutionPage() {
+    if (browserPresentation !== "closed") {
+      if (splitLayout.narrow) setNarrowPane("browser");
+      return;
+    }
+    setBrowserBusy(true);
+    try {
+      try {
+        await openSideraInstitutionCurrentSource();
+        setBrowserState(await getSideraInstitutionBrowserState());
+      } catch {
+        setBrowserState(await ensureSideraInstitutionBrowser(
+          selectedSource === "database-direct" ? "database-sso" : "library-home",
+        ));
+      }
+      void setBrowserPresentation("split");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构浏览器打开失败。", "error");
+    } finally {
+      setBrowserBusy(false);
+    }
+  }
+
+  async function createBrowserTab(address?: string) {
+    setBrowserBusy(true);
+    try {
+      setBrowserState(await createSideraInstitutionBrowserTab(address));
+      void setBrowserPresentation("split");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "新建机构浏览器标签页失败。", "error");
+    } finally {
+      setBrowserBusy(false);
+    }
+  }
+
+  async function selectBrowserTab(tabId: string) {
+    try {
+      setBrowserState(await selectSideraInstitutionBrowserTab(tabId));
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构浏览器标签页已失效。", "error");
+    }
+  }
+
+  async function closeBrowserTab(tabId: string) {
+    try {
+      const next = await closeSideraInstitutionBrowserTab(tabId);
+      setBrowserState(next);
+      if (next.tabs.length === 0) setBrowserPresentation("closed");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "关闭机构浏览器标签页失败。", "error");
+    }
+  }
+
+  async function submitBrowserAddress() {
+    if (!activeBrowserTab || !browserAddressDraft.trim()) return;
+    setBrowserBusy(true);
+    try {
+      setBrowserState(await navigateSideraInstitutionBrowserTab({
+        tabId: activeBrowserTab.id,
+        address: browserAddressDraft,
+      }));
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "地址无法打开。", "error");
+    } finally {
+      setBrowserBusy(false);
+    }
+  }
+
+  async function runBrowserNavigation(
+    action: "back" | "forward" | "reload" | "stop",
+  ) {
+    if (!activeBrowserTab) return;
+    try {
+      const next = action === "back"
+        ? await goBackSideraInstitutionBrowser(activeBrowserTab.id)
+        : action === "forward"
+          ? await goForwardSideraInstitutionBrowser(activeBrowserTab.id)
+          : action === "stop"
+            ? await stopSideraInstitutionBrowser(activeBrowserTab.id)
+            : await reloadSideraInstitutionBrowser(activeBrowserTab.id);
+      setBrowserState(next);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构浏览器导航操作失败。", "error");
+    }
+  }
+
+  async function runDownloadAction(
+    record: SideraInstitutionDownloadRecord,
+    action: "cancel" | "retry" | "open" | "reveal",
+  ) {
+    try {
+      if (action === "cancel") await cancelSideraInstitutionDownload(record.id);
+      if (action === "retry") setBrowserState(await retrySideraInstitutionDownload(record.id));
+      if (action === "open") await openSideraInstitutionDownload(record.id);
+      if (action === "reveal") await revealSideraInstitutionDownload(record.id);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "下载操作失败。", "error");
+    }
+  }
+
+  return (
+    <section
+      className="institution-workspace"
+      data-browser-visible={browserPresentation !== "closed" ? "true" : "false"}
+      data-browser-presentation={browserPresentation}
+      data-narrow-pane={narrowPane}
+    >
+      {browserPresentation === "split" && splitLayout.narrow ? (
+        <nav className="institution-narrow-switch" aria-label="机构资源工作面">
+          <button
+            type="button"
+            className={narrowPane === "native" ? "is-active" : ""}
+            aria-pressed={narrowPane === "native"}
+            onClick={() => setNarrowPane("native")}
+          >
+            原生研究
+          </button>
+          <button
+            type="button"
+            className={narrowPane === "browser" ? "is-active" : ""}
+            aria-pressed={narrowPane === "browser"}
+            onClick={() => setNarrowPane("browser")}
+          >
+            机构网页
+          </button>
+        </nav>
+      ) : null}
+      <div ref={splitHostRef} className="institution-workspace__split" style={workspaceStyle}>
+      <div className="institution-primary-command panel-card">
+        <div className="institution-primary-command__heading">
+          <Network size={16} />
+          <div>
+            <strong>{selectedSource === "catalog" ? "馆藏目录" : "统一学术发现"}</strong>
+            <span>{selectedSource === "catalog" ? "图书与馆藏信息的次级工具" : "结构化论文检索"}</span>
+          </div>
+        </div>
+        <div className="institution-primary-command__search">
+          <input
+            className="field-control"
+            value={researchSearchQuery}
+            maxLength={200}
+            onChange={(event) => onResearchSearchQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void runInstitutionSearch("user-search");
+            }}
+            placeholder={selectedSource === "catalog"
+              ? "检索图书与馆藏，例如：人工智能"
+              : "检索期刊、会议和学位论文"}
+            aria-label="武汉大学机构资源检索词"
+          />
+          {selectedSource === "academic-discovery" ? (
+            <div className="institution-filter-anchor">
+              <button
+                type="button"
+                className={filtersOpen ? "secondary-action is-active" : "secondary-action"}
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((value) => !value)}
+              >
+                <SlidersHorizontal size={14} />筛选
+              </button>
+              {filtersOpen ? (
+                <div className="institution-filter-popover" role="dialog" aria-label="机构论文筛选">
+                  <strong>文献类型</strong>
+                  <div className="institution-filter-kinds">
+                    {([
+                      ["journal-article", "期刊论文"],
+                      ["conference-paper", "会议论文"],
+                      ["thesis", "学位论文"],
+                    ] as Array<[SideraResearchFilterKind, string]>).map(([kind, label]) => (
+                      <label key={kind}>
+                        <input
+                          type="checkbox"
+                          checked={researchRecordKinds.includes(kind)}
+                          onChange={(event) => setResearchRecordKinds((current) => event.target.checked
+                            ? [...current, kind]
+                            : current.filter((value) => value !== kind))}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <strong>年份范围</strong>
+                  <div className="institution-filter-years">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={1000}
+                      max={9999}
+                      value={researchYearFrom}
+                      onChange={(event) => setResearchYearFrom(event.target.value)}
+                      placeholder="起始"
+                      aria-label="起始年份"
+                    />
+                    <span>至</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={1000}
+                      max={9999}
+                      value={researchYearTo}
+                      onChange={(event) => setResearchYearTo(event.target.value)}
+                      placeholder="结束"
+                      aria-label="结束年份"
+                    />
+                  </div>
+                  <strong>结果目标</strong>
+                  <div className="institution-filter-limit" role="radiogroup" aria-label="结果目标上限">
+                    {([40, 100] as const).map((limit) => (
+                      <label key={limit}>
+                        <input
+                          type="radio"
+                          name="institution-result-limit"
+                          checked={researchResultLimit === limit}
+                          onChange={() => setResearchResultLimit(limit)}
+                        />
+                        <span>{limit} 条</span>
+                      </label>
+                    ))}
+                  </div>
+                  <small>上限作用于过滤、归一化和去重后的论文候选。</small>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {selectedSource === "academic-discovery" ? (
+            <label className="institution-display-order">
+              <span className="sr-only">展示排序</span>
+              <select
+                value={researchDisplayOrder}
+                onChange={(event) => setResearchDisplayOrder(event.target.value as SideraResearchDisplayOrder)}
+                aria-label="论文展示排序"
+              >
+                <option value="source-return-order">来源返回顺序</option>
+                <option value="newest">最新</option>
+                <option value="oldest">最早</option>
+                <option value="title">题名</option>
+              </select>
+            </label>
+          ) : null}
+          <button
+            className="primary-action"
+            type="button"
+            onClick={() => void runInstitutionSearch("user-search")}
+            disabled={searching || sessionBusy}
+          >
+            {searching ? <Loader2 className="animate-spin" size={15} /> : <Search size={15} />}
+            {searching ? "检索中" : "检索"}
+          </button>
+          {searching ? (
+            <button className="secondary-action" type="button" onClick={() => void stopInstitutionSearch()}>
+              <Square size={12} fill="currentColor" />停止
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="institution-connection-strip panel-card" data-status={databaseAuth?.status ?? "idle"}>
+        <div>
+          <i aria-hidden="true" />
+          <div>
+            <strong>武汉大学 · {databaseSessionReady ? "已连接" : "未连接"}</strong>
+            <span>{activeDatabaseConnection
+              ? `${institutionConnectionPhaseLabel(activeDatabaseConnection.phase)} · ${activeDatabaseConnection.message}`
+              : databaseAuth?.message ?? "连接状态尚未确认"}</span>
+          </div>
+        </div>
+        <nav>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => void openInstitutionConnection("database-access")}
+            disabled={sessionBusy}
+          >
+            {sessionBusy ? <Loader2 className="animate-spin" size={14} /> : <Link2 size={14} />}
+            {databaseSessionReady ? "修复连接" : "连接机构"}
+          </button>
+          {activeDatabaseConnection && !isTerminalInstitutionConnectionPhase(activeDatabaseConnection.phase) ? (
+            <button type="button" className="secondary-action" onClick={() => void cancelActiveInstitutionConnection()}>
+              <X size={14} />取消
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="secondary-action"
+            aria-haspopup="dialog"
+            aria-expanded={connectionDrawerOpen}
+            aria-controls="institution-connections-sheet"
+            onClick={() => setConnectionDrawerPresentation(true)}
+          >
+            <Settings size={14} />连接与来源
+          </button>
+        </nav>
+      </div>
+
+      <WorkbenchSideSheet
+        id="institution-connections-sheet"
+        open={connectionDrawerOpen}
+        onOpenChange={setConnectionDrawerPresentation}
+        title="连接与来源"
+        description="认证能力、辅助入口与脱敏诊断"
+        closeLabel="关闭连接与来源"
+        bodyClassName="institution-connection-drawer-content"
+      >
+            <section>
+              <h3>机构能力</h3>
+              <div className="institution-capability-list">
+                {([
+                  ["数据库访问", databaseAuth],
+                  ["统一发现全文", academicDiscoveryAuth],
+                  ["个人图书馆", libraryAccountAuth],
+                ] as Array<[string, SideraInstitutionAuthState | undefined]>).map(([label, state]) => (
+                  <div key={label} data-status={state?.status ?? "idle"}>
+                    <span>{label}</span><strong>{institutionAuthStatusLabel(state?.status)}</strong><small>{state?.message ?? "尚未观察"}</small>
+                  </div>
+                ))}
+              </div>
+              <div className="institution-drawer-actions">
+                <button type="button" onClick={() => void openInstitutionConnection("database-access")}>连接数据库</button>
+                <button type="button" onClick={() => void openInstitutionConnection("library-account")}>登录个人图书馆</button>
+                {activeDiscoveryConnection ? (
+                  <button type="button" onClick={() => void openInstitutionConnection("discovery-fulltext")}>聚焦全文身份验证</button>
+                ) : null}
+              </div>
+            </section>
+            <section>
+              <h3>来源与次级工具</h3>
+              <button
+                type="button"
+                className="institution-source-tool"
+                onClick={() => { setSelectedSource("academic-discovery"); setConnectionDrawerPresentation(false); }}
+              ><strong>统一学术发现</strong><span>当前唯一自动结构化检索连接器</span></button>
+              <button
+                type="button"
+                className="institution-source-tool"
+                onClick={() => { setSelectedSource("catalog"); setConnectionDrawerPresentation(false); }}
+              ><strong>馆藏目录</strong><span>图书与馆藏信息，不进入论文题录</span></button>
+              <div className="institution-manual-sources">
+                {[
+                  ["Web of Science", "仅人工访问 · 尚无连接器"],
+                  ["中国知网", "仅人工访问 · 尚无连接器"],
+                  ["Scopus", "仅人工访问 · 尚无连接器"],
+                ].map(([name, status]) => <div key={name}><strong>{name}</strong><span>{status}</span></div>)}
+              </div>
+              <div className="institution-drawer-actions">
+                <button type="button" onClick={() => {
+                  void showCurrentInstitutionPage();
+                  setConnectionDrawerPresentation(false);
+                }}>{browserPresentation === "closed" ? "显示机构浏览器" : "聚焦机构浏览器"}</button>
+                {browserPresentation !== "closed" ? <button type="button" onClick={() => void setBrowserPresentation("closed")}>隐藏机构浏览器</button> : null}
+              </div>
+            </section>
+            <details>
+              <summary>技术诊断</summary>
+              <code>{adapterId}</code>
+              <p>{sourceReadiness?.message ?? "来源状态等待检索验证。"}</p>
+              {browserVisibilityDiagnostic ? (
+                <p>
+                  <code>
+                    browser-surface-{browserVisibilityDiagnostic.target}
+                    {` · attempts=${browserVisibilityDiagnostic.attempts} · ${browserVisibilityDiagnostic.message}`}
+                  </code>
+                </p>
+              ) : null}
+              {session?.activeConnection ? (
+                <p><code>{session.activeConnection.phase} · {session.activeConnection.code}</code></p>
+              ) : null}
+              {session?.connectionVerificationTrace?.length ? (
+                <ol className="institution-verification-trace">
+                  {session.connectionVerificationTrace.slice(-12).map((event, index) => (
+                    <li key={`${event.transactionId}-${event.timestampMs}-${index}`}>
+                      <code>{event.stage}</code>
+                      {` · ${event.surface} · ${event.verdict} · ${event.reasonCode} · #${event.attempt || "-"} · ${event.elapsedMs}ms`}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+              {session?.navigationTrace?.length ? (
+                <ol>{session.navigationTrace.slice(-7).map((event, index) => <li key={`${event.generation}-${event.timestampMs}-${index}`}>{event.phase} · {event.host}{event.path}</li>)}</ol>
+              ) : null}
+              <small>仅显示脱敏判定码、耗时、主机、路径和状态；不保存页面文本、查询参数、ticket、Cookie、表单、账号或凭据。</small>
+            </details>
+            <footer>
+              <button
+                type="button"
+                className="danger-action"
+                onClick={() => void resetInstitutionSession()}
+                disabled={sessionBusy || searching}
+              >显式清除机构会话</button>
+            </footer>
+      </WorkbenchSideSheet>
+
+      <div className="institution-hero panel-card">
+        <div className="institution-hero__copy">
+          <div className="panel-title"><Network size={17} />武汉大学机构资源</div>
+          <p>后台连接器复用隔离的官方机构会话，原生检索结果仅保存在当前运行内存中。</p>
+          <div className="institution-boundary-note">正常检索不会打开网页；只有官方登录、原始记录核对和全文跳转会显示机构页面。所选结果可加入独立审查库，但不会写入主论文库或调用 AI Provider。</div>
+        </div>
+        <div className="institution-session-state" data-status={databaseAuth?.status ?? "idle"}>
+          <span>数据库 SSO · {institutionAuthStatusLabel(databaseAuth?.status)}</span>
+          <strong>{databaseAuth?.message ?? "首次检索前需要在 Sidera 内完成数据库 SSO。"}</strong>
+          <small>
+            统一发现全文身份 · {academicDiscoveryAuth?.status && academicDiscoveryAuth.status !== "idle"
+              ? institutionAuthStatusLabel(academicDiscoveryAuth.status)
+              : "待确认"}
+            {academicDiscoveryAuth?.currentHost ? ` · ${academicDiscoveryAuth.currentHost}` : ""}
+            <br />个人图书馆 · {institutionAuthStatusLabel(libraryAccountAuth?.status)}
+            {libraryAccountAuth?.currentHost ? ` · ${libraryAccountAuth.currentHost}` : ""}
+          </small>
+          {session?.navigationTrace?.length ? (
+            <details>
+              <summary>脱敏导航轨迹 · 最近 {session.navigationTrace.length} 条</summary>
+              <ol>
+                {session.navigationTrace.slice(-10).map((event, index) => (
+                  <li key={`${event.generation}-${event.navigationId ?? "none"}-${event.timestampMs}-${index}`}>
+                    <code>{event.phase}</code>
+                    {` · ${event.host}${event.path}`}
+                    {event.redirected ? " · redirect" : ""}
+                    {event.webErrorStatus ? ` · ${event.webErrorStatus}` : ""}
+                  </li>
+                ))}
+              </ol>
+              <small>轨迹仅保留主机与路径；查询参数、ticket、Cookie、账号和密码不会进入前端。</small>
+            </details>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="institution-toolbar panel-card">
+        <div className="institution-source-switch" role="tablist" aria-label="机构检索来源">
+          {([
+            ["academic-discovery", "统一学术发现", "原生论文结果与全文路线"],
+            ["database-direct", "数据库直达", "WOS 等官方数据库入口"],
+            ["catalog", "馆藏目录", "图书与馆藏信息"],
+          ] as const).map(([source, label, description]) => {
+            const readiness = source === "database-direct"
+              ? null
+              : session?.sourceReadiness?.find((value) => value.source === source);
+            const sourceSnapshot = source === "database-direct" ? null : snapshots[source];
+            return (
+              <button
+                key={source}
+                type="button"
+                role="tab"
+                aria-selected={selectedSource === source}
+                className={selectedSource === source ? "is-active" : ""}
+                onClick={() => setSelectedSource(source)}
+              >
+                <span>{label}</span>
+                <small>{description}</small>
+                <em data-status={source === "academic-discovery"
+                  ? academicBackendReadiness
+                  : source === "database-direct" && databaseAuth?.status === "ready"
+                    ? "ready"
+                    : readiness?.status ?? "uninitialized"}>
+                  {source === "academic-discovery" && researchSearchActive
+                    ? "检索中"
+                    : source === "academic-discovery" && (displayedResearchSnapshot?.status === "complete" || displayedResearchSnapshot?.status === "partial")
+                      ? `${displayedResearchSnapshot.candidates.length} 条候选`
+                    : sourceSnapshot?.status === "searching"
+                    ? "检索中"
+                    : source === "database-direct" && databaseAuth?.status === "ready"
+                      ? "入口已就绪"
+                    : source === "database-direct"
+                      ? "待登录"
+                    : readiness?.status === "ready"
+                      ? source === "academic-discovery" ? "检索可用" : "已确认"
+                      : readiness?.status === "partial"
+                        ? "部分可用"
+                        : readiness?.status === "failed"
+                          ? "不可用"
+                          : "待检查"}
+                </em>
+              </button>
+            );
+          })}
+        </div>
+        <div className="institution-source-readiness" data-status={selectedSource === "academic-discovery"
+          ? academicBackendReadiness
+          : selectedSource === "database-direct" && databaseAuth?.status === "ready"
+            ? "ready"
+            : sourceReadiness?.status ?? "uninitialized"}>
+          <strong>{selectedSource === "academic-discovery" ? "统一学术发现" : selectedSource === "database-direct" ? "数据库直达" : "馆藏目录"}</strong>
+          <span>{selectedSource === "database-direct"
+            ? "仅登记官方入口、资源类型和当前能力；WOS 等供应商高级检索适配器留到 P6。"
+            : selectedSource === "academic-discovery"
+              ? activeResearchAttempt?.message
+                ?? displayedResearchSnapshot?.message
+                ?? researchSearchState?.lastFailure?.message
+                ?? "由后台连接器解析期刊论文、会议论文和学位论文；类型不明记录会被排除并标记部分完成。"
+              : sourceReadiness?.message ?? "用于查询图书、期刊馆藏和索书信息，不进入论文题录导入。"}</span>
+          {selectedSource === "academic-discovery" ? (
+            <small data-status={academicDiscoveryAuth?.status ?? "idle"}>
+              机构全文身份 · {academicDiscoveryAuth?.status && academicDiscoveryAuth.status !== "idle"
+                ? institutionAuthStatusLabel(academicDiscoveryAuth.status)
+                : "待确认"} · {academicDiscoveryAuth?.message ?? "检索可用性与全文身份将分别确认。"}
+              {session?.discoveryAuthWindowVisible ? " · 认证窗口已打开" : ""}
+            </small>
+          ) : null}
+        </div>
+        {selectedSource !== "database-direct" ? <div className="institution-search-row">
+          <input
+            className="field-control"
+            value={researchSearchQuery}
+            maxLength={200}
+            onChange={(event) => onResearchSearchQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void runInstitutionSearch("user-search");
+            }}
+            placeholder={selectedSource === "academic-discovery"
+              ? "检索学术论文，例如：人工智能 / machine learning"
+              : "检索图书与馆藏，例如：人工智能 / machine learning"}
+            aria-label="武汉大学机构资源检索词"
+          />
+          <button className="primary-action" type="button" onClick={() => void runInstitutionSearch("user-search")} disabled={searching || sessionBusy}>
+            {searching ? <Loader2 className="animate-spin" size={15} /> : <Search size={15} />}
+            {searching ? "检索中" : selectedSource === "academic-discovery" ? "检索学术论文" : "检索馆藏目录"}
+          </button>
+          {searching ? (
+            <button className="secondary-action" type="button" onClick={() => void stopInstitutionSearch()}>
+              <Square size={12} fill="currentColor" />停止
+            </button>
+          ) : null}
+        </div> : null}
+        <div className="institution-toolbar__actions">
+          <button className="secondary-action" type="button" onClick={() => void openInstitutionConnection("database-access")} disabled={sessionBusy}>
+            {sessionBusy ? <Loader2 className="animate-spin" size={14} /> : <Globe2 size={14} />}
+            {databaseSessionReady ? "打开数据库会话" : "登录数据库 SSO"}
+          </button>
+          <button className="secondary-action" type="button" onClick={() => void openInstitutionConnection("library-account")} disabled={sessionBusy}>
+            <BookOpen size={14} />
+            {libraryAccountAuth?.status === "ready" ? "打开我的图书馆" : "登录我的图书馆"}
+          </button>
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={() => void showCurrentInstitutionPage()}
+            disabled={browserBusy}
+          >
+            {browserBusy ? <Loader2 className="animate-spin" size={14} /> : <Globe2 size={14} />}
+            {browserPresentation === "closed" ? "打开机构浏览器" : splitLayout.narrow && narrowPane === "native" ? "查看机构网页" : "机构网页已在侧栏"}
+          </button>
+          {browserState?.authModalVisible ? (
+            <button className="secondary-action" type="button" onClick={() => void cancelInstitutionBrowserAuthModal()} disabled={browserBusy}>
+              <X size={14} />取消浏览器认证
+            </button>
+          ) : null}
+          {session?.authModalVisible ? (
+            <button className="secondary-action" type="button" onClick={() => void cancelLegacyInstitutionAuthModal()}>
+              <X size={14} />取消旧版认证
+            </button>
+          ) : null}
+          <button className="secondary-action" type="button" onClick={() => void resetInstitutionSession()} disabled={sessionBusy || searching}>
+            <RefreshCw size={14} />清除机构会话
+          </button>
+          <span className="institution-adapter-badge">{adapterId}</span>
+        </div>
+      </div>
+
+      {session?.fallbackTargetId ? (
+        <div className="institution-fallback" role="status">
+          <AlertTriangle size={15} />
+          <span>{session.code === "SIDERA_INSTITUTION_AUTH_NAVIGATION_FAILED"
+            ? `官方认证跳转失败：${session.fallbackDisplayUrl ?? "外部页面"}`
+            : `当前跳转不受内嵌连接器支持：${session.fallbackDisplayUrl ?? "外部页面"}`}</span>
+          <button type="button" onClick={() => void openBlockedFallback()}>在机构浏览器打开</button>
+        </div>
+      ) : null}
+
+      {browserPresentation === "split" && !splitLayout.narrow ? (
+        <div
+          className="institution-browser-resizer"
+          role="separator"
+          aria-label="调整原生研究与机构网页宽度"
+          aria-orientation="vertical"
+          aria-valuemin={30}
+          aria-valuemax={70}
+          aria-valuenow={Math.round(splitLayout.ratio * 100)}
+          tabIndex={0}
+          onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+          onPointerMove={handleDividerPointerMove}
+          onPointerUp={finishDividerDrag}
+          onPointerCancel={finishDividerDrag}
+          onKeyDown={handleDividerKeyDown}
+        >
+          <span />
+        </div>
+      ) : null}
+
+      {browserPresentation !== "closed" ? (
+        <div className="institution-browser-shell" aria-label="Sidera 共享机构浏览器">
+          <div className="institution-browser-tabs" role="tablist" aria-label="机构浏览器标签页">
+            <div className="institution-browser-tabs__scroll">
+              {browserState?.tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={browserState.activeTabId === tab.id}
+                  className={browserState.activeTabId === tab.id ? "is-active" : ""}
+                  onClick={() => void selectBrowserTab(tab.id)}
+                  title={tab.title || tab.address}
+                >
+                  {tab.loading ? <Loader2 className="animate-spin" size={12} /> : <Globe2 size={12} />}
+                  <span>{tab.title || tab.address || "新标签页"}</span>
+                  <X
+                    size={12}
+                    role="button"
+                    aria-label={`关闭 ${tab.title || "标签页"}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void closeBrowserTab(tab.id);
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+            <button type="button" className="institution-browser-icon-button" onClick={() => void createBrowserTab()} title="新标签页">
+              <Plus size={15} />
+            </button>
+            <button
+              type="button"
+              className={downloadsOpen ? "institution-browser-icon-button is-active" : "institution-browser-icon-button"}
+              onClick={() => setDownloadsOpen((value) => !value)}
+              title="下载"
+            >
+              <Download size={15} />
+              {browserState?.downloads.some((item) => item.status === "downloading") ? <i /> : null}
+            </button>
+            <button
+              type="button"
+              className="institution-browser-return"
+              onClick={() => void setBrowserPresentation(browserPresentation === "immersive" ? "split" : "immersive")}
+            >
+              {browserPresentation === "immersive" ? "返回双栏" : "沉浸网页"}
+            </button>
+            <button
+              type="button"
+              className="institution-browser-icon-button"
+              onClick={() => void setBrowserPresentation("closed")}
+              title="关闭网页"
+              aria-label="关闭机构网页"
+            >
+              <X size={15} />
+            </button>
+          </div>
+          <div className="institution-browser-navigation">
+            <button type="button" onClick={() => void runBrowserNavigation("back")} disabled={!activeBrowserTab?.canGoBack} title="后退"><ArrowLeft size={15} /></button>
+            <button type="button" onClick={() => void runBrowserNavigation("forward")} disabled={!activeBrowserTab?.canGoForward} title="前进"><ArrowRight size={15} /></button>
+            <button type="button" onClick={() => void runBrowserNavigation(activeBrowserTab?.loading ? "stop" : "reload")} disabled={!activeBrowserTab} title={activeBrowserTab?.loading ? "停止" : "刷新"}>
+              {activeBrowserTab?.loading ? <X size={15} /> : <RefreshCw size={15} />}
+            </button>
+            <button type="button" onClick={() => void openInstitutionConnection("database-access")} title="数据库导航"><Home size={15} /></button>
+            <form onSubmit={(event) => { event.preventDefault(); void submitBrowserAddress(); }}>
+              <Globe2 size={14} />
+              <input
+                value={browserAddressDraft}
+                onChange={(event) => setBrowserAddressDraft(event.target.value)}
+                spellCheck={false}
+                aria-label="机构浏览器地址"
+                placeholder="输入网址或域名"
+              />
+            </form>
+            <span>{browserState?.profileId ?? "institution-shared-v1"}</span>
+          </div>
+          {browserState?.authModalVisible ? (
+            <div className="institution-browser-auth-status" role="status">
+              <Loader2 className="animate-spin" size={14} />
+              <span>认证窗口正在处理必须保留弹窗语义的官方登录。</span>
+              <code>{browserState.authModalAddress ?? "official-auth"}</code>
+              <button type="button" onClick={() => void cancelInstitutionBrowserAuthModal()} disabled={browserBusy}>取消</button>
+            </div>
+          ) : null}
+          {managedPopupNotices.length ? (
+            <div className="institution-browser-popup-status" role="status">
+              {managedPopupNotices.map((popup) => (
+                <div key={`${popup.popupId}-${popup.generation}`} data-phase={popup.phase}>
+                  <span>{popup.phase === "transient" ? "兼容桥接窗口" : popup.phase === "failed" ? "弹窗导航失败" : "兼容弹窗已保留"}</span>
+                  <code>{popup.location.origin}{popup.location.path}</code>
+                  <small>{popup.code}</small>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {downloadsOpen ? (
+            <div className="institution-download-drawer" aria-label="机构下载暂存区">
+              <header>
+                <div><strong>机构下载暂存区</strong><span>文件、哈希与来源清单为后续沉浸式阅读准备。</span></div>
+                <button type="button" onClick={() => setDownloadsOpen(false)}><X size={14} /></button>
+              </header>
+              <div className="institution-download-list">
+                {browserState?.downloads.length ? browserState.downloads.map((record) => (
+                  <article key={record.id} data-status={record.status}>
+                    <Download size={15} />
+                    <div>
+                      <strong>{record.fileName}</strong>
+                      <span>{institutionDownloadStatusLabel(record.status)} · {formatInstitutionFileSize(record.sizeBytes)} · {record.provenance.resultTitle ?? record.provenance.sourceTitle ?? record.provenance.safeSourceUrl}</span>
+                      {record.sha256 ? <code>SHA-256 {record.sha256}</code> : <small>{record.message}</small>}
+                    </div>
+                    <nav>
+                      {record.status === "downloading" ? <button type="button" onClick={() => void runDownloadAction(record, "cancel")}>取消</button> : null}
+                      {(record.status === "failed" || record.status === "cancelled") && record.retryable ? <button type="button" onClick={() => void runDownloadAction(record, "retry")}>重试</button> : null}
+                      {record.status === "complete" ? <button type="button" onClick={() => void runDownloadAction(record, "open")}>打开</button> : null}
+                      {record.status === "complete" ? <button type="button" onClick={() => void runDownloadAction(record, "reveal")}>定位</button> : null}
+                    </nav>
+                  </article>
+                )) : <div className="institution-download-empty">尚无下载。网页触发的 PDF 或附件会进入此处，不会自动写入论文库。</div>}
+              </div>
+            </div>
+          ) : null}
+          <div ref={browserHostRef} className="institution-browser-host" aria-label="机构浏览器网页内容">
+            <div className="institution-browser-host__placeholder">
+              {activeAuth?.status === "failed" || activeAuth?.status === "cancelled" ? (
+                <>
+                  <AlertTriangle size={18} />
+                  <div><strong>{activeAuth.code}</strong><span>{activeAuth.message}</span></div>
+                </>
+              ) : activeBrowserTab ? (
+                <><Loader2 className="animate-spin" size={18} /><span>{activeBrowserTab.loading ? "网页正在加载…" : "网页表面正在同步…"}</span></>
+              ) : (
+                <><Globe2 size={18} /><span>新建标签页或打开数据库会话开始浏览。</span></>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className="institution-native-results">
+          {selectedSource === "academic-discovery" ? (
+            <ResearchSearchNativeResults
+              state={researchSearchState}
+              selectedIds={selectedResearchCandidateIds}
+              busy={researchReviewBusy}
+              displayOrder={researchDisplayOrder}
+              onSelectedIdsChange={onSelectedResearchCandidateIdsChange}
+              onStop={() => void stopInstitutionSearch()}
+              onRetry={() => void runInstitutionSearch("retry")}
+              onAddToReview={() => void addSelectedResearchCandidatesToReview()}
+              onOpen={(candidate, target) => void openRawResult(
+                target === "full-text"
+                  ? candidate.fullTextLocator ?? candidate.detailLocator ?? candidate.id
+                  : candidate.detailLocator ?? candidate.id,
+                target,
+              )}
+            />
+          ) : null}
+          {selectedSource === "database-direct" ? (
+            <div className="institution-result-list" aria-label="数据库直达登记">
+              <article className="institution-result-item">
+                <div className="institution-result-item__meta"><span>引文与题录数据库</span><span>浏览器辅助访问</span></div>
+                <h3>Web of Science</h3>
+                <p>入口：武汉大学官方数据库门户 → 数据库卡片 → 详情 → 访问地址</p>
+                <div className="institution-result-item__footer">
+                  <span>能力：官方入口与会话复用；供应商高级检索适配器计划于 P6</span>
+                  <button type="button" onClick={() => void openInstitutionConnection("database-access")}>打开数据库门户</button>
+                </div>
+              </article>
+              <article className="institution-result-item">
+                <div className="institution-result-item__meta"><span>机构数据库导航</span><span>只读入口登记</span></div>
+                <h3>武汉大学数据库导航</h3>
+                <p>保留馆方数据库卡片、详情页与供应商访问地址的既有链路，不与统一发现或馆藏结果合并。</p>
+                <div className="institution-result-item__footer">
+                  <span>{databaseAuth?.status === "ready" ? "数据库 SSO 会话已就绪" : "首次访问需完成数据库 SSO"}</span>
+                  <button type="button" onClick={() => void openInstitutionConnection("database-access")}>打开官方入口</button>
+                </div>
+              </article>
+            </div>
+          ) : null}
+          {selectedSource === "catalog" && snapshot?.status === "searching" ? (
+            <div className="institution-search-progress" role="status" aria-live="polite">
+              <Loader2 className="animate-spin" size={16} />
+               <div><strong>馆藏目录正在检索</strong><span>{snapshot.message}</span></div>
+            </div>
+          ) : null}
+
+          {selectedSource === "catalog" && snapshot && snapshot.status !== "idle" && snapshot.status !== "searching" ? (
+            <div className="institution-result-summary" data-status={snapshot.status}>
+              <div>
+                 <span>{institutionSearchStageLabel(snapshot.stage)}</span>
+                 <strong>{snapshot.status === "complete" || snapshot.status === "partial"
+                   ? `“${snapshot.query}” · ${snapshot.items.length} 条馆藏结构化预览`
+                   : `“${snapshot.query}” · ${institutionSearchStatusLabel(snapshot.status)}`}</strong>
+              </div>
+              <p>{snapshot.message}</p>
+            </div>
+          ) : null}
+
+          {selectedSource === "catalog" && snapshot?.sourceBuckets.length ? (
+            <div className="institution-source-buckets" aria-label="机构资源来源桶">
+              {snapshot.sourceBuckets.map((bucket) => (
+                <div key={bucket.id} data-status={bucket.status}>
+                  <span>{bucket.label || "未标明来源"}</span>
+                  <strong>{bucket.returned} / {bucket.count ?? "?"}</strong>
+                  {bucket.code ? <small>{bucket.code}</small> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {selectedSource === "catalog" && snapshot?.items.length ? (
+            <div className="institution-result-list">
+              {snapshot.items.map((item) => (
+                <article key={item.id} className="institution-result-item">
+                  <div className="institution-result-item__meta">
+                    <span>{institutionRecordKindLabel(item.recordKind)}</span>
+                    {item.year ? <span>{item.year}</span> : null}
+                    {(item.sourceProvider ? [item.sourceProvider] : item.sourceBuckets).map((source) => <span key={source}>{source}</span>)}
+                  </div>
+                  <h3>{item.title}</h3>
+                  <p>{institutionResultCitationLine(item)}</p>
+                  {item.abstractSnippet ? <div className="institution-result-item__abstract">{item.abstractSnippet}</div> : null}
+                  <div className="institution-result-item__footer">
+                    <span>{item.doi ? `DOI ${item.doi}` : item.availability || "馆藏状态待原始记录确认"}</span>
+                    <div>
+                      <button type="button" onClick={() => void openRawResult(item.detailLocator)}>查看原始记录</button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : selectedSource !== "catalog" ? null : snapshot?.status === "complete" ? (
+            <EmptyState title="没有匹配的首屏结果" description="官方结果页明确返回 0 条记录；可调整检索词后重试。" />
+          ) : snapshot?.status === "failed" ? (
+            <div className="institution-error-state">
+              <AlertTriangle size={18} />
+              <div><strong>{snapshot.code}</strong><p>{snapshot.message}</p></div>
+              <button type="button" className="secondary-action" onClick={() => void openInstitutionConnection("database-access")}>打开数据库会话检查</button>
+            </div>
+          ) : (
+            <EmptyState
+              title="图书与馆藏信息将在这里显示"
+              description="馆藏目录仅用于辅助查找图书和馆藏位置，结果不会进入论文题录导入。"
+            />
+          )}
+      </div>
+      </div>
+    </section>
+  );
+}
+
+function institutionAuthStatusLabel(status?: SideraInstitutionAuthStatus) {
+  if (status === "ready") return "已就绪";
+  if (status === "login-required") return "需要认证";
+  if (status === "starting") return "认证中";
+  if (status === "cancelled") return "已取消";
+  if (status === "failed") return "异常";
+  return "尚未初始化";
+}
+
+function institutionConnectionPhaseLabel(phase: NonNullable<SideraInstitutionSessionState["activeConnection"]>["phase"]) {
+  if (phase === "opening") return "正在打开";
+  if (phase === "awaiting-user") return "等待用户认证";
+  if (phase === "verifying") return "正在验证";
+  if (phase === "refreshing-parent") return "正在刷新业务页";
+  if (phase === "ready") return "连接就绪";
+  if (phase === "cancelled") return "连接已取消";
+  return "连接失败";
+}
+
+function ResearchSearchNativeResults({
+  state,
+  selectedIds,
+  busy,
+  displayOrder,
+  onSelectedIdsChange,
+  onStop,
+  onRetry,
+  onAddToReview,
+  onOpen,
+}: {
+  state: SideraResearchSearchState | null;
+  selectedIds: string[];
+  busy: boolean;
+  displayOrder: SideraResearchDisplayOrder;
+  onSelectedIdsChange: (ids: string[]) => void;
+  onStop: () => void;
+  onRetry: () => void;
+  onAddToReview: () => void;
+  onOpen: (candidate: SideraNormalizedCandidateDraft, target: "record" | "full-text") => void;
+}) {
+  const snapshot = state?.displayedSnapshot ?? null;
+  const activeAttempt = state?.activeAttempt ?? null;
+  const lastFailure = !activeAttempt
+    && state?.lastFailure
+    && (!snapshot || state.lastFailure.failedAtMs >= snapshot.updatedAtMs)
+    ? state.lastFailure
+    : null;
+  const failedTerminalSnapshot = lastFailure?.terminalSnapshot ?? null;
+  const [page, setPage] = useState(1);
+  const snapshotKey = sideraResearchSnapshotKey(snapshot);
+  useEffect(() => setPage(1), [snapshotKey]);
+  const orderedCandidates = useMemo(
+    () => orderSideraResearchCandidates(snapshot?.candidates ?? [], displayOrder),
+    [displayOrder, snapshot],
+  );
+  const {
+    currentPage,
+    pageCount,
+    candidates: pageCandidates,
+  } = paginateSideraResearchCandidates(orderedCandidates, page, 10);
+  const selectedSet = new Set(selectedIds);
+  const allSelected = Boolean(pageCandidates.length)
+    && pageCandidates.every((candidate) => selectedSet.has(candidate.id));
+  const failedSources = snapshot?.sourceReports.filter((report) => report.status === "failed") ?? [];
+
+  if (!state || (!snapshot && !activeAttempt && !lastFailure)) {
+    return (
+      <EmptyState
+        title="后台学术论文结果将在这里显示"
+        description="蓝色检索按钮只调用后台连接器；除官方登录、原始记录核对或全文跳转外，不会打开机构网页。"
+      />
+    );
+  }
+
+  return (
+    <div
+      className="research-search-native"
+      data-status={activeAttempt?.status ?? lastFailure?.status ?? snapshot?.status ?? "idle"}
+    >
+      {activeAttempt ? (
+        <div className="research-search-native__summary" role="status" aria-live="polite">
+          <div>
+            <span>{researchSearchStatusLabel(activeAttempt.status)}</span>
+            <strong>“{activeAttempt.request.query}” · 正在执行新查询</strong>
+            <p>
+              {snapshot
+                ? `仍展示上次成功结果（“${snapshot.request.query}” · ${snapshot.candidates.length} 条），完成后才会原子替换。`
+                : activeAttempt.message}
+            </p>
+          </div>
+          <div className="research-search-native__actions">
+            <button type="button" className="secondary-action" onClick={onStop}>
+              <Square size={12} fill="currentColor" />停止
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {activeAttempt?.status === "awaiting-user-auth" ? (
+        <div className="research-search-native__auth" role="status">
+          <Loader2 className="animate-spin" size={16} />
+          <div>
+            <strong>{researchSearchAuthPhaseLabel(activeAttempt.authContext?.phase)}</strong>
+            <span>认证等待不占用90秒检索预算；成功后恢复同一 searchId，不会重复提交查询。</span>
+          </div>
+        </div>
+      ) : null}
+
+      {activeAttempt?.sourceReports.length ? (
+        <details className="research-search-diagnostics research-search-diagnostics--attempt">
+          <summary>本次检索来源进度（{activeAttempt.sourceReports.length}）</summary>
+          <div className="research-search-sources" aria-label="本次后台检索来源进度">
+            {activeAttempt.sourceReports.map((report) => (
+              <article key={`attempt-${report.connectorId}-${report.sourceId}`} data-status={report.status}>
+                <div><strong>{report.sourceName || report.sourceId}</strong><span>{report.connectorVersion ?? report.connectorId}</span></div>
+                <span>{researchSearchSourceStatusLabel(report.status)}</span>
+                <p>{report.recordsAccepted} / {report.recordsReceived} 条接收 · 扫描 {report.pagesScanned} 页</p>
+                <small>{report.message}{report.code ? ` · ${report.code}` : ""}</small>
+              </article>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {lastFailure ? (
+        <>
+          <div className="institution-error-state" role="alert">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>{lastFailure.code}</strong>
+              <p>
+                “{lastFailure.query}”{lastFailure.status === "cancelled" ? "已取消" : "检索失败"}。{lastFailure.message}
+                {snapshot ? " 上一份成功结果已保留，可继续查看或加入导入审查。" : ""}
+              </p>
+              {failedTerminalSnapshot ? (
+                <small>
+                  失败尝试真值：扫描 {failedTerminalSnapshot.truth.pagesScanned} 页
+                  {` · 接收 ${failedTerminalSnapshot.truth.recordsReceived} 条`}
+                  {` · 接受 ${failedTerminalSnapshot.truth.recordsAccepted} 条`}
+                  {` · 合并 ${failedTerminalSnapshot.truth.duplicatesMerged} 条重复`}
+                  {` · 覆盖 ${failedTerminalSnapshot.truth.coverage} 个供应商`}
+                  {` · ${researchCompletionReasonLabel(failedTerminalSnapshot.truth.completionReason)}`}
+                </small>
+              ) : null}
+            </div>
+            <button type="button" className="secondary-action" onClick={onRetry}>重新检索</button>
+          </div>
+          {failedTerminalSnapshot?.sourceReports.length ? (
+            <details className="research-search-diagnostics research-search-diagnostics--failure">
+              <summary>查看失败检索真值与来源</summary>
+              <div className="research-search-sources" aria-label="失败后台检索来源">
+                {failedTerminalSnapshot.sourceReports.map((report) => (
+                  <article key={`failure-${report.connectorId}-${report.sourceId}`} data-status={report.status}>
+                    <div><strong>{report.sourceName || report.sourceId}</strong><span>{report.connectorVersion ?? report.connectorId}</span></div>
+                    <span>{researchSearchSourceStatusLabel(report.status)}</span>
+                    <p>{report.recordsAccepted} / {report.recordsReceived} 条接收 · 扫描 {report.pagesScanned} 页</p>
+                    {report.providerBreakdown.length ? (
+                      <div className="research-provider-breakdown">
+                        {report.providerBreakdown.map((provider) => (
+                          <span key={provider.providerId}>{provider.providerName} · {provider.recordsAccepted}/{provider.recordsReceived}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <small>{report.message}{report.code ? ` · ${report.code}` : ""}</small>
+                  </article>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </>
+      ) : null}
+
+      {snapshot ? (
+        <div className="research-search-truth" aria-live="polite">
+          <div>
+            <strong>
+              已取得 {snapshot.candidates.length} 条
+              {` · ${snapshot.truth.totalHits == null ? "总命中未知" : `总命中 ${snapshot.truth.totalHits} 条`}`}
+              {" · 来源返回顺序"}
+              {displayOrder === "source-return-order" ? "" : ` · 本地展示：${researchDisplayOrderLabel(displayOrder)}`}
+              {` · 目标 ${snapshot.truth.resultLimit} 条${snapshot.truth.targetReached ? "已达" : "未达"}`}
+              {` · ${snapshot.truth.hasMore == null ? "后续结果未知" : snapshot.truth.hasMore ? "来源仍有后续结果" : "来源已无后续结果"}`}
+              {` · 扫描 ${snapshot.truth.pagesScanned} 页`}
+              {` · 覆盖 ${snapshot.truth.coverage} 个供应商`}
+              {` · ${researchCompletionReasonLabel(snapshot.truth.completionReason)}`}
+            </strong>
+            <span>“{snapshot.request.query}” · {snapshot.message}</span>
+          </div>
+          {failedSources.length > 0 && !activeAttempt ? (
+            <div className="research-search-native__actions">
+              <button type="button" className="secondary-action" onClick={onRetry}>
+                <RefreshCw size={14} />重试失败来源
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {snapshot?.sourceReports.length ? (
+        <details className="research-search-diagnostics">
+          <summary>来源、传输与排除诊断</summary>
+          <div className="research-search-sources" aria-label="后台检索来源">
+            {snapshot.sourceReports.map((report) => (
+              <article key={`${report.connectorId}-${report.sourceId}`} data-status={report.status}>
+                <div><strong>{report.sourceName || report.sourceId}</strong><span>{report.connectorVersion ?? report.connectorId}</span></div>
+                <span>{researchSearchSourceStatusLabel(report.status)}</span>
+                <p>{report.recordsAccepted} / {report.recordsReceived} 条接收 · 扫描 {report.pagesScanned} 页</p>
+                {report.providerBreakdown.length ? (
+                  <div className="research-provider-breakdown">
+                    {report.providerBreakdown.map((provider) => (
+                      <span key={provider.providerId}>{provider.providerName} · {provider.recordsAccepted}/{provider.recordsReceived}</span>
+                    ))}
+                  </div>
+                ) : null}
+                <small>
+                  实际传输：{researchSearchTransportLabel(report.transport)}
+                  {report.observedTransport && report.observedTransport !== report.transport
+                    ? ` · 协议勘察候选：${researchSearchTransportLabel(report.observedTransport)}`
+                    : ""}
+                </small>
+                <small>
+                  {(() => {
+                    const positions = snapshot.candidates
+                      .filter((candidate) => candidate.connectorIds.includes(report.connectorId))
+                      .map((candidate) => candidate.retrievalPosition.basis);
+                    const observed = positions.filter((basis) => basis === "observed").length;
+                    return `位置真值：observed ${observed} · synthesized ${positions.length - observed}`;
+                  })()}
+                </small>
+                <small>{report.message}{report.code ? ` · ${report.code}` : ""}</small>
+              </article>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {snapshot?.candidates.length ? (
+        <>
+          <div className="research-search-selection">
+            <label>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) => onSelectedIdsChange(toggleSideraResearchPageSelection(
+                  selectedIds,
+                  pageCandidates,
+                  event.target.checked,
+                ))}
+              />
+              <span>全选本页 {pageCandidates.length} 条</span>
+            </label>
+            <span>已选择 {selectedIds.length} 条</span>
+            <button
+              type="button"
+              className="primary-action"
+              disabled={selectedIds.length === 0 || busy}
+              onClick={onAddToReview}
+            >
+              {busy ? <Loader2 className="animate-spin" size={14} /> : <ListChecks size={14} />}
+              加入导入审查
+            </button>
+          </div>
+          <div className="institution-result-list">
+            {pageCandidates.map((candidate) => (
+              <article key={candidate.id} className="institution-result-item research-search-candidate" data-selected={selectedSet.has(candidate.id)}>
+                <label className="research-search-candidate__select" aria-label={`选择 ${candidate.title}`}>
+                  <input
+                    type="checkbox"
+                    checked={selectedSet.has(candidate.id)}
+                    onChange={(event) => onSelectedIdsChange(event.target.checked
+                      ? [...selectedIds, candidate.id]
+                      : selectedIds.filter((id) => id !== candidate.id))}
+                  />
+                </label>
+                <div className="institution-result-item__meta">
+                  <span>{institutionRecordKindLabel(candidate.recordKind)}</span>
+                  {candidate.year ? <span>{candidate.year}</span> : null}
+                  <span>{candidate.sourceDatabase}</span>
+                  {candidate.connectorIds.map((connector) => <span key={connector}>{connector}</span>)}
+                </div>
+                <h3>{candidate.title}</h3>
+                <p>{researchCandidateCitationLine(candidate)}</p>
+                {candidate.abstractText ? <div className="institution-result-item__abstract">{candidate.abstractText}</div> : null}
+                <div className="institution-result-item__footer">
+                  <span>{candidate.doi ? `DOI ${candidate.doi}` : institutionFullTextStatusLabel(candidate.fullTextStatus)}</span>
+                  <div>
+                    {candidate.detailLocator ? <button type="button" onClick={() => onOpen(candidate, "record")}>核对原始记录</button> : null}
+                    {candidate.fullTextLocator ? (
+                      <button type="button" onClick={() => onOpen(candidate, "full-text")}>
+                        查看全文入口 · {institutionFullTextRouteLabel(candidate.fullTextRoute)}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+          {pageCount > 1 ? (
+            <nav className="research-search-pagination" aria-label="机构论文结果分页">
+              <button type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
+              <span>第 {currentPage} / {pageCount} 页 · 每页 10 条</span>
+              <button type="button" disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button>
+            </nav>
+          ) : null}
+        </>
+      ) : snapshot && (snapshot.status === "complete" || snapshot.status === "partial") ? (
+        <EmptyState
+          title="没有正式论文候选"
+          description={sideraResearchFiltersAreActive(snapshot.request.filters)
+            ? "来源检索已完成，但当前文献类型、年份或全文筛选下没有候选；可调整筛选后重新检索。"
+            : "来源明确返回零结果，或返回记录均因非论文、类型不明或身份信息不足而被排除。"}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function researchSearchStatusLabel(status: SideraResearchSearchSnapshot["status"]) {
+  if (status === "checking-session") return "正在检查机构会话";
+  if (status === "awaiting-user-auth") return "等待官方登录";
+  if (status === "resolving-connectors") return "正在解析后台连接器";
+  if (status === "searching") return "正在检索真实来源";
+  if (status === "normalizing") return "正在归一化与去重";
+  if (status === "complete") return "后台检索完成";
+  if (status === "partial") return "后台检索部分完成";
+  if (status === "failed") return "后台检索失败";
+  if (status === "cancelled") return "检索已停止";
+  return "等待检索";
+}
+
+function researchSearchAuthPhaseLabel(
+  phase?: "awaiting-user" | "verifying" | "refreshing-parent" | "resuming",
+) {
+  if (phase === "verifying") return "正在核验统一发现身份";
+  if (phase === "refreshing-parent") return "正在刷新绑定结果页";
+  if (phase === "resuming") return "认证完成，正在恢复检索";
+  return "等待官方机构认证";
+}
+
+function researchSearchSourceStatusLabel(status: SideraResearchSearchSnapshot["sourceReports"][number]["status"]) {
+  if (status === "complete") return "完成";
+  if (status === "partial") return "部分完成";
+  return "失败";
+}
+
+function researchSearchTransportLabel(transport?: SideraResearchSearchSnapshot["sourceReports"][number]["transport"] | null) {
+  if (transport === "structured-api") return "结构化接口";
+  if (transport === "session-web-request") return "同会话后台请求";
+  if (transport === "dom-fallback") return "实验性隐藏网页抽取";
+  return "未确认";
+}
+
+function researchDisplayOrderLabel(order: SideraResearchDisplayOrder) {
+  if (order === "newest") return "最新";
+  if (order === "oldest") return "最早";
+  if (order === "title") return "题名";
+  return "来源返回顺序";
+}
+
+function researchCompletionReasonLabel(reason: SideraResearchSearchSnapshot["truth"]["completionReason"]) {
+  if (reason === "result-limit") return "达到结果上限";
+  if (reason === "page-limit") return "达到页面预算";
+  if (reason === "timeout") return "达到时间预算";
+  if (reason === "explicit-zero-results") return "来源明确零结果";
+  if (reason === "source-exhausted") return "来源已耗尽";
+  if (reason === "partial-failure") return "部分来源失败";
+  return "正在采集";
+}
+
+function researchCandidateCitationLine(candidate: SideraNormalizedCandidateDraft) {
+  const venue = candidate.venue || candidate.journal || candidate.conference || candidate.degreeInstitution || "";
+  return [candidate.authors.join("; "), venue, candidate.volume ? `卷 ${candidate.volume}` : "", candidate.issue ? `期 ${candidate.issue}` : "", candidate.pages ? `页 ${candidate.pages}` : ""]
+    .filter(Boolean)
+    .join(" · ") || "作者与来源信息未提供";
+}
+
+function institutionDownloadStatusLabel(status: SideraInstitutionDownloadRecord["status"]) {
+  if (status === "downloading") return "下载中";
+  if (status === "cancel-requested") return "正在取消";
+  if (status === "complete") return "已完成";
+  if (status === "cancelled") return "已取消";
+  return "失败";
+}
+
+function formatInstitutionFileSize(size?: number | null) {
+  if (!size || size < 0) return "大小待确认";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(size / 1024 / 1024 / 1024).toFixed(2)} GiB`;
+}
+
+function institutionSearchStatusLabel(status: SideraInstitutionSearchSnapshot["status"]) {
+  if (status === "complete") return "检索完成";
+  if (status === "partial") return "部分完成";
+  if (status === "cancelled") return "已停止";
+  if (status === "failed") return "检索失败";
+  return "检索中";
+}
+
+function institutionSearchStageLabel(stage: SideraInstitutionSearchSnapshot["stage"]) {
+  if (stage === "opening-web-result") return "正在提交官方检索";
+  if (stage === "web-result-available") return "网页结果可用";
+  if (stage === "awaiting-auth") return "统一发现认证中";
+  if (stage === "resuming-after-auth") return "正在恢复检索";
+  if (stage === "facet-processing") return "分面处理中";
+  if (stage === "extracting") return "正在抽取";
+  if (stage === "native-snapshot-complete") return "原生结果完成";
+  if (stage === "filter-unconfirmed") return "筛选未确认";
+  if (stage === "adapter-drift") return "适配器漂移";
+  if (stage === "cancelled") return "已停止";
+  if (stage === "failed") return "检索失败";
+  return "等待检索";
+}
+
+function institutionRecordKindLabel(kind: SideraInstitutionSearchSnapshot["items"][number]["recordKind"]) {
+  if (kind === "journal-article") return "期刊论文";
+  if (kind === "conference-paper") return "会议论文";
+  if (kind === "thesis") return "学位论文";
+  if (kind === "book") return "图书";
+  if (kind === "journal-holding") return "期刊馆藏";
+  return "类型待确认";
+}
+
+function institutionFullTextStatusLabel(
+  status: SideraInstitutionSearchSnapshot["items"][number]["fullTextStatus"],
+) {
+  if (status === "available") return "全文可用";
+  if (status === "link-only") return "可跳转全文入口";
+  if (status === "unavailable") return "未提供全文";
+  return "全文状态未知";
+}
+
+function institutionFullTextRouteLabel(
+  route: SideraInstitutionSearchSnapshot["items"][number]["fullTextRoute"],
+) {
+  if (route === "direct-html-pdf") return "直接 HTML/PDF";
+  if (route === "doi") return "DOI";
+  if (route === "openurl-link-resolver") return "OpenURL/链接解析器";
+  if (route === "provider-record") return "供应商记录";
+  if (route === "publisher-page") return "出版社页面";
+  return "浏览器回退";
+}
+
+function institutionResultCitationLine(
+  item: SideraInstitutionSearchSnapshot["items"][number],
+) {
+  const venue = item.publication || item.journal || item.conference || item.degreeInstitution || "";
+  const normalizedVenue = venue.toLocaleLowerCase();
+  const parts = [item.authors, venue || null];
+  if (item.volume && !normalizedVenue.includes(`vol.${item.volume}`) && !normalizedVenue.includes(`卷 ${item.volume}`)) {
+    parts.push(`卷 ${item.volume}`);
+  }
+  if (item.issue && !normalizedVenue.includes(`(${item.issue})`) && !normalizedVenue.includes(`期 ${item.issue}`)) {
+    parts.push(`期 ${item.issue}`);
+  }
+  if (item.pages && !normalizedVenue.includes(`p.${item.pages}`) && !normalizedVenue.includes(`页 ${item.pages}`)) {
+    parts.push(`页 ${item.pages}`);
+  }
+  return Array.from(new Set(parts.filter((part): part is string => Boolean(part)))).join(" · ")
+    || "作者与来源信息未提供";
+}
+
+function ImportReviewWorkspace({
+  batches,
+  activeBatch,
+  busy,
+  commitPreview,
+  commitStatus,
+  commitHistory,
+  readDiagnostics,
+  commitResult,
+  rollbackResult,
+  onCreate,
+  onOpen,
+  onDecide,
+  onDiscard,
+  onClone,
+  onPrepareCommit,
+  onExecuteCommit,
+  onRollback,
+  onViewImportedPapers,
+  onRefreshReads,
+  onRunReadFaultFixture,
+}: {
+  batches: SideraImportReviewBatch[];
+  activeBatch: SideraImportReviewBatch | null;
+  busy: string;
+  commitPreview: SideraImportCommitPreview | null;
+  commitStatus: SideraImportCommitStatus | null;
+  commitHistory: SideraImportCommitHistory;
+  readDiagnostics: ImportReviewReadDiagnostics;
+  commitResult: SideraImportCommitResult | null;
+  rollbackResult: SideraImportRollbackResult | null;
+  onCreate: () => void;
+  onOpen: (batchId: string) => void;
+  onDecide: (
+    candidate: SideraImportCandidate,
+    decision?: SideraImportDecisionKind,
+    targetPaperId?: string,
+  ) => void;
+  onDiscard: () => void;
+  onClone: () => void;
+  onPrepareCommit: () => void;
+  onExecuteCommit: () => void;
+  onRollback: (entry: SideraImportCommitStatus) => void;
+  onViewImportedPapers: (paperIds: string[]) => void;
+  onRefreshReads: () => void;
+  onRunReadFaultFixture?: (target: SideraImportReadFaultTarget) => void;
+}) {
+  const [page, setPage] = useState(1);
+  const pageSize = 40;
+  const pageCount = Math.max(1, Math.ceil((activeBatch?.candidates.length ?? 0) / pageSize));
+  const visibleCandidates = activeBatch?.candidates.slice((page - 1) * pageSize, page * pageSize) ?? [];
+  const previewBlockingItems = commitPreview?.items.filter((item) => item.blockingCodes.length > 0) ?? [];
+  const previewBlocked = Boolean(commitPreview && (
+    commitPreview.counts.unresolvedCount > 0
+    || previewBlockingItems.length > 0
+  ));
+  const batchEditable = activeBatch ? matchesEditableImportReviewStatus(activeBatch.status) : false;
+  const readDiagnosticRows = [
+    ["batches", "审查批次", readDiagnostics.batches],
+    ["status", "提交状态", readDiagnostics.status],
+    ["history", "提交历史", readDiagnostics.history],
+  ] as const;
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeBatch?.id]);
+
+  return (
+    <section className="panel-card import-review-workspace" aria-labelledby="import-review-title">
+      <div className="import-review-header">
+        <div>
+          <p className="eyebrow">P2a–P2b · 题录审查与正式提交</p>
+          <h2 id="import-review-title">先审查与预览，再以单一事务进入论文库</h2>
+          <p>支持 CSV、JSON、JSONL、NDJSON、BibTeX 与 RIS。待处理项和未明确跳过的无效项会阻止提交；正式提交保留历史，并支持带指纹保护的整次回滚。</p>
+        </div>
+        <button type="button" className="primary-action h-10 gap-2" onClick={onCreate} disabled={Boolean(busy)}>
+          {busy ? <Loader2 className="animate-spin" size={15} /> : <FileUp size={15} />}
+          创建审查批次
+        </button>
+      </div>
+
+      {busy ? <div className="import-review-busy" role="status">{busy}</div> : null}
+
+      <details className="mini-card mb-4" aria-label="题录读取诊断">
+        <summary className="cursor-pointer text-xs text-ink/55">
+          读取诊断 · {readDiagnosticRows.map(([, label, diagnostic]) => (
+            `${label}${diagnostic.state === "ready" ? "正常" : diagnostic.state === "error" ? "失败" : "待读取"}`
+          )).join(" · ")}
+        </summary>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {readDiagnosticRows.map(([key, label, diagnostic]) => (
+            <div key={key} className="rounded-lg border border-line/50 bg-black/10 p-3">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <strong>{label}</strong>
+                <span className={diagnostic.state === "error" ? "text-danger" : "text-ink/45"}>
+                  {diagnostic.state === "ready" ? "正常" : diagnostic.state === "error" ? "失败" : "待读取"}
+                </span>
+              </div>
+              {diagnostic.message ? (
+                <code className="mt-2 block break-all text-[11px] leading-5 text-danger" role="alert">
+                  {diagnostic.message}
+                </code>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line/40 pt-3">
+          <button type="button" className="secondary-action h-8" onClick={onRefreshReads} disabled={Boolean(busy)}>
+            正常重读
+          </button>
+          {onRunReadFaultFixture ? (
+            <>
+              <span className="text-[11px] text-ink/35">开发夹具（内存一次性，不写数据库）</span>
+              <button type="button" className="secondary-action h-8" onClick={() => onRunReadFaultFixture("batch-list")} disabled={Boolean(busy)}>
+                批次故障
+              </button>
+              <button type="button" className="secondary-action h-8" onClick={() => onRunReadFaultFixture("commit-status")} disabled={Boolean(busy)}>
+                状态故障
+              </button>
+              <button type="button" className="secondary-action h-8" onClick={() => onRunReadFaultFixture("commit-history")} disabled={Boolean(busy)}>
+                历史故障
+              </button>
+            </>
+          ) : null}
+        </div>
+      </details>
+
+      <div className="import-review-layout">
+        <aside className="import-review-batches" aria-label="题录审查批次">
+          <strong>审查批次</strong>
+          {batches.length > 0 ? batches.map((batch) => (
+            <button
+              type="button"
+              key={batch.id}
+              className={activeBatch?.id === batch.id ? "is-active" : ""}
+              onClick={() => onOpen(batch.id)}
+              disabled={Boolean(busy)}
+            >
+              <span>{batch.fileName}</span>
+              <small>{batch.status === "active" ? `${batch.counts.decidedCount}/${batch.counts.total} 已决定` : importReviewBatchStatusLabel(batch.status)} · {batch.format.toUpperCase()}</small>
+            </button>
+          )) : <p>尚无批次。选择一个小型真实题录文件开始。</p>}
+        </aside>
+
+        <div className="import-review-detail">
+          {activeBatch ? (
+            <>
+              <div className="import-review-summary">
+                <div>
+                  <span>{activeBatch.fileName}</span>
+                  <strong>{importReviewBatchStatusLabel(activeBatch.status)}</strong>
+                </div>
+                <div className="import-review-counts" aria-label="候选分类统计">
+                  <span data-kind="new">新记录 {activeBatch.counts.newCount}</span>
+                  <span data-kind="merge">可合并 {activeBatch.counts.mergeCount}</span>
+                  <span data-kind="conflict">冲突 {activeBatch.counts.conflictCount}</span>
+                  <span data-kind="invalid">无效 {activeBatch.counts.invalidCount}</span>
+                  <span>已决定 {activeBatch.counts.decidedCount}/{activeBatch.counts.total}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {batchEditable ? (
+                    <>
+                      <button type="button" className="primary-action h-8" onClick={onPrepareCommit} disabled={Boolean(busy)}>
+                        生成提交预览
+                      </button>
+                      <button type="button" className="secondary-action h-8" onClick={onDiscard} disabled={Boolean(busy)}>放弃批次</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs text-ink/55">该批次已经进入只读状态，历史决定不会被继续修改。</span>
+                      {(activeBatch.status === "committed" || activeBatch.status === "rolled-back") ? (
+                        <button type="button" className="secondary-action h-8" onClick={onClone} disabled={Boolean(busy)}>
+                          复制为新审查批次
+                        </button>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {commitStatus?.batchId === activeBatch.id ? (
+                <div className="mini-card mb-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <strong>主库提交状态 · {importReviewBatchStatusLabel(commitStatus.batchStatus)}</strong>
+                    <span className="text-xs text-ink/55">批次版本 {commitStatus.batchVersion}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-ink/65">
+                    {commitStatus.beforeRevision !== undefined && commitStatus.afterRevision !== undefined
+                      ? `论文库 revision ${commitStatus.beforeRevision} → ${commitStatus.afterRevision}`
+                      : "尚未产生正式主库提交。"}
+                    {commitStatus.rollbackRevision !== undefined ? ` · 回滚后 revision ${commitStatus.rollbackRevision}` : ""}
+                  </p>
+                </div>
+              ) : null}
+
+              {commitPreview?.batchId === activeBatch.id ? (
+                <ImportCommitPreviewPanel
+                  preview={commitPreview}
+                  blocked={previewBlocked}
+                  blockingItems={previewBlockingItems.length}
+                  busy={Boolean(busy)}
+                  onExecute={onExecuteCommit}
+                />
+              ) : null}
+
+              {commitResult?.batchId === activeBatch.id ? (
+                <div className="mini-card mb-4" role="status">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <strong>提交完成 · {commitResult.counts.changedCount} 条主库变更</strong>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-ink/55">操作 {commitResult.commitId}</span>
+                      {commitResult.items.some((item) => Boolean(item.paperId)) ? (
+                        <button
+                          type="button"
+                          className="secondary-action h-8"
+                          onClick={() => onViewImportedPapers(commitResult.items.flatMap((item) => item.paperId ? [item.paperId] : []))}
+                          disabled={Boolean(busy)}
+                        >
+                          查看已入库论文
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className="mt-2 text-sm text-ink/65">
+                    新增 {commitResult.counts.insertCount} · 合并 {commitResult.counts.mergeCount} · 独立保留 {commitResult.counts.keepSeparateCount} · 跳过 {commitResult.counts.skipCount}
+                  </p>
+                  <p className="mt-1 text-xs text-ink/50">
+                    论文数 {commitResult.paperCountBefore} → {commitResult.paperCountAfter}；revision {commitResult.beforeRevision} → {commitResult.afterRevision}。热点模型未自动运行。
+                  </p>
+                  {commitResult.items.some((item) => Boolean(item.paperId)) ? (
+                    <details className="mt-2 text-xs text-ink/45">
+                      <summary className="cursor-pointer">已提交论文 ID</summary>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {Array.from(new Set(commitResult.items.flatMap((item) => item.paperId ? [item.paperId] : []))).map((paperId) => (
+                          <code key={paperId} className="quiet-chip">{paperId}</code>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {rollbackResult?.batchId === activeBatch.id ? (
+                <ImportRollbackResultPanel result={rollbackResult} />
+              ) : null}
+
+              <div className="import-review-candidates">
+                {visibleCandidates.map((candidate) => (
+                  <article key={candidate.id} className="import-review-candidate" data-kind={candidate.classification}>
+                    <div className="import-review-candidate__topline">
+                      <span>第 {candidate.rowIndex} 条</span>
+                      <strong>{importCandidateClassificationLabel(candidate.classification)}</strong>
+                      {candidate.decision ? <em>{importDecisionLabel(candidate.decision.kind)}</em> : <em>待决定</em>}
+                    </div>
+                    <h3>{candidate.title || "无题名候选"}</h3>
+                    <p>{[
+                      candidate.authors.join("; "),
+                      candidate.year?.toString(),
+                      candidate.venue,
+                      candidate.sourceDatabase,
+                    ].filter(Boolean).join(" · ") || candidate.invalidReason || "无可展示元数据"}</p>
+                    <div className="import-review-evidence">
+                      {candidate.identityEvidence.map((evidence) => (
+                        <span key={`${evidence.kind}:${evidence.value}`} title={evidence.value}>{evidence.rank}. {evidence.label}</span>
+                      ))}
+                    </div>
+                    {candidate.identityMatches.length > 0 ? (
+                      <div className="import-review-matches">
+                        {candidate.identityMatches.map((match) => (
+                          <div key={match.paperId}>
+                            <span>{match.preferred ? "优先匹配" : "候选匹配"} · {match.title}</span>
+                            <small>{match.matchedBy.map(importIdentityKindLabel).join(" + ")}</small>
+                            {batchEditable ? (
+                              <button type="button" onClick={() => onDecide(candidate, "accept-merge", match.paperId)} disabled={Boolean(busy)}>合并到此记录</button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {batchEditable ? (
+                      <div className="import-review-actions">
+                        {candidate.classification !== "invalid" ? (
+                          <button
+                            type="button"
+                            onClick={() => onDecide(
+                              candidate,
+                              candidate.classification === "new" ? "accept-new" : "keep-separate",
+                            )}
+                            disabled={Boolean(busy)}
+                          >
+                            {candidate.classification === "new" ? "确认作为新记录" : "作为独立记录"}
+                          </button>
+                        ) : null}
+                        <button type="button" onClick={() => onDecide(candidate, "skip")} disabled={Boolean(busy)}>跳过</button>
+                        {candidate.classification !== "invalid" ? (
+                          <button type="button" onClick={() => onDecide(candidate, "unresolved")} disabled={Boolean(busy)}>保留待处理</button>
+                        ) : null}
+                        {candidate.decision ? <button type="button" onClick={() => onDecide(candidate)} disabled={Boolean(busy)}>清除决定</button> : null}
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+                {activeBatch.candidates.length === 0 ? <div className="import-review-empty">该批次没有可显示候选。</div> : null}
+              </div>
+
+              {pageCount > 1 ? (
+                <div className="import-review-pagination">
+                  <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>上一页</button>
+                  <span>{page}/{pageCount}</span>
+                  <button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>下一页</button>
+                </div>
+              ) : null}
+
+              <ImportCommitHistoryPanel
+                entries={commitHistory.entries.filter((entry) => entry.batchId === activeBatch.id)}
+                busy={Boolean(busy)}
+                onRollback={onRollback}
+                onViewImportedPapers={onViewImportedPapers}
+              />
+            </>
+          ) : (
+            <div className="import-review-empty">
+              <Database size={24} />
+              <strong>尚未创建审查批次</strong>
+              <span>文件解析与身份匹配结果会保存在独立的 Sidera/import-review-v1.sqlite 中。</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ImportCommitPreviewPanel({
+  preview,
+  blocked,
+  blockingItems,
+  busy,
+  onExecute,
+}: {
+  preview: SideraImportCommitPreview;
+  blocked: boolean;
+  blockingItems: number;
+  busy: boolean;
+  onExecute: () => void;
+}) {
+  const revisionDrift = preview.baseRevision !== undefined && preview.baseRevision !== preview.expectedRevision;
+  const identityDrift = preview.items.some((item) => item.blockingCodes.some((code) => code.includes("IDENTITY")));
+
+  return (
+    <section className="mini-card mb-4" aria-label="题录正式提交预览">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">P2b · 主论文库提交预览</p>
+          <strong>预览 {preview.previewId}</strong>
+          <p className="mt-1 text-xs text-ink/50">
+            预期 revision {preview.expectedRevision}
+            {preview.baseRevision !== undefined ? ` · 审查基线 ${preview.baseRevision}` : ""}
+            {` · 批次版本 ${preview.batchVersion}`}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="primary-action h-9"
+          onClick={onExecute}
+          disabled={busy || blocked}
+        >
+          {preview.counts.changedCount === 0 ? "确认全跳过并关闭批次" : "最终确认并提交"}
+        </button>
+      </div>
+
+      <div className="import-review-counts mt-3" aria-label="提交动作统计">
+        <span data-kind="new">新增 {preview.counts.insertCount}</span>
+        <span data-kind="merge">合并 {preview.counts.mergeCount}</span>
+        <span>独立 {preview.counts.keepSeparateCount}</span>
+        <span>跳过 {preview.counts.skipCount}</span>
+        <span data-kind="conflict">待处理 {preview.counts.unresolvedCount}</span>
+        <span data-kind="invalid">无效 {preview.counts.invalidCount}</span>
+        <span>实际变更 {preview.counts.changedCount}</span>
+      </div>
+
+      {revisionDrift || identityDrift || blocked ? (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-ink/70" role="alert">
+          <AlertTriangle className="mt-0.5 shrink-0 text-amber" size={16} />
+          <div>
+            {revisionDrift ? <p>论文库 revision 已偏离审查基线，提交时会再次校验；若继续变化，当前预览将失效。</p> : null}
+            {identityDrift ? <p>存在身份匹配漂移，请返回候选决定重新确认目标记录。</p> : null}
+            {blocked ? <p>当前有 {preview.counts.unresolvedCount} 条待处理、{blockingItems} 条带阻塞码的预览项，不能提交。{preview.counts.invalidCount > 0 ? `另有 ${preview.counts.invalidCount} 条无效候选，只能明确跳过。` : ""}</p> : null}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-3 text-sm text-ink/65">
+          <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-300" size={16} />
+          <span>身份与 revision 预检通过；最终提交仍会重新校验预览哈希和主库状态。</span>
+        </div>
+      )}
+
+      <div className="mt-3 grid gap-2">
+        {preview.items.map((item) => (
+          <details key={item.candidateId} className="rounded-xl border border-line/60 bg-black/10 px-3 py-2">
+            <summary className="cursor-pointer text-sm text-ink/75">
+              第 {item.rowIndex} 条 · {importCommitActionLabel(item.action)}
+              {item.effectivePaperId ? ` · 目标 ${item.effectivePaperId}` : ""}
+              {item.blockingCodes.length > 0 ? ` · 阻塞 ${item.blockingCodes.length}` : ""}
+            </summary>
+            <div className="mt-3 grid gap-3">
+              <div>
+                <strong className="text-xs text-ink/55">身份与来源摘要</strong>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {item.identityEvidence.length > 0 ? item.identityEvidence.map((evidence) => (
+                    <span className="quiet-chip" key={`${item.candidateId}:${evidence.kind}:${evidence.value}`} title={evidence.value}>
+                      {evidence.rank}. {evidence.label}
+                    </span>
+                  )) : <span className="text-xs text-ink/45">无可用身份依据</span>}
+                </div>
+              </div>
+              {item.fieldChanges.length > 0 ? (
+                <div className="grid gap-2">
+                  {item.fieldChanges.map((change) => (
+                    <div key={`${item.candidateId}:${change.field}`} className="grid gap-1 rounded-lg border border-line/40 p-2 text-xs md:grid-cols-[120px_1fr_1fr]">
+                      <strong>{change.field} · {importCommitFieldActionLabel(change.action)}</strong>
+                      <span title={change.existingValue}>现有：{change.existingValue || "空"}</span>
+                      <span title={change.incomingValue}>候选：{change.incomingValue || "空"}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <span className="text-xs text-ink/45">该项不会产生字段变更。</span>}
+              {item.blockingCodes.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {item.blockingCodes.map((code) => <code key={code} className="quiet-chip">{code}</code>)}
+                </div>
+              ) : null}
+            </div>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ImportCommitHistoryPanel({
+  entries,
+  busy,
+  onRollback,
+  onViewImportedPapers,
+}: {
+  entries: SideraImportCommitStatus[];
+  busy: boolean;
+  onRollback: (entry: SideraImportCommitStatus) => void;
+  onViewImportedPapers: (paperIds: string[]) => void;
+}) {
+  return (
+    <section className="mini-card mt-4" aria-label="题录提交历史">
+      <div className="flex items-center justify-between gap-2">
+        <strong>提交与回滚历史</strong>
+        <span className="text-xs text-ink/45">{entries.length} 次操作</span>
+      </div>
+      {entries.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {entries.map((entry, index) => (
+            <article key={`${entry.commitId ?? entry.batchId}:${entry.completedAtMs ?? index}`} className="rounded-xl border border-line/50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <strong>{importReviewBatchStatusLabel(entry.batchStatus)}</strong>
+                  <p className="mt-1 text-xs text-ink/45">
+                    {entry.completedAtMs ? formatDateTime(new Date(entry.completedAtMs).toISOString()) : "尚无提交时间"}
+                    {entry.commitId ? ` · ${entry.commitId}` : ""}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {entry.batchStatus === "committed" && (entry.paperIds?.length ?? 0) > 0 ? (
+                    <button type="button" className="secondary-action h-8" onClick={() => onViewImportedPapers(entry.paperIds ?? [])} disabled={busy}>
+                      查看已入库论文
+                    </button>
+                  ) : null}
+                  {entry.batchStatus === "committed" && entry.commitId && entry.afterRevision !== undefined ? (
+                    <button type="button" className="secondary-action h-8" onClick={() => onRollback(entry)} disabled={busy}>
+                      整次回滚
+                    </button>
+                  ) : <span className="text-xs text-ink/45">只读</span>}
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-ink/55">
+                {entry.beforeRevision !== undefined && entry.afterRevision !== undefined
+                  ? `revision ${entry.beforeRevision} → ${entry.afterRevision}`
+                  : "尚未产生主库 revision 变更"}
+                {entry.rollbackRevision !== undefined ? ` · 回滚至新 revision ${entry.rollbackRevision}` : ""}
+              </p>
+              {entry.counts ? (
+                <p className="mt-1 text-xs text-ink/55">
+                  新增 {entry.counts.insertCount} · 合并 {entry.counts.mergeCount} · 独立 {entry.counts.keepSeparateCount} · 跳过 {entry.counts.skipCount}
+                </p>
+              ) : null}
+              {entry.errorCode ? <code className="mt-2 block text-xs text-red-300">{entry.errorCode}</code> : null}
+            </article>
+          ))}
+        </div>
+      ) : <p className="mt-2 text-sm text-ink/45">该批次尚无正式提交或回滚历史。</p>}
+    </section>
+  );
+}
+
+function ImportRollbackResultPanel({ result }: { result: SideraImportRollbackResult }) {
+  return (
+    <section className="mini-card mb-4" aria-label="题录回滚结果">
+      <div className="flex items-center gap-2">
+        {result.rollbackConflicts.length > 0 ? <AlertTriangle className="text-amber" size={16} /> : <CheckCircle2 className="text-emerald-300" size={16} />}
+        <strong>{result.rollbackConflicts.length > 0 ? "整次回滚已被阻止" : "整次提交已回滚"}</strong>
+      </div>
+      <p className="mt-2 text-sm text-ink/60">
+        恢复 {result.restoredCount} 条 · 删除 {result.deletedCount} 条
+        {result.rollbackRevision !== undefined ? ` · 回滚 revision ${result.rollbackRevision}` : ""}
+      </p>
+      {result.rollbackConflicts.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {result.rollbackConflicts.map((conflict) => (
+            <div key={`${conflict.candidateId}:${conflict.paperId}:${conflict.code}`} className="rounded-lg border border-amber-400/20 p-2 text-xs text-ink/65">
+              <strong>{conflict.code}</strong>
+              <span className="ml-2">论文 {conflict.paperId}</span>
+              {conflict.fields.length > 0 ? <p className="mt-1">发生漂移的字段：{conflict.fields.join("、")}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function importReviewBatchStatusLabel(value: SideraImportReviewBatch["status"]) {
+  return {
+    active: "审查中",
+    discarded: "已放弃",
+    committing: "提交中 · 只读",
+    committed: "已提交 · 只读",
+    "commit-failed": "提交失败",
+    "rolled-back": "已回滚 · 只读",
+  }[value];
+}
+
+function matchesEditableImportReviewStatus(value: SideraImportReviewBatch["status"]) {
+  return value === "active" || value === "commit-failed";
+}
+
+function importCommitActionLabel(value: string) {
+  return {
+    insert: "新增记录",
+    merge: "合并记录",
+    "keep-separate": "独立记录",
+    skip: "跳过",
+  }[value] ?? value;
+}
+
+function importCommitFieldActionLabel(value: string) {
+  return {
+    insert: "写入",
+    "fill-empty": "填补空字段",
+    "preserve-existing": "保留现有值",
+    unchanged: "不变",
+    skip: "跳过",
+  }[value] ?? value;
+}
+
+function importCandidateClassificationLabel(value: SideraImportCandidate["classification"]) {
+  return { new: "新记录", merge: "建议合并", conflict: "身份冲突", invalid: "无效候选" }[value];
+}
+
+function importDecisionLabel(value: SideraImportDecisionKind) {
+  return {
+    "accept-new": "已确认新记录",
+    "accept-merge": "已确认合并",
+    "keep-separate": "保留独立",
+    skip: "已跳过",
+    unresolved: "待后续处理",
+  }[value];
+}
+
+function importIdentityKindLabel(value: string) {
+  return {
+    doi: "DOI",
+    "provider-record": "供应商记录",
+    "canonical-url": "详情 URL",
+    "title-author-year": "题名作者年份",
+  }[value] ?? value;
 }
 
 function ImportPreviewPanel({
@@ -7268,6 +11872,14 @@ function PipelineView({
           <h1>分析流水线</h1>
           <p className="page-subtitle">按顺序完成文献准备、清洗去重和热点建模，每一步完成后再确认下一步。</p>
         </div>
+        <button
+          type="button"
+          className="secondary-action h-10 gap-2"
+          onClick={() => onNavigate("search")}
+        >
+          <ArrowLeft size={16} />
+          返回文献工作台
+        </button>
       </header>
 
       <ol className="pipeline-stepper" aria-label="分析流水线进度">
@@ -8153,12 +12765,29 @@ type SettingsAgentReadiness = {
   ready: boolean;
 };
 
-function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiSettings; onSave: (settings: AiSettings) => Promise<void>; onRefresh: () => Promise<void>; onNotice: AppNoticeHandler }) {
+function SettingsView({
+  settings,
+  institutionSession,
+  onOpenInstitutionResources,
+  onSave,
+  onRefresh,
+  onNotice,
+}: {
+  settings: AiSettings;
+  institutionSession: SideraInstitutionSessionState | null;
+  onOpenInstitutionResources: () => void;
+  onSave: (settings: AiSettings) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onNotice: AppNoticeHandler;
+}) {
   const [draft, setDraft] = useState(settings);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [agentReadiness, setAgentReadiness] = useState<SettingsAgentReadiness>();
+  const [institutionTesting, setInstitutionTesting] = useState(false);
+  const [institutionProbe, setInstitutionProbe] = useState<SideraInstitutionProbeResult>();
+  const [institutionError, setInstitutionError] = useState("");
   const [semanticCapabilities, setSemanticCapabilities] = useState<SemanticEmbeddingCapabilities>();
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -8249,6 +12878,42 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
     } finally {
       setTesting(false);
     }
+  }
+
+  async function testInstitution() {
+    setInstitutionTesting(true);
+    setInstitutionError("");
+    try {
+      setInstitutionProbe(await probeSideraInstitution("whu"));
+    } catch (error) {
+      setInstitutionProbe(undefined);
+      setInstitutionError(error instanceof Error ? error.message : "机构资源检测失败。");
+    } finally {
+      setInstitutionTesting(false);
+    }
+  }
+
+  async function openInstitutionUrl(url: string) {
+    try {
+      await openExternalUrl(url);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "机构入口打开失败。", "error");
+    }
+  }
+
+  async function openInstitutionTarget(id: "database-directory" | "unified-discovery") {
+    const target = institutionProbe?.navigationTargets.find((item) => item.id === id);
+    if (target) {
+      await openInstitutionUrl(target.openUrl);
+      return;
+    }
+    onNotice(
+      id === "database-directory"
+        ? "尚未解析到正式数据库 SSO，已打开图书馆主页；请从“常用数据库”进入。"
+        : "尚未解析到稳定的统一发现入口，已打开图书馆主页。",
+      "info",
+    );
+    await openInstitutionUrl("https://www.lib.whu.edu.cn/");
   }
 
   async function chooseDir(key: "databaseDir" | "exportDir" | "workerTempDir" | "backupDir") {
@@ -8497,6 +13162,125 @@ function SettingsView({ settings, onSave, onRefresh, onNotice }: { settings: AiS
             ) : null}
           </section>
 
+          <section className="panel-card settings-section settings-institution-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="panel-title"><Network size={17} />武汉大学机构资源</div>
+                <p>aTrust 登录由学校客户端完成；这里仅检测客户端与公开入口，不读取 Cookie，也不判断浏览器是否已经登录。</p>
+              </div>
+              <button className="secondary-action h-9 gap-2" onClick={() => void testInstitution()} disabled={institutionTesting}>
+                {institutionTesting ? <Loader2 className="animate-spin" size={15} /> : <ShieldCheck size={15} />}
+                {institutionTesting ? "正在检测" : institutionProbe ? "重新检测" : "检测机构资源"}
+              </button>
+            </div>
+            <div className="settings-institution-actions">
+              <button type="button" className="primary-action h-9 gap-2" onClick={onOpenInstitutionResources}>
+                <Network size={15} />前往机构资源
+              </button>
+              <button type="button" className="secondary-action h-9 gap-2" onClick={() => void openInstitutionUrl("https://www.lib.whu.edu.cn/")}>
+                <Globe2 size={15} />在系统浏览器打开图书馆
+              </button>
+              <button type="button" className="secondary-action h-9 gap-2" onClick={() => void openInstitutionTarget("database-directory")}>
+                <BookOpen size={15} />{institutionProbe?.navigationTargets.some((item) => item.id === "database-directory") ? "在系统浏览器打开数据库导航" : "在系统浏览器从图书馆进入数据库"}
+              </button>
+            </div>
+            <div className="settings-agent-readiness" aria-label="应用内机构会话状态">
+              <AgentReadinessRow
+                label="数据库 SSO 会话"
+                status={institutionAuthRowStatus(institutionSession?.databaseAuth.status)}
+                summary={institutionAuthSummary(institutionSession?.databaseAuth.status)}
+                detail={institutionAuthDetail(institutionSession?.databaseAuth, "数据库检索")}
+                code={institutionSession?.databaseAuth.status === "failed"
+                  || institutionSession?.databaseAuth.status === "cancelled"
+                  ? institutionSession.databaseAuth.code
+                  : undefined}
+              />
+              <AgentReadinessRow
+                label="统一发现机构全文身份"
+                status={institutionAuthRowStatus(institutionSession?.academicDiscoveryAuth.status)}
+                summary={institutionAuthSummary(institutionSession?.academicDiscoveryAuth.status)}
+                detail={institutionAuthDetail(institutionSession?.academicDiscoveryAuth, "统一发现机构全文")}
+                code={institutionSession?.academicDiscoveryAuth.status === "failed"
+                  || institutionSession?.academicDiscoveryAuth.status === "cancelled"
+                  ? institutionSession.academicDiscoveryAuth.code
+                  : undefined}
+              />
+              <AgentReadinessRow
+                label="个人图书馆会话"
+                status={institutionAuthRowStatus(institutionSession?.libraryAccountAuth.status)}
+                summary={institutionAuthSummary(institutionSession?.libraryAccountAuth.status)}
+                detail={institutionAuthDetail(institutionSession?.libraryAccountAuth, "个人图书馆")}
+                code={institutionSession?.libraryAccountAuth.status === "failed"
+                  || institutionSession?.libraryAccountAuth.status === "cancelled"
+                  ? institutionSession.libraryAccountAuth.code
+                  : undefined}
+              />
+            </div>
+            {institutionError ? <div className="settings-connection-message is-failed" role="alert"><strong>{institutionError}</strong></div> : null}
+            {institutionProbe ? (
+              <>
+                <div
+                  className={`settings-connection-message ${institutionProbe.status === "ready" ? "is-ready" : institutionProbe.status === "unavailable" ? "is-failed" : "is-partial"}`}
+                  role={institutionProbe.status === "unavailable" ? "alert" : "status"}
+                >
+                  <strong>{institutionProbe.summary}</strong>
+                  <small>检测时间：{new Date(institutionProbe.checkedAtMs).toLocaleString()}</small>
+                </div>
+                <div className="settings-agent-readiness" aria-label="武汉大学机构资源检测结果">
+                  <AgentReadinessRow
+                    label="aTrust 客户端"
+                    status={institutionClientRowStatus(institutionProbe.client.status)}
+                    summary={institutionClientSummary(institutionProbe.client.status)}
+                    detail={institutionProbe.client.executablePath
+                      ? `${institutionProbe.client.detail} 路径：${institutionProbe.client.executablePath}`
+                      : institutionProbe.client.detail}
+                    code={institutionProbe.client.code}
+                  />
+                  {institutionProbe.endpoints.map((endpoint) => (
+                    <AgentReadinessRow
+                      key={endpoint.id}
+                      label={endpoint.label}
+                      status={institutionEndpointRowStatus(endpoint.status)}
+                      summary={institutionEndpointSummary(endpoint.status, endpoint.code)}
+                      detail={`${endpoint.detail}${endpoint.detectedEntry ? ` 已解析入口：${endpoint.detectedEntry}` : ""}${endpoint.latencyMs != null ? ` 耗时：${endpoint.latencyMs} ms。` : ""}`}
+                      code={endpoint.code}
+                    />
+                  ))}
+                </div>
+                <div className="settings-institution-capabilities" aria-label="机构资源能力报告">
+                  <div className="settings-institution-capabilities__header">
+                    <div>
+                      <span>全馆能力报告</span>
+                      <strong>{institutionRouteLabel(institutionProbe.capabilities.routeRecommendation)}</strong>
+                    </div>
+                    <small>{institutionProbe.capabilities.catalogEntryCount != null
+                      ? `识别 ${institutionProbe.capabilities.catalogEntryCount.toLocaleString()} 条目录记录`
+                      : "目录数量待公开入口解析"}</small>
+                  </div>
+                  <div className="settings-institution-capabilities__grid">
+                    <InstitutionCapability label="统一发现" status={institutionProbe.capabilities.unifiedDiscovery} />
+                    <InstitutionCapability label="题录导出" status={institutionProbe.capabilities.metadataExport} />
+                    <InstitutionCapability label="在线跳转" status={institutionProbe.capabilities.onlineNavigation} />
+                    <InstitutionCapability label="全文解析入口" status={institutionProbe.capabilities.fullTextResolution} />
+                    <InstitutionCapability label="专用适配器" status={institutionProbe.capabilities.dedicatedAdapters} />
+                  </div>
+                  {institutionProbe.catalog.structured ? (
+                    <div className="settings-institution-catalog">
+                      <span>结构化目录样例</span>
+                      <strong>{institutionProbe.catalog.sampleEntries.map((entry) => entry.name).join(" · ")}</strong>
+                      {institutionProbe.catalog.categories.length > 0 ? (
+                        <small>类别：{institutionProbe.catalog.categories.join("、")}</small>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <p>以上是无 Cookie 的入口与能力探测，不代表系统浏览器或应用内会话已经登录。真实会话状态以上方“应用内机构会话”为准。</p>
+                </div>
+              </>
+            ) : (
+              <p className="settings-institution-empty">重新检测只刷新 aTrust 与公开入口状态，不会读取系统浏览器或应用内 WebView 的 Cookie，也不会改变登录状态。</p>
+            )}
+          </section>
+
           <section className="panel-card settings-section">
             <div className="settings-section-header">
               <div>
@@ -8632,12 +13416,12 @@ function AgentReadinessRow({
   code,
 }: {
   label: string;
-  status: "pass" | "repaired" | "fail";
+  status: "pass" | "repaired" | "partial" | "fail";
   summary: string;
   detail: string;
   code?: string;
 }) {
-  const successful = status !== "fail";
+  const successful = status === "pass" || status === "repaired";
   return (
     <div className="settings-agent-readiness__row" data-status={status}>
       <span className="settings-agent-readiness__icon" aria-hidden="true">
@@ -8655,6 +13439,87 @@ function AgentReadinessRow({
           <small>{detail}</small>
         )}
       </div>
+    </div>
+  );
+}
+
+function institutionAuthRowStatus(
+  status?: SideraInstitutionAuthStatus,
+): "pass" | "partial" | "fail" {
+  if (status === "ready") return "pass";
+  if (status === "failed") return "fail";
+  return "partial";
+}
+
+function institutionAuthSummary(status?: SideraInstitutionAuthStatus) {
+  if (status === "ready") return "已就绪";
+  if (status === "starting" || status === "login-required") return "正在登录";
+  if (status === "cancelled") return "已取消";
+  if (status === "failed") return "异常";
+  return "未初始化";
+}
+
+function institutionAuthDetail(
+  auth: SideraInstitutionAuthState | undefined,
+  label: string,
+) {
+  if (!auth || auth.status === "idle") {
+    return `${label}会话尚未创建；系统浏览器登录状态不会迁移到 Sidera。`;
+  }
+  if (auth.status === "ready") {
+    return `${label}会话可用${auth.currentHost ? `，当前站点：${auth.currentHost}` : ""}。`;
+  }
+  return auth.message;
+}
+
+function institutionClientRowStatus(status: SideraInstitutionClientStatus): "pass" | "partial" | "fail" {
+  if (status === "installed-running" || status === "running-path-unknown") return "pass";
+  if (status === "installed-stopped") return "partial";
+  return "fail";
+}
+
+function institutionClientSummary(status: SideraInstitutionClientStatus) {
+  if (status === "installed-running") return "已安装并运行";
+  if (status === "running-path-unknown") return "正在运行";
+  if (status === "installed-stopped") return "已安装，未运行";
+  if (status === "detection-failed") return "检测失败";
+  return "未检测到";
+}
+
+function institutionEndpointRowStatus(status: SideraInstitutionEndpointStatus): "pass" | "partial" | "fail" {
+  if (status === "native-direct") return "pass";
+  if (status === "browser-required" || status === "unresolved") return "partial";
+  return "fail";
+}
+
+function institutionEndpointSummary(status: SideraInstitutionEndpointStatus, code?: string) {
+  if (code === "SIDERA_INSTITUTION_DATABASE_SSO_REQUIRED") return "正式 SSO 路由已解析";
+  if (code === "SIDERA_INSTITUTION_DISCOVERY_UNRESOLVED") return "公开统一发现入口尚未解析";
+  if (code === "SIDERA_INSTITUTION_DATABASE_CONFIG_UNRESOLVED") return "正式 SSO 入口待解析";
+  if (code === "SIDERA_INSTITUTION_DATABASE_CONFIG_FETCH_FAILED") return "官网配置读取失败";
+  if (status === "native-direct") return "后台可直接读取";
+  if (status === "browser-required") return "需要交互式页面确认";
+  if (status === "unresolved") return "入口待解析";
+  return "当前不可达";
+}
+
+function institutionCapabilityLabel(status: SideraInstitutionCapabilityStatus) {
+  if (status === "available") return "可用";
+  if (status === "browser-required") return "交互页面确认";
+  return "待确认";
+}
+
+function institutionRouteLabel(route: SideraInstitutionProbeResult["capabilities"]["routeRecommendation"]) {
+  if (route === "direct-unified-search") return "建议：统一检索直连";
+  if (route === "hybrid") return "建议：元数据直连＋浏览器全文";
+  return "建议：可见浏览器＋题录导入";
+}
+
+function InstitutionCapability({ label, status }: { label: string; status: SideraInstitutionCapabilityStatus }) {
+  return (
+    <div data-status={status}>
+      <span>{label}</span>
+      <strong>{institutionCapabilityLabel(status)}</strong>
     </div>
   );
 }
@@ -9041,7 +13906,7 @@ const PaperDetailEditor = forwardRef<PaperDetailEditorHandle, {
           <label className="field-label">学科<input className="field-control h-10 px-3" value={draft.field} onChange={(event) => setDraft({ ...draft, field: event.target.value })} /></label>
           <label className="field-label">
             来源
-            <SelectControl className="h-10 text-sm" value={draft.source} options={(["openalex", "arxiv", "cnki", "local"] as SourceKind[]).map((source) => ({ value: source, label: source }))} onChange={(value) => setDraft({ ...draft, source: value as SourceKind })} />
+            <SelectControl className="h-10 text-sm" value={draft.source} options={paperSourceOptions} onChange={(value) => setDraft({ ...draft, source: value as SourceKind })} />
           </label>
         </div>
         <label className="field-label">DOI<input className="field-control h-10 px-3" value={draft.doi ?? ""} onChange={(event) => setDraft({ ...draft, doi: event.target.value })} /></label>
@@ -9061,6 +13926,348 @@ const PaperDetailEditor = forwardRef<PaperDetailEditorHandle, {
     </>
   );
 });
+
+const documentVersionKindLabels: Record<SideraDocumentVersionKind, string> = {
+  "publisher-version": "出版社正式版",
+  "author-manuscript": "作者稿",
+  scan: "扫描版",
+  "user-import": "用户导入版",
+  unknown: "版本类型待确认",
+};
+
+function PaperDocumentPanel({
+  databaseDir,
+  projectId,
+  paper,
+  refreshRevision = 0,
+  onReadVersion,
+  onInstitutionSourceOpened,
+  onNotice,
+}: {
+  databaseDir?: string;
+  projectId: string;
+  paper: Paper;
+  refreshRevision?: number;
+  onReadVersion: (versionId: string) => void;
+  onInstitutionSourceOpened: () => void;
+  onNotice: AppNoticeHandler;
+}) {
+  const [snapshot, setSnapshot] = useState<SideraPaperDocumentSnapshot | null>(null);
+  const [downloads, setDownloads] = useState<SideraInstitutionDownloadRecord[]>([]);
+  const [selectedDownloadId, setSelectedDownloadId] = useState("");
+  const [localVersionKind, setLocalVersionKind] = useState<SideraDocumentVersionKind>("user-import");
+  const [institutionVersionKind, setInstitutionVersionKind] = useState<SideraDocumentVersionKind>("unknown");
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const loadSequenceRef = useRef(0);
+
+  const completedPdfDownloads = useMemo(
+    () => downloads.filter((record) => (
+      record.status === "complete"
+      && (record.fileName.toLowerCase().endsWith(".pdf") || record.mimeType?.toLowerCase().includes("pdf"))
+    )),
+    [downloads],
+  );
+
+  const load = useCallback(async () => {
+    const sequence = ++loadSequenceRef.current;
+    setLoading(true);
+    setError("");
+    try {
+      const { snapshot: nextSnapshot, downloads: nextDownloads } = await requestPaperDocumentPanelOnce({
+        databaseDir,
+        projectId,
+        paperId: paper.id,
+        refreshRevision,
+      });
+      if (sequence !== loadSequenceRef.current) return;
+      setSnapshot(nextSnapshot);
+      setDownloads(nextDownloads);
+      const available = nextDownloads.filter((record) => (
+        record.status === "complete"
+        && (record.fileName.toLowerCase().endsWith(".pdf") || record.mimeType?.toLowerCase().includes("pdf"))
+      ));
+      setSelectedDownloadId((current) => (
+        available.some((record) => record.id === current) ? current : (available[0]?.id ?? "")
+      ));
+    } catch (loadError) {
+      if (sequence !== loadSequenceRef.current) return;
+      setError(loadError instanceof Error ? loadError.message : "全文记录读取失败。");
+    } finally {
+      if (sequence === loadSequenceRef.current) setLoading(false);
+    }
+  }, [databaseDir, paper.id, projectId, refreshRevision]);
+
+  useEffect(() => {
+    setSnapshot(null);
+    setDownloads([]);
+    setSelectedDownloadId("");
+    void load();
+    return () => {
+      loadSequenceRef.current += 1;
+    };
+  }, [load]);
+
+  async function importLocalPdf() {
+    const filePath = await choosePdfFile(`为《${paper.title}》选择 PDF 全文`);
+    if (!filePath) return;
+    setBusy("local");
+    setError("");
+    try {
+      const next = await importLocalPaperDocument({
+        databaseDir,
+        projectId,
+        paperId: paper.id,
+        filePath,
+        versionKind: localVersionKind,
+      });
+      setSnapshot(next);
+      onNotice("本地 PDF 已按内容哈希保存并关联到当前论文。", "success");
+    } catch (importError) {
+      const message = importError instanceof Error ? importError.message : "本地 PDF 导入失败。";
+      setError(message);
+      onNotice(message, "error");
+      await load();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function attachInstitutionPdf() {
+    if (!selectedDownloadId) return;
+    setBusy("institution");
+    setError("");
+    try {
+      const next = await attachInstitutionDownloadToPaper({
+        databaseDir,
+        projectId,
+        paperId: paper.id,
+        downloadId: selectedDownloadId,
+        versionKind: institutionVersionKind,
+      });
+      setSnapshot(next);
+      onNotice("机构 PDF 已验证并形成不可变文档版本。", "success");
+    } catch (attachError) {
+      const message = attachError instanceof Error ? attachError.message : "机构 PDF 关联失败。";
+      setError(message);
+      onNotice(message, "error");
+      await load();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openInstitutionSource(source: SideraPaperSourceRecord) {
+    setBusy(`source:${source.id}`);
+    setError("");
+    try {
+      await openInstitutionPaperSource({
+        databaseDir,
+        projectId,
+        paperId: paper.id,
+        sourceRecordId: source.id,
+      });
+      onInstitutionSourceOpened();
+      onNotice("已打开当前论文的机构来源。请在官方页面完成单篇全文跳转和下载，随后回到论文详情关联 PDF。", "info");
+    } catch (openError) {
+      const message = openError instanceof Error ? openError.message : "机构来源打开失败。";
+      setError(message);
+      onNotice(message, "error");
+      await load();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openVersion(versionId: string) {
+    try {
+      await openPaperDocumentVersion({ databaseDir, projectId, paperId: paper.id, versionId });
+    } catch (openError) {
+      onNotice(openError instanceof Error ? openError.message : "原始文档打开失败。", "error");
+    }
+  }
+
+  return (
+    <div className="mt-6 border-t border-line pt-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="panel-title"><FileText size={17} />全文与文档版本</div>
+          <p className="mt-1 text-xs leading-5 text-ink/45">原始 PDF 按 SHA-256 不可变保存；相同内容不会重复占用空间。</p>
+        </div>
+        <button className="secondary-action h-8 gap-2 px-3" onClick={() => void load()} disabled={loading || Boolean(busy)}>
+          <RefreshCw className={loading ? "animate-spin" : ""} size={14} />刷新
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 xl:grid-cols-2">
+        <div className="flex min-w-0 gap-2">
+          <select
+            className="field-control h-10 min-w-0 flex-1 px-3 text-xs"
+            value={localVersionKind}
+            onChange={(event) => setLocalVersionKind(event.target.value as SideraDocumentVersionKind)}
+            aria-label="选择本地全文版本类型"
+          >
+            {Object.entries(documentVersionKindLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          <button className="primary-action h-10 shrink-0 gap-2 px-3" type="button" onClick={() => void importLocalPdf()} disabled={Boolean(busy)}>
+            {busy === "local" ? <Loader2 className="animate-spin" size={15} /> : <FileUp size={15} />}
+            导入本地全文
+          </button>
+        </div>
+        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(140px,0.55fr)_auto]">
+          <select
+            className="field-control h-10 min-w-0 flex-1 px-3 text-xs"
+            value={selectedDownloadId}
+            onChange={(event) => setSelectedDownloadId(event.target.value)}
+            aria-label="选择已完成的机构 PDF 下载"
+          >
+            <option value="">{completedPdfDownloads.length > 0 ? "选择已完成的机构 PDF" : "暂无已完成的机构 PDF"}</option>
+            {completedPdfDownloads.map((record) => (
+              <option key={record.id} value={record.id}>{record.fileName}</option>
+            ))}
+          </select>
+          <select
+            className="field-control h-10 min-w-0 px-3 text-xs"
+            value={institutionVersionKind}
+            onChange={(event) => setInstitutionVersionKind(event.target.value as SideraDocumentVersionKind)}
+            aria-label="选择机构全文版本类型"
+          >
+            {Object.entries(documentVersionKindLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          <button className="secondary-action h-10 shrink-0 gap-2 px-3" type="button" onClick={() => void attachInstitutionPdf()} disabled={!selectedDownloadId || Boolean(busy)}>
+            {busy === "institution" ? <Loader2 className="animate-spin" size={15} /> : <Database size={15} />}
+            关联已下载机构 PDF
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="mt-3 rounded-[7px] border border-danger/30 bg-danger/5 px-3 py-2 text-xs leading-5 text-danger">{error}</div>}
+
+      <div className="mt-5">
+        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-ink/45">论文来源与机构全文 · {snapshot?.sources.length ?? 0}</div>
+        {loading && !snapshot ? (
+          <div className="mt-3 flex items-center gap-2 text-xs text-ink/45"><Loader2 className="animate-spin" size={14} />正在读取来源记录</div>
+        ) : (snapshot?.sources.length ?? 0) === 0 ? (
+          <p className="mt-3 text-xs leading-5 text-ink/40">当前论文没有可追溯的机构来源记录；仍可导入已有本地 PDF。</p>
+        ) : (
+          <div className="mt-3 grid gap-2">
+            {snapshot?.sources.map((source) => {
+              const actionLabel = source.fullTextStatus === "available"
+                ? "获取机构全文"
+                : source.fullTextStatus === "link-only"
+                  ? "打开全文解析"
+                  : "核对机构题录";
+              return (
+                <div key={source.id} className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-line bg-surface/55 p-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-ink">{source.sourceDatabase || "机构来源"}</div>
+                    <div className="mt-1 text-xs text-ink/45">
+                      {source.recordType || "记录类型待确认"} · 全文状态 {source.fullTextStatus || "unknown"} · {source.producerVersion}
+                    </div>
+                    {source.displayLocator && <code className="mt-2 block break-all text-[11px] text-ink/35">{source.displayLocator}</code>}
+                  </div>
+                  <button
+                    className="secondary-action h-8 shrink-0 gap-2 px-3"
+                    type="button"
+                    onClick={() => void openInstitutionSource(source)}
+                    disabled={!source.canOpenRecord || Boolean(busy)}
+                  >
+                    {busy === `source:${source.id}` ? <Loader2 className="animate-spin" size={14} /> : <Globe2 size={14} />}
+                    {actionLabel}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-5">
+        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-ink/45">文档版本 · {snapshot?.versions.length ?? 0}</div>
+        {loading && !snapshot ? (
+          <div className="mt-3 flex items-center gap-2 text-xs text-ink/45"><Loader2 className="animate-spin" size={14} />正在读取文档记录</div>
+        ) : (snapshot?.versions.length ?? 0) === 0 ? (
+          <p className="mt-3 text-xs leading-5 text-ink/40">当前论文尚未关联 PDF。可导入本地文件，或先在机构浏览器中显式下载单篇 PDF。</p>
+        ) : (
+          <div className="mt-3 grid gap-2">
+            {snapshot?.versions.map((version) => (
+              <div key={version.id} className="rounded-[8px] border border-line bg-surface/55 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-ink">{version.originalFileName ?? "PDF 文档"}</div>
+                    <div className="mt-1 text-xs text-ink/45">
+                      {formatInstitutionFileSize(version.byteSize)} · {documentVersionKindLabels[version.versionKind] ?? "版本类型待确认"} · {version.firstAcquisitionKind === "local-import" ? "本地导入" : "机构获取"}
+                    </div>
+                    <code className="mt-2 block break-all text-[11px] text-ink/35">SHA-256 {version.sha256}</code>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <button
+                      className="primary-action h-8 gap-2 px-3"
+                      type="button"
+                      data-document-reader-version={version.id}
+                      onClick={() => onReadVersion(version.id)}
+                    >
+                      <BookOpen size={14} />阅读全文
+                    </button>
+                    <button className="secondary-action h-8 gap-2 px-3" type="button" onClick={() => void openVersion(version.id)}>
+                      打开原始文件
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {(snapshot?.acquisitions.length ?? 0) > 0 && (
+        <div className="mt-5">
+          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-ink/45">获取记录</div>
+          <div className="mt-3 grid gap-2">
+            {snapshot?.acquisitions.map((record) => (
+              <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 rounded-[7px] border border-line px-3 py-2 text-xs">
+                <div className="min-w-0">
+                  <div className={record.status === "complete" ? "text-ink/65" : "text-danger"}>
+                    {record.kind === "local-import" ? "本地导入" : "机构获取"} · {record.status === "complete" ? "已完成" : "失败"} · {record.stage}
+                  </div>
+                  <div className="mt-1 break-all text-ink/35">
+                    {record.originLabel ?? record.id}{record.errorCode ? ` · ${record.errorCode}` : ""}
+                  </div>
+                </div>
+                {record.kind === "institution-download" && record.status === "failed" && record.retryable && (
+                  record.sourceRecordId && ["source-route", "source-navigation"].includes(record.stage) ? (
+                    <button
+                      className="secondary-action h-8 shrink-0 gap-2 px-3"
+                      type="button"
+                      onClick={() => {
+                        const source = snapshot?.sources.find((candidate) => candidate.id === record.sourceRecordId);
+                        if (source) void openInstitutionSource(source);
+                      }}
+                      disabled={Boolean(busy) || !snapshot?.sources.some((candidate) => candidate.id === record.sourceRecordId)}
+                    >
+                      {busy === `source:${record.sourceRecordId}` ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                      重试打开来源
+                    </button>
+                  ) : selectedDownloadId ? (
+                    <button className="secondary-action h-8 shrink-0 gap-2 px-3" type="button" onClick={() => void attachInstitutionPdf()} disabled={Boolean(busy)}>
+                      {busy === "institution" ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                      重试关联
+                    </button>
+                  ) : null
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ReportOptionsPanel({ options, onChange }: { options: ReportGenerationOptions; onChange: (options: ReportGenerationOptions) => void }) {
   const [userTemplates, setUserTemplates] = useState<AiParameterTemplate[]>([]);

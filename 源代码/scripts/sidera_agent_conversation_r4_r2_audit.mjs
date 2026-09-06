@@ -4,11 +4,12 @@ import path from "node:path";
 
 const root = process.cwd();
 const read = (file) => readFile(path.join(root, file), "utf8");
-const [app, globalStyles, dialogStyles, page, cargoManifest, harnessManifest, packageText] = await Promise.all([
+const [app, globalStyles, dialogStyles, page, titleBar, cargoManifest, harnessManifest, packageText] = await Promise.all([
   read("src/App.tsx"),
   read("src/index.css"),
   read("src/components/AgentDualBackgroundPage.css"),
   read("src/components/AgentDualBackgroundPage.tsx"),
+  read("src/components/SideraTitleBar.tsx"),
   read("src-tauri/Cargo.toml"),
   read("src-tauri/conversation-store-test-harness/Cargo.toml"),
   read("package.json"),
@@ -70,6 +71,25 @@ assert.ok(dialogStyles.includes("prefers-reduced-transparency"));
 assert.ok(dialogStyles.includes("forced-colors: active"));
 assert.ok(dialogStyles.includes("@supports not ((backdrop-filter"));
 assert.ok(page.includes('`${26 - bounded * 11}px`'), "return geometry must interpolate between 26px and 15px radii");
+assert.ok(page.includes("windowGeometryTransitionActive || passiveWindowResizeActive"));
+assert.ok(page.includes('window.addEventListener("resize", handleResize)'));
+assert.ok(page.includes("SIDERA_WINDOW_RESIZE_QUIET_MS = 120"));
+assert.ok(page.includes("SIDERA_WINDOW_RESIZE_FALLBACK_MS = 900"));
+assert.ok(page.includes("passiveWindowResizeActive"));
+assert.ok(page.includes("resolveSideraComposerHeight(textarea.value, textarea.scrollHeight)"));
+assert.match(
+  page,
+  /useLayoutEffect\(\(\) => \{[\s\S]*?windowGeometryTransitionActive[\s\S]*?passiveWindowResizeActive[\s\S]*?resizeComposerTextarea\(textarea\);/u,
+  "composer height must be recalculated before text returns after window geometry settles",
+);
+assert.ok(titleBar.includes("onBeforeToggleMaximize?: () => Promise<void>"));
+assert.ok(titleBar.includes("onAfterToggleMaximize?: () => void"));
+assert.ok(titleBar.includes("await waitForWindowResizeSettle()"));
+assert.ok(titleBar.includes("maximizeToggleActiveRef.current"));
+assert.ok(app.includes("const handleBeforeToggleMaximize = useCallback(async () =>"));
+assert.ok(app.includes("onBeforeToggleMaximize={handleBeforeToggleMaximize}"));
+assert.ok(app.includes("onAfterToggleMaximize={handleAfterToggleMaximize}"));
+assert.ok(app.includes("windowGeometryTransitionActive={windowGeometryTransitionActive}"));
 
 assert.match(cargoManifest, /\[lib\][\s\S]*?test\s*=\s*false/u, "the Tauri lib test target must remain disabled");
 assert.ok(cargoManifest.includes('"conversation-store-test-harness"'));
@@ -84,6 +104,8 @@ console.log(JSON.stringify({
   navigation: "background-turn-continuity",
   titlebarActivity: ["generating", "awaiting-approval", "complete", "failed"],
   material: "clear-optical-shell-with-continuous-smoked-reading-plane",
+  windowGeometry: "hide-until-resize-quiet-and-two-raf",
+  composerRemeasure: "prepaint-after-window-settle",
   conversationTests: "tauri-free-canonical-harness",
   providerCalls: 0,
   productAcceptance: "UNVERIFIED",

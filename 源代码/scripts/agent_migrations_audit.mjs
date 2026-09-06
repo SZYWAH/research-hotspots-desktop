@@ -4,14 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 const core = readFileSync(new URL("../src-tauri/core/src/lib.rs", import.meta.url), "utf8");
 const store = readFileSync(new URL("../src-tauri/core/src/agent_store.rs", import.meta.url), "utf8");
 const checks = {
-  schema13: /LIBRARY_SCHEMA_VERSION:\s*i64\s*=\s*13/.test(core),
+  schema14: /LIBRARY_SCHEMA_VERSION:\s*i64\s*=\s*14/.test(core),
   supportsSchema8: /MIN_SUPPORTED_LIBRARY_SCHEMA_VERSION:\s*i64\s*=\s*8/.test(core),
   rejectsNewer: store.includes("LIBRARY_SCHEMA_TOO_NEW"),
   onlineBackup: store.includes("Backup::new"),
-  v8Fixture: store.includes("v8_seed_shape_migrates_directly_to_v13"),
-  v9Fixture: store.includes("v9_file_migrates_to_v13_with_backup_and_new_contract"),
-  v10ThroughV12Fixture: store.includes("v10_v11_and_v12_files_migrate_to_v13_without_losing_v20_or_agent_state"),
-  idempotentV13: store.includes("repeated_v13_open_is_idempotent"),
+  v8Fixture: store.includes("v8_seed_shape_migrates_directly_to_v14"),
+  v9Fixture: store.includes("v9_file_migrates_to_v14_with_backup_and_new_contract"),
+  v10ThroughV13Fixture: store.includes("v10_through_v13_files_migrate_to_v14_without_losing_v20_or_agent_state"),
+  idempotentV14: store.includes("repeated_v14_open_is_idempotent"),
 };
 const manifestPath = new URL("../release-assets/default-library/default-library-manifest.json", import.meta.url);
 if (existsSync(manifestPath)) {
@@ -24,7 +24,7 @@ if (existsSync(manifestPath)) {
     database.close();
     checks.releaseDatabaseSchema11 = version === 11;
     checks.releaseHasNoAgentHistory = runtimeRows === 0;
-  } else if (manifest.appVersion === "0.22.0-beta.2") {
+  } else if (["0.22.0-beta.2", "0.22.0-beta.3"].includes(manifest.appVersion)) {
     checks.releaseManifestSchema13 = manifest.manifestSchemaVersion === 5
       && manifest.generatorVersion === "semantic-seed-5"
       && manifest.databaseSchemaVersion === 13;

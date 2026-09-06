@@ -6,11 +6,21 @@ import {
   resolveSideraCachePolicy,
   SIDERA_CACHE_POLICY_VERSION,
 } from "../src/lib/sideraCachePolicy.ts";
+import {
+  resolveSideraComposerHeight,
+  SIDERA_COMPOSER_MAX_HEIGHT_PX,
+  SIDERA_COMPOSER_MIN_HEIGHT_PX,
+  SIDERA_COMPOSER_TEXTAREA_MAX_HEIGHT_PX,
+  SIDERA_COMPOSER_TEXTAREA_MIN_HEIGHT_PX,
+  SIDERA_COMPOSER_TRACK_PADDING_BLOCK_PX,
+} from "../src/lib/sideraComposerLayout.ts";
 
 const root = process.cwd();
 const read = (file) => readFile(path.join(root, file), "utf8");
-const [app, types, settingsStore, cachePolicy, bridge, runtime, streamGate, harness, packageText] = await Promise.all([
+const [app, page, dialogStyles, types, settingsStore, cachePolicy, bridge, runtime, streamGate, harness, packageText] = await Promise.all([
   read("src/App.tsx"),
+  read("src/components/AgentDualBackgroundPage.tsx"),
+  read("src/components/AgentDualBackgroundPage.css"),
   read("src/types.ts"),
   read("src/data/researchStore.ts"),
   read("src/lib/sideraCachePolicy.ts"),
@@ -47,6 +57,32 @@ assert.deepEqual(resolveSideraCachePolicy({
   migrated: false,
 });
 
+assert.equal(SIDERA_COMPOSER_MIN_HEIGHT_PX, 42);
+assert.equal(SIDERA_COMPOSER_MAX_HEIGHT_PX, 100);
+assert.equal(SIDERA_COMPOSER_TRACK_PADDING_BLOCK_PX, 6);
+assert.equal(SIDERA_COMPOSER_TEXTAREA_MIN_HEIGHT_PX, 20);
+assert.equal(SIDERA_COMPOSER_TEXTAREA_MAX_HEIGHT_PX, 88);
+assert.deepEqual(resolveSideraComposerHeight("", 96), {
+  heightPx: 42,
+  textareaHeightPx: 20,
+  overflowY: "hidden",
+});
+assert.deepEqual(resolveSideraComposerHeight("单行草稿", 20), {
+  heightPx: 42,
+  textareaHeightPx: 20,
+  overflowY: "hidden",
+});
+assert.deepEqual(resolveSideraComposerHeight("第一行\n第二行", 40), {
+  heightPx: 52,
+  textareaHeightPx: 40,
+  overflowY: "hidden",
+});
+assert.deepEqual(resolveSideraComposerHeight("超长多行草稿", 144), {
+  heightPx: 100,
+  textareaHeightPx: 88,
+  overflowY: "auto",
+});
+
 assert.ok(types.includes("sideraCachePolicyVersion: number"));
 assert.ok(cachePolicy.includes('sideraCacheRetention === "auto" ? "auto" : "long"'));
 assert.ok(settingsStore.includes('sideraCacheRetention: "long"'));
@@ -72,6 +108,12 @@ assert.match(
   /event\.type === "assistant-replace"[\s\S]*?markdown: event\.markdown[\s\S]*?\}\), true\);/u,
   "assistant replacement must overwrite and checkpoint immediately",
 );
+assert.ok(page.includes("sideraPrefersReducedMotion() ? 1 : 2"));
+assert.match(
+  dialogStyles,
+  /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.agent-dual-dialog__reading-shell,[\s\S]*?\.agent-dual-dialog > \*,/u,
+  "reduced motion must collapse timing without leaving dialog content hidden",
+);
 
 assert.equal(
   pkg.scripts["audit:sidera-agent-conversation-r4-r3"],
@@ -86,6 +128,8 @@ console.log(JSON.stringify({
   explicitCompatibilityAfterMigration: "auto",
   firstDelta: "immediate",
   toolPrelude: "replace-on-toolcall-start",
+  reducedMotion: "one-stable-frame-no-timed-text-delay",
+  composerHeight: "empty-42-content-clamped-to-100",
   providerCalls: 0,
   productAcceptance: "UNVERIFIED",
 }, null, 2));

@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, isTauri } from "@tauri-apps/api/core";
 import type {
   App17GalaxyPayload,
   App17GalaxySyncResult,
@@ -45,6 +45,511 @@ export type PaperFileImportStart = {
   fileName: string;
 };
 
+export type SideraImportCandidateClassification = "new" | "merge" | "conflict" | "invalid";
+export type SideraImportDecisionKind = "accept-new" | "accept-merge" | "keep-separate" | "skip" | "unresolved";
+export type SideraImportReadFaultTarget = "batch-list" | "commit-status" | "commit-history";
+
+export type SideraIdentityEvidence = {
+  kind: string;
+  value: string;
+  label: string;
+  rank: number;
+};
+
+export type SideraIdentityMatch = {
+  paperId: string;
+  title: string;
+  matchedBy: string[];
+  preferred: boolean;
+};
+
+export type SideraImportDecision = {
+  kind: SideraImportDecisionKind;
+  targetPaperId?: string;
+  note?: string;
+  updatedAtMs: number;
+};
+
+export type SideraImportCandidate = {
+  id: string;
+  batchId: string;
+  rowIndex: number;
+  title: string;
+  authors: string[];
+  firstAuthor?: string;
+  year?: number;
+  doi?: string;
+  sourceDatabase?: string;
+  providerRecordId?: string;
+  canonicalUrl?: string;
+  venue?: string;
+  abstract?: string;
+  classification: SideraImportCandidateClassification;
+  invalidReason?: string;
+  identityEvidence: SideraIdentityEvidence[];
+  identityMatches: SideraIdentityMatch[];
+  decision?: SideraImportDecision;
+};
+
+export type SideraImportReviewCounts = {
+  total: number;
+  newCount: number;
+  mergeCount: number;
+  conflictCount: number;
+  invalidCount: number;
+  decidedCount: number;
+};
+
+export type SideraImportReviewBatch = {
+  id: string;
+  projectId: string;
+  fileName: string;
+  format: string;
+  status: "active" | "discarded" | "committing" | "committed" | "commit-failed" | "rolled-back";
+  batchVersion: number;
+  baseLibraryRevision?: number;
+  beforeLibraryRevision?: number;
+  afterLibraryRevision?: number;
+  commitId?: string;
+  commitCounts?: SideraImportCommitCounts;
+  completedAtMs?: number;
+  rolledBackAtMs?: number;
+  errorCode?: string;
+  counts: SideraImportReviewCounts;
+  createdAtMs: number;
+  updatedAtMs: number;
+  candidates: SideraImportCandidate[];
+};
+
+export type SideraImportCommitFieldAction =
+  | "insert"
+  | "fill-empty"
+  | "preserve-existing"
+  | "unchanged"
+  | "skip";
+
+export type SideraImportCommitAction = "insert" | "merge" | "keep-separate" | "skip";
+
+export type SideraImportCommitCounts = {
+  total: number;
+  insertCount: number;
+  mergeCount: number;
+  keepSeparateCount: number;
+  skipCount: number;
+  unresolvedCount: number;
+  invalidCount: number;
+  changedCount: number;
+};
+
+export type SideraImportCommitFieldChange = {
+  field: string;
+  existingValue?: string;
+  incomingValue?: string;
+  action: SideraImportCommitFieldAction;
+};
+
+export type SideraImportCommitPreviewItem = {
+  candidateId: string;
+  rowIndex: number;
+  decision?: SideraImportDecisionKind;
+  targetPaperId?: string;
+  effectivePaperId?: string;
+  action: SideraImportCommitAction;
+  identityEvidence: SideraIdentityEvidence[];
+  fieldChanges: SideraImportCommitFieldChange[];
+  blockingCodes: string[];
+};
+
+export type SideraImportCommitPreview = {
+  previewId: string;
+  previewHash: string;
+  projectId: string;
+  batchId: string;
+  batchVersion: number;
+  baseRevision?: number;
+  expectedRevision: number;
+  generatedAtMs: number;
+  counts: SideraImportCommitCounts;
+  items: SideraImportCommitPreviewItem[];
+};
+
+export type SideraImportCommitItemResult = {
+  candidateId: string;
+  rowIndex: number;
+  action: SideraImportCommitAction;
+  paperId?: string;
+  sourceRecordId?: string;
+};
+
+export type SideraImportCommitResult = {
+  commitId: string;
+  clientCommitId: string;
+  projectId: string;
+  batchId: string;
+  status: "committed" | "rolled-back";
+  beforeRevision: number;
+  afterRevision: number;
+  paperCountBefore: number;
+  paperCountAfter: number;
+  counts: SideraImportCommitCounts;
+  items: SideraImportCommitItemResult[];
+  idempotent: boolean;
+  completedAtMs: number;
+};
+
+export type SideraImportCommitStatus = {
+  projectId: string;
+  batchId: string;
+  batchStatus: SideraImportReviewBatch["status"];
+  batchVersion: number;
+  commitId?: string;
+  clientCommitId?: string;
+  beforeRevision?: number;
+  afterRevision?: number;
+  counts?: SideraImportCommitCounts;
+  paperIds?: string[];
+  completedAtMs?: number;
+  rolledBackAtMs?: number;
+  rollbackRevision?: number;
+  errorCode?: string;
+};
+
+export type SideraImportCommitHistory = {
+  entries: SideraImportCommitStatus[];
+};
+
+export type SideraImportRollbackConflict = {
+  candidateId: string;
+  paperId: string;
+  code: string;
+  fields: string[];
+};
+
+export type SideraImportRollbackResult = {
+  commitId: string;
+  projectId: string;
+  batchId: string;
+  status: "rolled-back" | "blocked";
+  beforeRevision: number;
+  rollbackRevision?: number;
+  rolledBackAtMs?: number;
+  restoredCount: number;
+  deletedCount: number;
+  rollbackConflicts: SideraImportRollbackConflict[];
+};
+
+export type SideraDocumentVersionKind =
+  | "publisher-version"
+  | "author-manuscript"
+  | "scan"
+  | "user-import"
+  | "unknown";
+
+export type SideraDocumentVersion = {
+  id: string;
+  sha256: string;
+  mimeType: string;
+  byteSize: number;
+  originalFileName?: string;
+  firstAcquisitionKind: "local-import" | "institution-download" | string;
+  versionKind: SideraDocumentVersionKind;
+  createdAtMs: number;
+};
+
+export type SideraDocumentAcquisitionRecord = {
+  id: string;
+  sourceRecordId?: string;
+  kind: "local-import" | "institution-download" | string;
+  status: "complete" | "failed" | string;
+  stage: string;
+  originLabel?: string;
+  safeLocator?: string;
+  authorizationState: string;
+  documentVersionId?: string;
+  errorCode?: string;
+  retryable: boolean;
+  createdAtMs: number;
+  completedAtMs: number;
+};
+
+export type SideraPaperSourceRecord = {
+  id: string;
+  sourceDatabase: string;
+  producerVersion: string;
+  providerRecordId?: string;
+  recordType?: string;
+  fullTextStatus: "available" | "link-only" | "unavailable" | "unknown" | string;
+  displayLocator?: string;
+  canOpenRecord: boolean;
+};
+
+export type SideraPaperDocumentSnapshot = {
+  projectId: string;
+  paperId: string;
+  documentId?: string;
+  versions: SideraDocumentVersion[];
+  acquisitions: SideraDocumentAcquisitionRecord[];
+  sources: SideraPaperSourceRecord[];
+};
+
+export type SideraDocumentParseState =
+  | "queued"
+  | "running"
+  | "ready"
+  | "needs-ocr"
+  | "failed"
+  | "cancelled"
+  | "stale";
+
+export type SideraDocumentParseSnapshot = {
+  runId: string;
+  projectId: string;
+  paperId: string;
+  documentVersionId: string;
+  documentSha256: string;
+  parserVersion: string;
+  state: SideraDocumentParseState;
+  expectedPageCount: number;
+  pagesCommitted: number;
+  textBearingPages: number;
+  errorCode?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  finishedAtMs?: number;
+};
+
+export type SideraDocumentDerivedPage = {
+  pageIndex: number;
+  pageLabel: string;
+  width: number;
+  height: number;
+  textLengthUtf16: number;
+  spanCount: number;
+  anchorCount: number;
+};
+
+export type SideraDocumentReaderState = {
+  projectId: string;
+  paperId: string;
+  documentVersionId: string;
+  pageIndex: number;
+  scrollOffset: number;
+  zoom: number;
+  updatedAtMs: number;
+};
+
+export type SideraDocumentReaderManifest = {
+  projectId: string;
+  paperId: string;
+  documentId: string;
+  version: {
+    id: string;
+    sha256: string;
+    mimeType: string;
+    byteSize: number;
+    originalFileName?: string;
+    versionKind: SideraDocumentVersionKind;
+  };
+  resourceUri: string;
+  parse?: SideraDocumentParseSnapshot;
+  pages: SideraDocumentDerivedPage[];
+  readerState?: SideraDocumentReaderState;
+};
+
+export type SideraDocumentSearchHit = {
+  pageIndex: number;
+  pageLabel: string;
+  excerpt: string;
+  score: number;
+  anchorId?: string;
+  anchor?: SideraDocumentEvidenceAnchor;
+};
+
+export type SideraDocumentSearchResult = {
+  runId: string;
+  total: number;
+  offset: number;
+  limit: number;
+  hits: SideraDocumentSearchHit[];
+};
+
+export type SideraDocumentTextSpanInput = {
+  text: string;
+  startOffsetUtf16: number;
+  endOffsetUtf16: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type SideraDocumentTextSourceKind = "native" | "ocr";
+
+export type SideraDocumentEvidenceRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type SideraDocumentEvidenceAnchor = {
+  id: string;
+  documentVersionId: string;
+  documentSha256: string;
+  pageIndex: number;
+  pageLabel: string;
+  sourceKind: SideraDocumentTextSourceKind;
+  startOffsetUtf16: number;
+  endOffsetUtf16: number;
+  quote: string;
+  quoteSha256: string;
+  prefix: string;
+  suffix: string;
+  rects: SideraDocumentEvidenceRect[];
+};
+
+export type SideraDocumentPageTextSpan = SideraDocumentTextSpanInput;
+
+export type SideraDocumentPageText = {
+  documentVersionId: string;
+  documentSha256: string;
+  pageIndex: number;
+  pageLabel: string;
+  sourceKind: SideraDocumentTextSourceKind;
+  text: string;
+  textSha256: string;
+  textLengthUtf16: number;
+  spans: SideraDocumentPageTextSpan[];
+};
+
+export type SideraDocumentEvidenceResolution = "exact" | "reanchored" | "ambiguous" | "missing";
+export type SideraDocumentEvidenceStatus = "active" | "orphaned";
+
+export type SideraDocumentAnnotation = {
+  id: string;
+  projectId: string;
+  paperId: string;
+  documentVersionId: string;
+  documentSha256: string;
+  kind: "highlight" | "note";
+  colorToken: "yellow" | "blue" | "green" | "rose";
+  noteText?: string | null;
+  anchor: SideraDocumentEvidenceAnchor;
+  resolution: SideraDocumentEvidenceResolution;
+  resolvedAnchor?: SideraDocumentEvidenceAnchor | null;
+  status: SideraDocumentEvidenceStatus;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type SideraDocumentSavedEvidence = {
+  id: string;
+  projectId: string;
+  paperId: string;
+  documentVersionId: string;
+  documentSha256: string;
+  label?: string | null;
+  noteText?: string | null;
+  anchor: SideraDocumentEvidenceAnchor;
+  resolution: SideraDocumentEvidenceResolution;
+  resolvedAnchor?: SideraDocumentEvidenceAnchor | null;
+  status: SideraDocumentEvidenceStatus;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type SideraDocumentSourcePreference = {
+  documentVersionId: string;
+  pageIndex?: number | null;
+  preference: "auto" | SideraDocumentTextSourceKind;
+  updatedAtMs: number;
+};
+
+export type SideraDocumentIndexMode = "auto" | "lexical" | "hybrid";
+export type SideraDocumentIndexState =
+  | "queued"
+  | "running"
+  | "paused"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "superseded";
+
+export type SideraDocumentIndexSnapshot = {
+  jobId: string;
+  projectId: string;
+  paperId: string;
+  documentVersionId: string;
+  documentSha256: string;
+  parseRunId: string;
+  requestedMode: SideraDocumentIndexMode;
+  resolvedMode?: Exclude<SideraDocumentIndexMode, "auto"> | null;
+  state: SideraDocumentIndexState;
+  stage: "segmenting" | "embedding" | "complete";
+  segmentCount: number;
+  embeddedCount: number;
+  modelId: string;
+  modelRevision: string;
+  fallbackReason?: string | null;
+  errorCode?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  finishedAtMs?: number | null;
+};
+
+export type SideraDocumentIndexSearchHit = {
+  segmentId: string;
+  pageIndex: number;
+  excerpt: string;
+  score: number;
+  lexicalScore?: number | null;
+  semanticScore?: number | null;
+  anchor: SideraDocumentEvidenceAnchor;
+};
+
+export type SideraDocumentIndexSearchResult = {
+  jobId: string;
+  requestedMode: SideraDocumentIndexMode;
+  resolvedMode: Exclude<SideraDocumentIndexMode, "auto">;
+  fallbackReason?: string | null;
+  total: number;
+  offset: number;
+  limit: number;
+  hits: SideraDocumentIndexSearchHit[];
+};
+
+export type SideraDocumentOcrCapability = {
+  installed: boolean;
+  modelId: string;
+  modelRevision: string;
+  executionProvider: string;
+  maxBatchPages: number;
+  unavailableCode?: string | null;
+};
+
+export type SideraDocumentOcrSnapshot = {
+  jobId: string;
+  projectId: string;
+  paperId: string;
+  documentVersionId: string;
+  documentSha256: string;
+  pageIndex: number;
+  modelId: string;
+  modelRevision: string;
+  state: "awaiting-upload" | "queued" | "running" | "ready" | "failed" | "cancelled" | "superseded";
+  errorCode?: string | null;
+  meanConfidence?: number | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  finishedAtMs?: number | null;
+};
+
+export type SideraDocumentOcrStartResponse = {
+  snapshot: SideraDocumentOcrSnapshot;
+  uploadUrl: string;
+  expiresAtMs: number;
+};
+
 export type LibraryMutationStatus = {
   databaseKey: string;
   operationKind?: string;
@@ -66,7 +571,7 @@ export type SemanticModelingStatus = {
 export type SemanticEmbeddingCapabilities = {
   modelId: string;
   modelRevision: string;
-  modelRoot?: string;
+  modelRoot?: string | null;
   cpuAvailable: boolean;
   gpuAvailable: boolean;
 };
@@ -176,6 +681,11 @@ export type PaperLibraryBackupInspection = {
 
 export type LibrarySetupMode = "seed" | "empty" | "existing";
 
+export type LibrarySchemaContractStatus =
+  | "current-v14"
+  | "known-precontract-v14"
+  | "unknown-invalid-v14";
+
 export type LibrarySetupState = {
   configured: boolean;
   databaseDir?: string;
@@ -214,6 +724,7 @@ export type LibraryLocationValidation = {
   membershipCount: number;
   snapshotId?: string;
   databaseSchemaVersion?: number;
+  schemaContractStatus?: LibrarySchemaContractStatus;
   requiresModeling: boolean;
   message: string;
 };
@@ -231,6 +742,10 @@ export type InitializeLibraryResult = {
   requiresModeling: boolean;
   sha256: string;
   integrityCheck: string;
+  compatibilityRepairApplied: boolean;
+  migrationBackupPath?: string;
+  migrationBackupSha256?: string;
+  schemaContractStatus: LibrarySchemaContractStatus;
   summary: string;
 };
 
@@ -252,6 +767,32 @@ export type CnkiSearchOutput = {
 
 export function isDesktopRuntime() {
   return isTauri();
+}
+
+export function normalizeDesktopInvokeError(error: unknown) {
+  if (error instanceof Error) return error;
+  if (typeof error === "string" && error.trim()) return new Error(error.trim());
+  if (
+    error
+    && typeof error === "object"
+    && "message" in error
+    && typeof error.message === "string"
+    && error.message.trim()
+  ) {
+    return new Error(error.message.trim());
+  }
+  return new Error("桌面命令执行失败。");
+}
+
+async function invoke<T>(
+  command: string,
+  args?: Parameters<typeof tauriInvoke>[1],
+): Promise<T> {
+  try {
+    return await tauriInvoke<T>(command, args);
+  } catch (error) {
+    throw normalizeDesktopInvokeError(error);
+  }
 }
 
 export function isGalaxyVisualReviewMode() {
@@ -308,6 +849,321 @@ export async function choosePaperImportFile(title = "选择 CSV / JSON / JSONL /
   return Array.isArray(selected) ? selected[0] : selected ?? undefined;
 }
 
+export async function choosePdfFile(title = "选择 PDF 全文") {
+  if (!isDesktopRuntime()) return undefined;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title,
+    filters: [{ name: "PDF 文档", extensions: ["pdf"] }],
+  });
+  return Array.isArray(selected) ? selected[0] : selected ?? undefined;
+}
+
+export async function getPaperDocumentSnapshot(input: {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("文档版本仅在桌面应用中可用。");
+  return invoke<SideraPaperDocumentSnapshot>("sidera_document_paper_snapshot", { input });
+}
+
+export async function importLocalPaperDocument(input: {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+  filePath: string;
+  versionKind?: SideraDocumentVersionKind;
+}) {
+  if (!isDesktopRuntime()) throw new Error("本地全文导入仅在桌面应用中可用。");
+  return invoke<SideraPaperDocumentSnapshot>("sidera_document_import_local", { input });
+}
+
+export async function attachInstitutionDownloadToPaper(input: {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+  downloadId: string;
+  versionKind?: SideraDocumentVersionKind;
+}) {
+  if (!isDesktopRuntime()) throw new Error("机构全文关联仅在桌面应用中可用。");
+  return invoke<SideraPaperDocumentSnapshot>("sidera_document_attach_institution_download", { input });
+}
+
+export async function openInstitutionPaperSource(input: {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+  sourceRecordId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("机构来源仅在桌面应用中可打开。");
+  return invoke<void>("sidera_document_open_institution_source", { input });
+}
+
+export async function openPaperDocumentVersion(input: {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+  versionId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("原始文档仅在桌面应用中可打开。");
+  return invoke<void>("sidera_document_open_version", { input });
+}
+
+type SideraDocumentReaderCommonInput = {
+  databaseDir?: string;
+  projectId: string;
+  paperId: string;
+  versionId: string;
+};
+
+export async function getDocumentReaderManifest(input: SideraDocumentReaderCommonInput) {
+  if (!isDesktopRuntime()) throw new Error("全文阅读台仅在桌面应用中可用。");
+  return invoke<SideraDocumentReaderManifest>("sidera_document_reader_manifest", { input });
+}
+
+export async function getDocumentReaderState(input: SideraDocumentReaderCommonInput) {
+  if (!isDesktopRuntime()) return undefined;
+  return invoke<SideraDocumentReaderState | undefined>("sidera_document_reader_state_get", { input });
+}
+
+export async function saveDocumentReaderState(input: SideraDocumentReaderCommonInput & {
+  pageIndex: number;
+  scrollOffset: number;
+  zoom: number;
+}) {
+  if (!isDesktopRuntime()) return;
+  await invoke<void>("sidera_document_reader_state_save", { input });
+}
+
+export async function searchDocumentText(input: SideraDocumentReaderCommonInput & {
+  query: string;
+  limit?: number;
+  offset?: number;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文搜索仅在桌面应用中可用。");
+  return invoke<SideraDocumentSearchResult>("sidera_document_search", { input });
+}
+
+export async function getDocumentPageText(input: SideraDocumentReaderCommonInput & {
+  pageIndex: number;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文页文本仅在桌面应用中可用。");
+  return invoke<SideraDocumentPageText>("sidera_document_page_text", { input });
+}
+
+export async function getDocumentOcrCapabilities() {
+  return invoke<SideraDocumentOcrCapability>("sidera_document_ocr_capabilities");
+}
+
+export async function startDocumentOcr(input: SideraDocumentReaderCommonInput & {
+  pageIndex: number;
+}) {
+  return invoke<SideraDocumentOcrStartResponse>("sidera_document_ocr_start", { input });
+}
+
+export async function getCurrentDocumentOcr(input: SideraDocumentReaderCommonInput & {
+  pageIndex: number;
+}) {
+  return invoke<SideraDocumentOcrSnapshot | null>("sidera_document_ocr_current", { input });
+}
+
+export async function getDocumentOcrSnapshot(input: {
+  databaseDir?: string;
+  jobId: string;
+}) {
+  return invoke<SideraDocumentOcrSnapshot>("sidera_document_ocr_snapshot", { input });
+}
+
+export async function cancelDocumentOcr(input: {
+  databaseDir?: string;
+  jobId: string;
+}) {
+  return invoke<SideraDocumentOcrSnapshot>("sidera_document_ocr_cancel", { input });
+}
+
+export async function listDocumentAnnotations(input: SideraDocumentReaderCommonInput) {
+  if (!isDesktopRuntime()) return [];
+  return invoke<SideraDocumentAnnotation[]>("sidera_document_annotation_list", { input });
+}
+
+export async function saveDocumentAnnotation(input: SideraDocumentReaderCommonInput & {
+  annotationId: string;
+  kind: SideraDocumentAnnotation["kind"];
+  colorToken: SideraDocumentAnnotation["colorToken"];
+  noteText?: string;
+  anchor: SideraDocumentEvidenceAnchor;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文批注仅在桌面应用中可保存。");
+  return invoke<SideraDocumentAnnotation>("sidera_document_annotation_save", { input });
+}
+
+export async function createDocumentAnnotation(input: SideraDocumentReaderCommonInput & {
+  annotationId: string;
+  kind: SideraDocumentAnnotation["kind"];
+  colorToken: SideraDocumentAnnotation["colorToken"];
+  noteText?: string;
+  anchor: SideraDocumentEvidenceAnchor;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文批注仅在桌面应用中可创建。");
+  return invoke<SideraDocumentAnnotation>("sidera_document_annotation_create", { input });
+}
+
+export async function updateDocumentAnnotation(input: SideraDocumentReaderCommonInput & {
+  annotationId: string;
+  kind: SideraDocumentAnnotation["kind"];
+  colorToken: SideraDocumentAnnotation["colorToken"];
+  noteText?: string;
+  anchor: SideraDocumentEvidenceAnchor;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文批注仅在桌面应用中可编辑。");
+  return invoke<SideraDocumentAnnotation>("sidera_document_annotation_update", { input });
+}
+
+export async function deleteDocumentAnnotation(input: SideraDocumentReaderCommonInput & {
+  annotationId: string;
+}) {
+  if (!isDesktopRuntime()) return false;
+  return invoke<boolean>("sidera_document_annotation_delete", { input });
+}
+
+export async function listDocumentSavedEvidence(input: SideraDocumentReaderCommonInput) {
+  if (!isDesktopRuntime()) return [];
+  return invoke<SideraDocumentSavedEvidence[]>("sidera_document_evidence_list", { input });
+}
+
+export async function saveDocumentEvidence(input: SideraDocumentReaderCommonInput & {
+  evidenceId: string;
+  label?: string;
+  noteText?: string;
+  anchor: SideraDocumentEvidenceAnchor;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文证据仅在桌面应用中可保存。");
+  return invoke<SideraDocumentSavedEvidence>("sidera_document_evidence_save", { input });
+}
+
+export async function deleteDocumentEvidence(input: SideraDocumentReaderCommonInput & {
+  evidenceId: string;
+}) {
+  if (!isDesktopRuntime()) return false;
+  return invoke<boolean>("sidera_document_evidence_delete", { input });
+}
+
+export async function getDocumentSourcePreference(input: SideraDocumentReaderCommonInput & {
+  pageIndex?: number;
+}) {
+  if (!isDesktopRuntime()) return undefined;
+  return invoke<SideraDocumentSourcePreference | undefined>(
+    "sidera_document_source_preference_get",
+    { input },
+  );
+}
+
+export async function saveDocumentSourcePreference(input: SideraDocumentReaderCommonInput & {
+  pageIndex?: number;
+  preference: SideraDocumentSourcePreference["preference"];
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文来源偏好仅在桌面应用中可保存。");
+  return invoke<SideraDocumentSourcePreference>("sidera_document_source_preference_save", { input });
+}
+
+export async function startDocumentIndex(input: SideraDocumentReaderCommonInput & {
+  requestedMode?: SideraDocumentIndexMode;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文索引仅在桌面应用中可用。");
+  return invoke<SideraDocumentIndexSnapshot>("sidera_document_index_start", { input });
+}
+
+export async function getCurrentDocumentIndex(input: SideraDocumentReaderCommonInput) {
+  if (!isDesktopRuntime()) return null;
+  return invoke<SideraDocumentIndexSnapshot | null>("sidera_document_index_current", { input });
+}
+
+export async function getDocumentIndexSnapshot(input: SideraDocumentReaderCommonInput & {
+  jobId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文索引状态仅在桌面应用中可用。");
+  return invoke<SideraDocumentIndexSnapshot>("sidera_document_index_snapshot", { input });
+}
+
+export async function pauseDocumentIndex(input: SideraDocumentReaderCommonInput & {
+  jobId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文索引仅在桌面应用中可暂停。");
+  return invoke<SideraDocumentIndexSnapshot>("sidera_document_index_pause", { input });
+}
+
+export async function resumeDocumentIndex(input: SideraDocumentReaderCommonInput & {
+  jobId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文索引仅在桌面应用中可继续。");
+  return invoke<SideraDocumentIndexSnapshot>("sidera_document_index_resume", { input });
+}
+
+export async function cancelDocumentIndex(input: SideraDocumentReaderCommonInput & {
+  jobId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文索引仅在桌面应用中可取消。");
+  return invoke<SideraDocumentIndexSnapshot>("sidera_document_index_cancel", { input });
+}
+
+export async function searchDocumentIndex(input: SideraDocumentReaderCommonInput & {
+  query: string;
+  requestedMode?: SideraDocumentIndexMode;
+  limit?: number;
+  offset?: number;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文索引检索仅在桌面应用中可用。");
+  const { requestedMode, ...commandInput } = input;
+  return invoke<SideraDocumentIndexSearchResult>("sidera_document_search", {
+    input: { ...commandInput, mode: requestedMode },
+  });
+}
+
+export async function startDocumentParse(input: SideraDocumentReaderCommonInput & {
+  expectedSha256: string;
+  parserVersion: string;
+  pageCount: number;
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文解析仅在桌面应用中可用。");
+  return invoke<SideraDocumentParseSnapshot>("sidera_document_parse_start", { input });
+}
+
+type SideraDocumentParseRunInput = SideraDocumentReaderCommonInput & {
+  runId: string;
+  documentSha256: string;
+  parserVersion: string;
+};
+
+export async function getDocumentParseSnapshot(input: SideraDocumentParseRunInput) {
+  if (!isDesktopRuntime()) throw new Error("全文解析状态仅在桌面应用中可用。");
+  return invoke<SideraDocumentParseSnapshot>("sidera_document_parse_snapshot", { input });
+}
+
+export async function cancelDocumentParse(input: SideraDocumentParseRunInput) {
+  if (!isDesktopRuntime()) throw new Error("全文解析任务仅在桌面应用中可取消。");
+  return invoke<SideraDocumentParseSnapshot>("sidera_document_parse_cancel", { input });
+}
+
+export async function submitDocumentParsePage(input: SideraDocumentParseRunInput & {
+  pageIndex: number;
+  pageLabel: string;
+  width: number;
+  height: number;
+  text: string;
+  spans: SideraDocumentTextSpanInput[];
+}) {
+  if (!isDesktopRuntime()) throw new Error("全文解析页面仅在桌面应用中可提交。");
+  await invoke<void>("sidera_document_parse_page_submit", { input });
+}
+
+export async function finalizeDocumentParse(input: SideraDocumentParseRunInput) {
+  if (!isDesktopRuntime()) throw new Error("全文解析任务仅在桌面应用中可完成。");
+  return invoke<SideraDocumentParseSnapshot>("sidera_document_parse_finalize", { input });
+}
+
 export async function chooseSqliteBackupFile(title = "选择 SQLite 论文库备份") {
   if (!isDesktopRuntime()) return undefined;
   const { open } = await import("@tauri-apps/plugin-dialog");
@@ -360,6 +1216,28 @@ export async function readMarkdownExports() {
   return invoke<MarkdownExport[]>("read_markdown_exports");
 }
 
+function libraryDatabaseRequestKey(databaseDir?: string) {
+  return (databaseDir ?? "").trim().replace(/\\/g, "/").toLowerCase();
+}
+
+const libraryPreparationRequests = new Map<string, Promise<void>>();
+
+export async function prepareLibraryDatabase(databaseDir?: string) {
+  if (!isDesktopRuntime()) return;
+  const requestKey = libraryDatabaseRequestKey(databaseDir);
+  const current = libraryPreparationRequests.get(requestKey);
+  if (current) return current;
+  const request = invoke<void>("prepare_library_database", { databaseDir });
+  libraryPreparationRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    if (libraryPreparationRequests.get(requestKey) === request) {
+      libraryPreparationRequests.delete(requestKey);
+    }
+  }
+}
+
 export async function getPaperLibraryStatus(databaseDir?: string, projectId?: string) {
   if (!isDesktopRuntime()) {
     return {
@@ -367,6 +1245,7 @@ export async function getPaperLibraryStatus(databaseDir?: string, projectId?: st
       databasePath: "IndexedDB preview",
       sizeBytes: 0,
       paperCount: 0,
+      libraryRevision: 0,
     } satisfies PaperLibraryStatus;
   }
   return invoke<PaperLibraryStatus>("paper_library_status", { databaseDir, projectId });
@@ -378,6 +1257,8 @@ export async function getLibraryMutationStatus(databaseDir?: string) {
   }
   return invoke<LibraryMutationStatus>("get_library_mutation_status", { databaseDir });
 }
+
+const librarySetupStateRequests = new Map<string, Promise<LibrarySetupState>>();
 
 export async function getLibrarySetupState(databaseDir?: string) {
   if (!isDesktopRuntime()) {
@@ -395,7 +1276,18 @@ export async function getLibrarySetupState(databaseDir?: string) {
       message: "Browser preview",
     } satisfies LibrarySetupState;
   }
-  return invoke<LibrarySetupState>("get_library_setup_state", { databaseDir });
+  const requestKey = libraryDatabaseRequestKey(databaseDir);
+  const current = librarySetupStateRequests.get(requestKey);
+  if (current) return current;
+  const request = invoke<LibrarySetupState>("get_library_setup_state", { databaseDir });
+  librarySetupStateRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    if (librarySetupStateRequests.get(requestKey) === request) {
+      librarySetupStateRequests.delete(requestKey);
+    }
+  }
 }
 
 export async function validateLibraryLocation(databaseDir: string, mode: LibrarySetupMode) {
@@ -604,6 +1496,126 @@ export async function getV20GalaxyPayload(input: { databaseDir?: string; project
   return invoke<App17GalaxyPayload>("get_v20_galaxy_payload", { input });
 }
 
+export async function createImportReviewBatch(input: { databaseDir?: string; projectId?: string; filePath: string }) {
+  if (!isDesktopRuntime()) throw new Error("题录审查批次只在桌面端可用。");
+  return invoke<SideraImportReviewBatch>("sidera_import_review_batch_create", { input });
+}
+
+export async function createImportReviewBatchFromSearch(input: {
+  databaseDir?: string;
+  projectId?: string;
+  searchId: string;
+  generation: number;
+  connectorVersion: string;
+  candidateIds: string[];
+}) {
+  if (!isDesktopRuntime()) throw new Error("检索候选审查批次只在桌面端可用。");
+  return invoke<SideraImportReviewBatch>("sidera_import_review_create_from_search", { input });
+}
+
+export async function listImportReviewBatches(input: { databaseDir?: string; projectId?: string }) {
+  if (!isDesktopRuntime()) return [];
+  return invoke<SideraImportReviewBatch[]>("sidera_import_review_batch_list", { input });
+}
+
+export async function openImportReviewBatch(input: { databaseDir?: string; projectId?: string; batchId: string }) {
+  if (!isDesktopRuntime()) throw new Error("题录审查批次只在桌面端可用。");
+  return invoke<SideraImportReviewBatch>("sidera_import_review_batch_open", { input });
+}
+
+export async function cloneImportReviewBatch(input: { databaseDir?: string; projectId?: string; batchId: string }) {
+  if (!isDesktopRuntime()) throw new Error("题录审查批次只在桌面端可用。");
+  return invoke<SideraImportReviewBatch>("sidera_import_review_batch_clone", { input });
+}
+
+export async function saveImportReviewDecision(input: {
+  databaseDir?: string;
+  projectId?: string;
+  batchId: string;
+  candidateId: string;
+  decision?: SideraImportDecisionKind;
+  targetPaperId?: string;
+  note?: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("题录审查决定只在桌面端可用。");
+  return invoke<SideraImportReviewBatch>("sidera_import_review_decision_save", { input });
+}
+
+export async function discardImportReviewBatch(input: { databaseDir?: string; projectId?: string; batchId: string }) {
+  if (!isDesktopRuntime()) return;
+  await invoke("sidera_import_review_batch_discard", { input });
+}
+
+export async function prepareImportReviewCommit(input: {
+  databaseDir?: string;
+  projectId?: string;
+  batchId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("题录提交预览只在桌面端可用。");
+  return invoke<SideraImportCommitPreview>("sidera_import_review_commit_prepare", { input });
+}
+
+export async function executeImportReviewCommit(input: {
+  databaseDir?: string;
+  projectId?: string;
+  batchId: string;
+  previewId: string;
+  previewHash: string;
+  batchVersion: number;
+  expectedRevision: number;
+  clientCommitId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("题录正式提交只在桌面端可用。");
+  return invoke<SideraImportCommitResult>("sidera_import_review_commit_execute", { input });
+}
+
+export async function getImportReviewCommitStatus(input: {
+  databaseDir?: string;
+  projectId?: string;
+  batchId: string;
+}) {
+  if (!isDesktopRuntime()) return undefined;
+  return invoke<SideraImportCommitStatus>("sidera_import_review_commit_status", { input });
+}
+
+export async function listImportReviewCommitHistory(input: {
+  databaseDir?: string;
+  projectId?: string;
+  batchId?: string;
+  limit?: number;
+}) {
+  if (!isDesktopRuntime()) return { entries: [] } satisfies SideraImportCommitHistory;
+  return invoke<SideraImportCommitHistory>("sidera_import_review_commit_history", { input });
+}
+
+export async function armImportReadFaultFixture(input: {
+  databaseDir?: string;
+  projectId?: string;
+  target: SideraImportReadFaultTarget;
+}) {
+  if (!isDesktopRuntime() || !import.meta.env.DEV) {
+    throw new Error("SIDERA_IMPORT_READ_FAULT_FIXTURE_UNAVAILABLE");
+  }
+  await invoke<void>("sidera_import_read_fault_fixture_arm", { input });
+}
+
+export async function clearImportReadFaultFixture() {
+  if (!isDesktopRuntime() || !import.meta.env.DEV) return;
+  await invoke<void>("sidera_import_read_fault_fixture_clear");
+}
+
+export async function rollbackImportReviewCommit(input: {
+  databaseDir?: string;
+  projectId?: string;
+  batchId: string;
+  commitId: string;
+  expectedRevision: number;
+  clientRollbackId: string;
+}) {
+  if (!isDesktopRuntime()) throw new Error("题录提交回滚只在桌面端可用。");
+  return invoke<SideraImportRollbackResult>("sidera_import_review_commit_rollback", { input });
+}
+
 export async function resolveAgentGalaxyEntities(
   input: AgentGalaxyEntityResolveInput,
 ) {
@@ -635,10 +1647,17 @@ export async function loadAgentImmersiveBackground(input: {
   if (!isDesktopRuntime()) {
     throw new Error("沉浸背景真实论文载荷仅可在桌面应用中读取。");
   }
-  return invoke<AgentImmersiveBackgroundPayloadV2>(
-    "load_agent_immersive_background",
-    { input },
-  );
+  try {
+    return await invoke<AgentImmersiveBackgroundPayloadV2>(
+      "load_agent_immersive_background",
+      { input },
+    );
+  } catch (error) {
+    // Tauri rejects commands with the serialized Rust error string. Normalize
+    // that value without rewriting it so callers keep the exact error code.
+    if (error instanceof Error) throw error;
+    throw new Error(typeof error === "string" ? error : String(error));
+  }
 }
 
 export async function setAppCredential(projectId: string, service: string, secret: string) {

@@ -17,6 +17,7 @@ assert.equal(packageJson.version, "0.82.1", "Pi dependency must remain pinned to
 assert.equal(packageJson.bin?.pi, "dist/cli.js", "Pi bin entry changed unexpectedly");
 
 const rustSource = await readFile(path.join(root, "src-tauri", "src", "sidera_pi_runtime.rs"), "utf8");
+const piProtocolCore = await readFile(path.join(root, "src-tauri", "core", "src", "pi_protocol.rs"), "utf8");
 const appSource = await readFile(path.join(root, "src", "App.tsx"), "utf8");
 const desktopBridge = await readFile(path.join(root, "src", "lib", "sideraPi.ts"), "utf8");
 
@@ -38,7 +39,8 @@ assert.ok(!rustSource.includes('"--no-session"'), "Sidera runtime must preserve 
 assert.ok(rustSource.includes("PI_CODING_AGENT_DIR"), "Pi config directory must be isolated");
 assert.ok(rustSource.includes("sidera_get_library_overview,sidera_search_local_papers,sidera_get_papers_by_ids,sidera_finalize_evidence"), "Pi must retain the four Sidera library tools");
 assert.ok(rustSource.includes("sidera_list_directory,sidera_read_file,sidera_search_files,sidera_fetch_url"), "Pi must receive the audited read-tool allowlist");
-assert.ok(rustSource.includes("$SIDERA_PI_API_KEY"), "models.json must reference an environment key");
+assert.ok(rustSource.includes("build_models_json"), "desktop runtime must delegate models.json to headless core");
+assert.ok(piProtocolCore.includes("$SIDERA_PI_API_KEY"), "models.json must reference an environment key");
 assert.ok(!rustSource.includes('.arg(api_key)'), "API key must not be a process argument");
 assert.ok(!rustSource.includes('"type": "bash"'), "Sidera runtime must not issue Pi bash commands");
 assert.ok(appSource.includes("submitSideraPiPrompt"), "formal Sidera input must use Pi");

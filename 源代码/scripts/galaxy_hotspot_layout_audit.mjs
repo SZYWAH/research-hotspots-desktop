@@ -25,7 +25,7 @@ assert(desktop.includes("V20_HOTSPOT_LINEAGE_UNCHANGED_LIBRARY_MISMATCH"));
 assert(schema.includes("v20_hotspot_lineage"), "lineage table is missing");
 assert(schema.includes("identity_key_sha256"), "stable identity key column is missing");
 assert(schema.includes("hotspot_identity_version"), "snapshot identity version is missing");
-assert(store.includes(".pre-schema-v13."), "schema 13 safety backup is missing");
+assert(store.includes("pre-schema-v{}"), "versioned schema safety backup is missing");
 assert(!desktop.includes('format!("{project_id}:sqlite-cluster:{index}:'), "ranked hotspot ID remains");
 
 console.log(JSON.stringify({

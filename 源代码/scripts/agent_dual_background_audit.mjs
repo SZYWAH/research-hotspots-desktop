@@ -147,8 +147,8 @@ assert(
 
 assert(
   dualPage.includes("setMountedMode(null)")
-  && dualPage.includes("await nextAnimationFrame()"),
-  "Background switch does not create an explicit renderer-free frame",
+  && dualPage.includes("await delay(0)"),
+  "Background switch does not create an explicit renderer-free macrotask",
 );
 assert(
   dualPage.includes("data-renderer-count={mountedMode ? 1 : 0}"),

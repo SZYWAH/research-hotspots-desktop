@@ -55,37 +55,39 @@ export function SideraSplash({
           王羲之《兰亭集序》
         </button>
 
-        {!failed && showStatus ? (
-          <p className="sidera-splash__status">
-            {phase === "mounting-agent"
-              ? "正在点亮本地知识星图……"
-              : "正在连接本地知识星图……"}
-          </p>
-        ) : null}
+        <div className="sidera-splash__feedback">
+          {!failed && showStatus ? (
+            <p className="sidera-splash__status">
+              {phase === "mounting-agent"
+                ? "正在点亮本地知识星图……"
+                : "正在连接本地知识星图……"}
+            </p>
+          ) : null}
 
-        {failed ? (
-          <div className="sidera-splash__failure">
-            <div>
-              <AlertTriangle size={16} />
-              <span>{error || "Sidera 初始化失败。"}</span>
-            </div>
-            <div className="sidera-splash__actions">
-              <button type="button" onClick={onRetry}>
-                <RefreshCw size={14} />
-                重试
-              </button>
-              <button type="button" onClick={onOpenSettings}>
-                <Settings size={14} />
-                打开设置
-              </button>
-              {allowStaticFallback ? (
-                <button type="button" onClick={onUseStaticBackground}>
-                  使用静态背景继续
+          {failed ? (
+            <div className="sidera-splash__failure">
+              <div>
+                <AlertTriangle size={16} />
+                <span>{error || "Sidera 初始化失败。"}</span>
+              </div>
+              <div className="sidera-splash__actions">
+                <button type="button" onClick={onRetry}>
+                  <RefreshCw size={14} />
+                  重试
                 </button>
-              ) : null}
+                <button type="button" onClick={onOpenSettings}>
+                  <Settings size={14} />
+                  打开设置
+                </button>
+                {allowStaticFallback ? (
+                  <button type="button" onClick={onUseStaticBackground}>
+                    使用静态背景继续
+                  </button>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </section>
     </div>
   );
