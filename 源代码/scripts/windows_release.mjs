@@ -354,11 +354,22 @@ function buildInstaller(flavor, revision, configOverride) {
   const fullSeedManifest = isDemoFull ? DEMO_SEED_MANIFEST : SEED_MANIFEST;
   if (flavor === "full" && (!existsSync(fullSeedDatabase) || !existsSync(fullSeedManifest))) fail("Full installer requires the generated default-library snapshot.");
   if (!NSIS_DIR.startsWith(TARGET_RELEASE_DIR)) fail("Refusing to clean unexpected NSIS path.");
-  rmSync(NSIS_DIR, { recursive: true, force: true });
+  // Full Demo delivery must not delete earlier user-owned installers. Select
+  // only a changed current-version artifact after this build instead.
+  const previousInstallers = new Map(existsSync(NSIS_DIR)
+    ? readdirSync(NSIS_DIR).filter((name) => name.toLowerCase().endsWith(".exe"))
+      .map((name) => { const value = statSync(join(NSIS_DIR, name)); return [name, `${value.size}:${value.mtimeMs}`]; })
+    : []);
+  if (!isDemoFull) rmSync(NSIS_DIR, { recursive: true, force: true });
   const config = configOverride || `src-tauri/tauri.${flavor}.conf.json`;
   run(PNPM, ["tauri", "build", "--bundles", "nsis", "--config", config, "--no-sign"], revision);
   const candidates = existsSync(NSIS_DIR)
-    ? readdirSync(NSIS_DIR).filter((name) => name.toLowerCase().endsWith(".exe")).map((name) => join(NSIS_DIR, name))
+    ? readdirSync(NSIS_DIR).filter((name) => {
+      if (!name.toLowerCase().endsWith(".exe")) return false;
+      if (!isDemoFull) return true;
+      const value = statSync(join(NSIS_DIR, name));
+      return name.includes(`_${VERSION}_`) && previousInstallers.get(name) !== `${value.size}:${value.mtimeMs}`;
+    }).map((name) => join(NSIS_DIR, name))
     : [];
   if (candidates.length !== 1) fail(`Expected exactly one fresh NSIS installer for ${flavor}, found ${candidates.length}.`);
   const destination = installerPath(flavor);
@@ -376,6 +387,12 @@ function verifyInstallerPair() {
 }
 
 function removeSelectedOutputs() {
+  if (isDemoFull) {
+    if (existsSync(OUTPUT_DIR) && readdirSync(OUTPUT_DIR).length > 0) {
+      fail(`Full Demo output already exists; preserve it and choose a new SIDERA_RELEASE_OUTPUT_DIR: ${OUTPUT_DIR}`);
+    }
+    return;
+  }
   const flavors = mode === "all" ? ["full", "lite"] : [isDemoFull ? "full" : mode];
   for (const flavor of flavors) {
     const path = installerPath(flavor);
@@ -402,8 +419,10 @@ function writeReleaseNotes(revision) {
   const en = isDemoFull
     ? `# Sidera ${VERSION} Full Demo\n\nThis is an unsigned internal Windows x64 beta demo built from commit ${revision}; it is not a published release.\n\n${snapshotEn}\n## Included capabilities\n\n- Local library search, evidence reader, selection, highlights, annotations, and local document indexing.\n- On-demand bilingual PP-OCRv5 and document-evidence Agent answers with page anchors.\n- Structured Wuhan University discovery search, controlled pagination, and silent institution-session restore.\n- Portable CPU and DirectML GPU semantic models. Navigation never starts modeling or OCR automatically.\n\n## Installation notes\n\n- Setup supports English and Simplified Chinese.\n- Missing WebView2 Runtime may require a network download.\n- The installer is unsigned; verify SHA-256 before continuing.\n- The demo reuses the validated historical schema 13 seed and never rebuilds or overwrites the user's real library.\n`
     : `# Research Hotspots Desktop ${VERSION}\n\nThis is an unsigned Windows x64 beta prerelease built from commit ${revision}.\n\n${snapshotEn}\n## Highlights\n\n- Hotspots now use member-paper semantic centroids and global PCA3 placement, while ordinary papers retain their local semantic 3D clouds.\n- The theory-map camera derives framing from scene bounds and continuously reduces distant point and halo energy to prevent a blurred light cluster.\n- Background twinkle, distant hotspots, ordinary-paper breathing, representative energy cores, and the paper camera journey are preserved.\n- Semantic modeling provides cached batches, progress, pause/cancel controls, stable hotspot identity, lineage, and an atomic snapshot switch.\n- Online academic sources and campus-library connectors are not included.\n\n## Packages\n\n- **Full** embeds the schema 13 semantic seed plus portable CPU and DirectML GPU models.\n- **Lite** embeds no paper data but includes the portable CPU model for explicit local modeling.\n- Neither edition starts modeling automatically during navigation.\n\n## Installation notes\n\n- The installer supports English and Simplified Chinese.\n- If Microsoft Edge WebView2 Runtime is missing, setup needs internet access to download it.\n- This build is not code-signed, so Windows SmartScreen may warn. Verify SHA-256 before continuing.\n- A safety backup is created before migrating user libraries to schema 13.\n- The intfloat/multilingual-e5-small model is distributed under the MIT License.\n- Upgrade, reinstall, and uninstall do not delete the selected database directory or Windows Credential Manager credentials.\n`;
-  writeFileSync(join(OUTPUT_DIR, "RELEASE_NOTES_zh-CN.md"), zh, "utf8");
-  writeFileSync(join(OUTPUT_DIR, "RELEASE_NOTES_en-US.md"), en, "utf8");
+  const demoLimitsZh = "\n## 已知限制与验收边界\n\n- 静默恢复只复验现有官方会话，不保证跨重启免登录或永久登录；官方要求认证时需用户手工完成。\n- 统一发现检索入口可用不等于数据库 SSO、个人图书馆或全文身份已认证，三项状态分别确认。\n- 不随安装包分发用户的登录会话、凭据或实际使用中的论文库。\n- Windows 根 Tauri 测试宿主存在 TaskDialogIndirect 入口异常，不计为通过；core 测试、静态审计、编译和原生验收分别记录。\n";
+  const demoLimitsEn = "\n## Known limitations and acceptance boundaries\n\n- Silent restore verifies existing official sessions; it does not guarantee sign-in across restarts or permanent login. Complete official authentication manually when required.\n- Discovery search availability does not prove database SSO, personal-library or full-text authentication; capabilities are verified separately.\n- User login sessions, credentials and active personal libraries are not bundled.\n- The Windows root Tauri test host has a TaskDialogIndirect entry-point failure and is not counted as passing; core tests, static audits, compilation and native acceptance are tracked separately.\n";
+  writeFileSync(join(OUTPUT_DIR, "RELEASE_NOTES_zh-CN.md"), zh + (isDemoFull ? demoLimitsZh : ""), "utf8");
+  writeFileSync(join(OUTPUT_DIR, "RELEASE_NOTES_en-US.md"), en + (isDemoFull ? demoLimitsEn : ""), "utf8");
 }
 
 function writeBuildMetadata(revision) {

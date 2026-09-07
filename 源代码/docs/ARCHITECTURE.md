@@ -1,5 +1,11 @@
 # 科研 Agent 架构
 
+## 2026-09-07 主窗口退出顺序窄修
+
+main 的 CloseRequested 先 prevent_close，再调用 AppHandle::exit(0)，由正常应用退出路径统一结束生命周期。依据本地 Tauri runtime，exit 请求通过事件队列派发，不能任由默认 owner 销毁先于该请求处理。新增 SIDERA_EXIT_TRACE=1 可选 stderr 固定阶段码；不记录 URL、页面或认证数据，不增加强退超时。补丁已在空闲、机构能力就绪、认证子窗打开三种状态完成原生退出，均观察到四段事件码并释放机构 WebView profile 子进程；旧 PID 的精确阻塞栈仍未知，不反推为已证实死锁。机构恢复公开接口及固定 profile 不变。
+
+证据：[本轮分门记录](./evidence/sidera-beta3-exit-delivery-2026-09-07.json)。
+
 状态：权威架构入口
 
 更新时间：2026-08-03

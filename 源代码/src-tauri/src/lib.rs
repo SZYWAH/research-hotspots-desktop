@@ -13197,15 +13197,25 @@ fn agent_get_draft_model_profiles(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Opt-in, fixed event codes only: no URLs, account data or page contents.
+    let exit_trace = std::env::var_os("SIDERA_EXIT_TRACE").is_some_and(|value| value == "1");
     let builder = tauri::Builder::default()
-        .on_window_event(|window, event| {
-            if window.label() == "main"
-                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
-            {
-                // Institution features own hidden WebView windows. Closing only the
-                // visible main window would otherwise keep the process alive and
-                // prevent a genuine restart (and WebView2 profile shutdown/flush).
+        .on_window_event(move |window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if exit_trace {
+                    eprintln!("SIDERA_EXIT_MAIN_CLOSE_REQUESTED");
+                }
+                // request_exit is queued. Keep the owner alive until the event
+                // loop handles it; otherwise default close destroys the owner
+                // and its child WebViews before the queued application exit.
+                api.prevent_close();
                 window.app_handle().exit(0);
+                if exit_trace {
+                    eprintln!("SIDERA_EXIT_REQUEST_QUEUED");
+                }
             }
         })
         .manage(PaperImportTaskRegistry::default())
@@ -13409,6 +13419,17 @@ pub fn run() {
             run_cluster_worker,
             run_health_check
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app, event| {
+            if exit_trace {
+                match event {
+                    tauri::RunEvent::ExitRequested { .. } => {
+                        eprintln!("SIDERA_EXIT_REQUEST_DISPATCHED");
+                    }
+                    tauri::RunEvent::Exit => eprintln!("SIDERA_EXIT_EVENT"),
+                    _ => {}
+                }
+            }
+        });
 }

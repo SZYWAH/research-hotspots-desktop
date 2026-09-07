@@ -1,5 +1,11 @@
 # 科研 Agent 当前状态
 
+## 2026-09-07 beta.3 交付复核（优先于下方历史结论）
+
+基线 HEAD 为 `26cb7d6770516f8536872fd4d9ef2c1cb58d6575`。原 PID 18328 曾被提权 CIM 确认为不响应，随后由既有开发 watcher 的重编译/重启消失；全程未强杀，该消失不计退出 PASS。补丁哈希 `E83206AA787316E11CD011A58E0AA88D609E2DC0DA1344F7BB255BDD08E41575` 已通过空闲、机构三项就绪、认证窗口打开三种正常退出门，固定退出事件链完整，主窗、认证窗、应用进程和机构 WebView 子进程均无残留。R7 同一哈希新进程对照仅恢复数据库 SSO，统一发现一次 10 秒超时、个人图书馆仍需认证，完整跨重启免登录为 `PARTIAL PASS / LIMITATION`。R7 26/26、R4 52/52、R6 16/16、恢复 core 2/2、前端构建、`cargo check --tests -j 2` 与 `cargo check -j 2` 均通过；根 Tauri 测试宿主仍因 `TaskDialogIndirect` 不运行。beta.3 安装包尚待干净提交构建；未提交推送。
+
+证据：[本轮分门记录](./evidence/sidera-beta3-exit-delivery-2026-09-07.json)。
+
 更新时间：2026-08-03
 
 当前分支：`codex/sidera-m2-rag`

@@ -224,10 +224,30 @@ check(
 );
 check(
   "closing-main-exits-the-app-even-while-hidden-institution-webviews-exist",
-  tauriRoot.includes(".on_window_event(|window, event|")
-    && tauriRoot.includes('window.label() == "main"')
+  tauriRoot.includes(".on_window_event(move |window, event|")
+    && tauriRoot.includes('window.label() != "main"')
     && tauriRoot.includes("tauri::WindowEvent::CloseRequested")
     && tauriRoot.includes("window.app_handle().exit(0)"),
+);
+
+const mainCloseStart = tauriRoot.indexOf('if let tauri::WindowEvent::CloseRequested { api, .. } = event');
+const mainCloseEnd = tauriRoot.indexOf('.manage(PaperImportTaskRegistry', mainCloseStart);
+const mainClose = tauriRoot.slice(mainCloseStart, mainCloseEnd);
+check(
+  "main-default-destruction-is-prevented-before-queued-application-exit",
+  mainCloseStart >= 0 && mainCloseEnd > mainCloseStart
+    && mainClose.indexOf('api.prevent_close()') >= 0
+    && mainClose.indexOf('api.prevent_close()') < mainClose.indexOf('window.app_handle().exit(0)')
+    && !mainClose.includes('std::process::exit')
+    && !mainClose.includes('.destroy()'),
+);
+check(
+  "exit-trace-is-opt-in-and-uses-only-fixed-lifecycle-codes",
+  tauriRoot.includes('std::env::var_os("SIDERA_EXIT_TRACE")')
+    && tauriRoot.includes('value == "1"')
+    && tauriRoot.includes('tauri::RunEvent::ExitRequested')
+    && tauriRoot.includes('tauri::RunEvent::Exit => eprintln!("SIDERA_EXIT_EVENT")')
+    && (tauriRoot.match(/eprintln!\("SIDERA_EXIT_[A-Z_]+"\)/g) ?? []).length === 4,
 );
 
 console.log(JSON.stringify({

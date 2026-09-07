@@ -1,0 +1,96 @@
+{
+  "capturedAt": "2026-09-07T08:37:04.070371+08:00",
+  "head": "26cb7d6770516f8536872fd4d9ef2c1cb58d6575",
+  "branch": "codex/sidera-m2-rag",
+  "dirtyBeforeEdits": [
+    " M 源代码/docs/ARCHITECTURE.md",
+    " M 源代码/docs/DECISIONS.md",
+    " M 源代码/docs/DEVELOPMENT.md",
+    " M 源代码/docs/PROJECT.md",
+    " M 源代码/docs/ROADMAP.md",
+    " M 源代码/docs/STATUS.md",
+    "?? 源代码/docs/evidence/sidera-012-r2-dynamic-startup-first-frame-2026-08-06.json",
+    "?? 源代码/docs/evidence/sidera-012-r3-cold-start-dynamic-snapshot-2026-08-06.json",
+    "?? 源代码/docs/evidence/sidera-013-workbench-performance-2026-08-07.json",
+    "?? 源代码/docs/evidence/sidera-014-institution-workspace-r1-2026-08-08.json",
+    "?? 源代码/docs/evidence/sidera-014-r3-visual-truth-and-notice-2026-08-08.json",
+    "?? 源代码/docs/evidence/sidera-014-r4-auth-search-truth-2026-08-09.json",
+    "?? 源代码/docs/evidence/sidera-014-r5-pagination-truth-2026-08-28.json",
+    "?? 源代码/docs/evidence/sidera-014-r6-structured-pagination-2026-09-01.json",
+    "?? 源代码/docs/evidence/sidera-014-r7-session-restore-2026-09-01.json",
+    "?? 源代码/docs/evidence/sidera-015-document-reader-r1-2026-08-09.json",
+    "?? 源代码/docs/evidence/sidera-016-document-evidence-r2-2026-08-12.json",
+    "?? 源代码/docs/evidence/sidera-016-r1-evidence-rect-recovery-2026-08-22.json",
+    "?? 源代码/docs/evidence/sidera-016-r1-native-closure-2026-08-12.json",
+    "?? 源代码/docs/evidence/sidera-017-ocr-evidence-agent-2026-08-25.json",
+    "?? 源代码/docs/evidence/sidera-f1a-single-document-acquisition-2026-08-06.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l0-r1-whu-sso-route-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l0-r2-whu-dynamic-sso-config-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l0-whu-institution-probe-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l1a-in-app-institution-search-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l1a-r1-in-app-auth-navigation-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l1a-r2-real-auth-popup-first-navigation-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l1a-r3-native-closed-loop-candidate-2026-08-03.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l1a-r3-r1-real-search-adapter-2026-08-04.json",
+    "?? 源代码/docs/evidence/sidera-m2.0c-l1a-r4-academic-discovery-2026-08-04.json",
+    "?? 源代码/docs/evidence/sidera-p1b-r1-native-snapshot-2026-08-04.json",
+    "?? 源代码/docs/evidence/sidera-p1b-r2-discovery-auth-resume-2026-08-04.json",
+    "?? 源代码/docs/evidence/sidera-p1b-whu-native-academic-discovery-2026-08-04.json",
+    "?? 源代码/docs/evidence/sidera-p1c-institution-browser-kernel-2026-08-04.json",
+    "?? 源代码/docs/evidence/sidera-p1c-r1-popup-focus-viewport-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p1c-r2-native-split-browser-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p1c-r3-main-window-ownership-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p2a-import-review-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p2a-r1-background-search-review-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p2a-r2-native-continuity-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p2b-controlled-import-2026-08-05.json",
+    "?? 源代码/docs/evidence/sidera-p2b-r2-controlled-import-local-search-2026-08-06.json",
+    "?? 源代码/docs/evidence/sidera-p2b-v14-compatibility-r1-2026-08-05.json"
+  ],
+  "hashes": [
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\src\\lib.rs",
+      "Hash": "88C3E4EEEE9428AEDD08504FD32884B5ECC6EFD22852D9A417CB240CBA44E792"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\src\\sidera_institution_runtime.rs",
+      "Hash": "77501FFD2CC10CD388FA711576CC37EDEE6B54F09D5C5CD2FD00D80DD52D761F"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\src\\sidera_institution_browser.rs",
+      "Hash": "59BD6FD640EAB9EBD2EC753D4C3D636AC9E3CC4D282458CAD026204776537F71"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\scripts\\sidera_institution_session_r7_audit.mjs",
+      "Hash": "52F18AE8D2516F7C58FCCDE36CEC9CB244019012A281D9B2FDA5E460B50512EF"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\docs\\PROJECT.md",
+      "Hash": "481F284CE6C8CFFDDC2FA87E1C0D44AA0CAF4218C8D4C8312A9BA538164741C7"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\docs\\STATUS.md",
+      "Hash": "C4C42999723812C07CFC9433DC7E5BE47DF1A46536DDB384457106AE0B6ED219"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\docs\\ROADMAP.md",
+      "Hash": "CDF8E96D835A71B2469A29AA99D7E1837701746A848C14BEDA5F8EE5838DE465"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\docs\\ARCHITECTURE.md",
+      "Hash": "57BDCB6E9CAF1E015919F0A0C6873B04839305750635DBEA3D871B5ED1EC78CC"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\docs\\DECISIONS.md",
+      "Hash": "16162D643128DAE64027C8A61432F01D12BEFE0F06B8545711F4B4A24D06CF9F"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\docs\\DEVELOPMENT.md",
+      "Hash": "B09813891A00930E3A40EAC485E38E0871D5C2D4F5D79047F205A4DFF19E273D"
+    },
+    {
+      "Path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\target\\debug\\research-hotspots-desktop.exe",
+      "Hash": "34A90D4E1C7BB10BD0C414EA159B39BFD420C4A5ADB83AF32582366F504201EF"
+    }
+  ]
+}

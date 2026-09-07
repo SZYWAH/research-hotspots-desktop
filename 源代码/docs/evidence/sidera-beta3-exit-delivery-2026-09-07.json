@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-07",
+  "sourceHeadBeforeChanges": "26cb7d6770516f8536872fd4d9ef2c1cb58d6575",
+  "baseline": "sidera-beta3-delivery-baseline-2026-09-07.json",
+  "phase": "exit-order-narrow-fix-awaiting-native-validation",
+  "nativeObservation": {
+    "processId": 18328,
+    "processStartedAt": "2026-09-06T20:26:58.2899482+08:00",
+    "observedAt": "2026-09-07T08:35:52+08:00",
+    "executableSha256": "34A90D4E1C7BB10BD0C414EA159B39BFD420C4A5ADB83AF32582366F504201EF",
+    "responding": false,
+    "processStillAlive": true,
+    "waitChainCycleDetected": false,
+    "waitChainLimitation": "WCT returned blocked/running thread states but no dependency chain; it neither proves nor excludes a Rust mutex deadlock.",
+    "correction": "Earlier missing-PID output was not reliable. Elevated CIM confirmed original PID and creation time. Missing output is not process-exit proof.",
+    "forcedTerminationPerformed": false,
+    "secondInstanceStarted": false
+  },
+  "sourceFinding": {
+    "confirmed": "AppHandle::exit queues RequestExit. Previous main CloseRequested handler did not prevent default owner destruction before dispatch of the queued application-exit event.",
+    "notProven": "Exact blocking stack is unknown. Owner/child destruction ordering is a candidate mechanism, not a proven native deadlock root cause.",
+    "change": "Prevent main default close before requesting normal application exit. Add opt-in fixed-code lifecycle tracing via SIDERA_EXIT_TRACE=1. No forced-exit fallback or session storage changes."
+  },
+  "gates": {
+    "r7StaticAudit": {
+      "status": "PASS",
+      "checks": 26
+    },
+    "r6StaticAudit": {
+      "status": "PASS",
+      "checks": 16
+    },
+    "changedTrackedDiffCheck": "PASS",
+    "r4StaticAudit": { "status": "PASS", "checks": 52 },
+    "frontendBuild": "PASS",
+    "restoreCoreTests": { "status": "PASS", "passed": 2, "filter": "institution_restore_", "jobs": 2, "testThreads": 1 },
+    "rustCompilation": "PASS_CHECK_TESTS_AND_CHECK_J2",
+    "demoOutputSafetyMockTests": { "status": "PASS", "checks": 6, "realFilesystemWrites": 0, "builds": 0 },
+    "rootTauriTestHost": "UNAVAILABLE_TASK_DIALOG_INDIRECT_NOT_RUN",
+    "currentBinaryNormalExit": "FAIL",
+    "patchedBinaryNormalExit": "PASS_IDLE_READY_AND_AUTH_WINDOW_OPEN",
+    "rememberedLoginAcrossRestart": "PARTIAL PASS_DATABASE_READY_DISCOVERY_TIMEOUT_PERSONAL_LIBRARY_LOGIN_REQUIRED",
+    "beta3Installer": "UNVERIFIED_NOT_BUILT",
+    "installedNativeAcceptance": "UNVERIFIED",
+    "commitAndPush": "NOT_PERFORMED"
+  },
+  "nativeValidationSeptember7": {
+    "executableSha256": "E83206AA787316E11CD011A58E0AA88D609E2DC0DA1344F7BB255BDD08E41575",
+    "oldProcessResolution": "Original PID 18328 disappeared during an existing development watcher's rebuild/restart at about 08:38. No forced termination was performed; this is not normal-exit acceptance.",
+    "idleExit": { "status": "PASS", "pid": 38316, "processStartedAt": "2026-09-07T08:38:12.8777583+08:00", "absenceObservedAt": "2026-09-07T15:41:19.6594961+08:00", "forcedTermination": false },
+    "readyExit": {
+      "status": "PASS",
+      "pid": 22928,
+      "processStartedAt": "2026-09-07T15:45:53.16281+08:00",
+      "capabilitiesBeforeExit": { "database": "ready", "discovery": "ready", "personalLibrary": "ready" },
+      "manualPersonalLibraryLogin": "USER_COMPLETED_AND_CONFIRMED",
+      "closeRequestedAt": "2026-09-07T20:45:37.261+08:00",
+      "processAbsenceObservedAt": "2026-09-07T20:45:42.7642715+08:00",
+      "windowsAfterClose": 0,
+      "profileWebViewProcessesAt204602": 0,
+      "devServerListenerAfterExit": false,
+      "lifecycleCodes": ["SIDERA_EXIT_MAIN_CLOSE_REQUESTED", "SIDERA_EXIT_REQUEST_QUEUED", "SIDERA_EXIT_REQUEST_DISPATCHED", "SIDERA_EXIT_EVENT"],
+      "nonFatalWebViewShutdownMessage": "Chrome_WidgetWin_0 unregister error 1412; application and profile processes were confirmed absent.",
+      "forcedTermination": false
+    },
+    "newProcessRestore": {
+      "status": "PARTIAL PASS",
+      "pid": 20376,
+      "processStartedAt": "2026-09-07T20:47:00.7697517+08:00",
+      "sameExecutableSha256": true,
+      "trigger": "first entry into literature-workbench institution resources",
+      "visibleAuthenticationWindowDuringSilentRestore": false,
+      "capabilities": {
+        "database": "ready",
+        "discovery": "failed_after_10_second_confirmation_budget",
+        "personalLibrary": "login-required"
+      },
+      "interpretation": "A usable discovery entry or earlier ready state does not prove all official authentication sessions persisted. Full remembered sign-in across process restart did not pass.",
+      "repeatLoginAttempted": false
+    },
+    "authenticationWindowOpenExit": {
+      "status": "PASS",
+      "pid": 20376,
+      "authenticationWindowObserved": true,
+      "authenticationDialogAutomated": false,
+      "closeRequestedAt": "2026-09-07T22:15:26.014+08:00",
+      "processAbsenceObservedAt": "2026-09-07T22:15:43.2791439+08:00",
+      "windowsAfterExit": 0,
+      "profileWebViewProcessesAt221604": 0,
+      "devServerListenerAfterExit": false,
+      "lifecycleCodes": ["SIDERA_EXIT_MAIN_CLOSE_REQUESTED", "SIDERA_EXIT_REQUEST_QUEUED", "SIDERA_EXIT_REQUEST_DISPATCHED", "SIDERA_EXIT_EVENT"],
+      "forcedTermination": false
+    }
+  },
+  "nextGate": "Commit the scoped implementation and evidence, build Full Demo from that clean commit, audit and perform installed-native short acceptance.",
+  "privacy": "No process dump, cookie contents, account fields, tickets or raw pages read or persisted. WCT emits numeric thread topology only."
+}
