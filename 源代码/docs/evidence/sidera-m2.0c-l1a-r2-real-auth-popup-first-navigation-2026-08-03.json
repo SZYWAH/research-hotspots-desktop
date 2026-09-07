@@ -1,0 +1,140 @@
+{
+  "package": "M2.0c-L1a-R2",
+  "title": "真实认证弹窗与首航恢复修复",
+  "date": "2026-08-03",
+  "baseline": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "branch": "codex/sidera-m2-rag",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeInAppAuth": "UNVERIFIED"
+  },
+  "supersedes": {
+    "package": "M2.0c-L1a-R1",
+    "nativeResult": "NATIVE_IN_APP_INSTITUTION_AUTH_FAIL",
+    "symptom": "embedded institution surface remained gray while initialization never completed",
+    "rootCause": "the popup URL was replayed as a normal main-WebView GET, which discarded POST, opener and popup authentication context",
+    "credentialContentRecorded": false
+  },
+  "databaseFirstNavigation": {
+    "webviewLabel": "institution-whu",
+    "initialUrl": "about:blank",
+    "initialSurfaceVisible": false,
+    "persistentUserDataDirectory": "app-local/institution-webview-v1/whu",
+    "officialSsoRequired": true,
+    "libraryHomepageFallbackAllowed": false,
+    "successSignal": "WebView2 NavigationCompleted IsSuccess",
+    "timeoutSeconds": 20,
+    "retryRebuildsWebview": true,
+    "retryClearsUserData": false,
+    "staleIsolation": [
+      "webviewGeneration",
+      "navigationEpoch",
+      "pendingInitialNavigationEpoch"
+    ]
+  },
+  "libraryAccountPopup": {
+    "windowLabel": "institution-whu-auth",
+    "response": "NewWindowResponse.Create",
+    "environment": "opener-shared-webview2-environment",
+    "preservesPost": true,
+    "preservesOpener": true,
+    "defaultLogicalSize": [
+      960,
+      720
+    ],
+    "workAreaMaximumPercent": 90,
+    "requestedMinimumLogicalSize": [
+      720,
+      560
+    ],
+    "parentDisabledWhileVisible": true,
+    "singleModal": true,
+    "mainRestoredOn": [
+      "success",
+      "cancel",
+      "close",
+      "create-failure",
+      "navigation-failure",
+      "configuration-failure"
+    ]
+  },
+  "authenticationState": {
+    "kinds": [
+      "database-sso",
+      "library-account"
+    ],
+    "states": [
+      "idle",
+      "starting",
+      "login-required",
+      "ready",
+      "cancelled",
+      "failed"
+    ],
+    "searchGate": "databaseAuth=ready",
+    "libraryAccountReadyImpliesDatabaseReady": false,
+    "probeDeterminesLogin": false
+  },
+  "security": {
+    "arbitraryWhuSubdomainsAllowed": false,
+    "casPrefix": "cas.whu.edu.cn/authserver/",
+    "httpAllowed": false,
+    "userinfoAllowed": false,
+    "abnormalPortsAllowed": false,
+    "downloadsAllowed": false,
+    "remoteTauriCapability": false,
+    "cookieReads": 0,
+    "credentialReads": 0
+  },
+  "validation": {
+    "rustCoreTests": {
+      "status": "PASS",
+      "passed": 8,
+      "failed": 0,
+      "externalNetworkRequests": 0
+    },
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJobs2": "PASS",
+    "l1aR2Audit": "PASS",
+    "l1aR1Regression": "PASS",
+    "l1aRegression": "PASS",
+    "l0R2Regression": "PASS",
+    "r4R3Regression": "PASS",
+    "r4R2Regression": "PASS",
+    "projectDocumentation": "PASS",
+    "gitDiffCheck": "PASS",
+    "automatedExternalInstitutionRequests": 0,
+    "providerCalls": 0,
+    "paperDatabaseWrites": 0,
+    "fullTextDownloads": 0
+  },
+  "nativeAcceptance": {
+    "status": "UNVERIFIED",
+    "requiresDatabaseMainSurfaceLogin": true,
+    "requiresLibraryAccountModalLogin": true,
+    "requiresMainWindowRestoreAfterCancel": true,
+    "requiresRestartSessionReuse": true,
+    "queries": [
+      "人工智能",
+      "machine learning"
+    ],
+    "requiresCrossPageContinuity": true,
+    "requiredPaperRevisionDelta": 0,
+    "requiredDownloadCount": 0,
+    "requiredProviderCalls": 0
+  },
+  "boundaries": {
+    "paperSchemaChanged": false,
+    "conversationStoreChanged": false,
+    "piJsonlChanged": false,
+    "providerProtocolChanged": false,
+    "fullTextSchemaAdded": false,
+    "metadataImportAdded": false,
+    "committed": false,
+    "pushed": false
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0
+}

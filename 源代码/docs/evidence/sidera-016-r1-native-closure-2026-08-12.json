@@ -1,0 +1,351 @@
+{
+  "schemaVersion": 1,
+  "package": "Sidera-016-R1",
+  "generatedAt": "2026-08-22T17:40:02+08:00",
+  "repository": {
+    "branch": "codex/sidera-m2-rag",
+    "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+    "dirtyWorktreePreserved": true,
+    "stagedPaths": 0,
+    "unstagedTrackedPaths": 49,
+    "untrackedPaths": 106
+  },
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "windowsStandaloneTestHost": "PASS",
+    "historicalWindowsDesktopLibTestHost": "TEST-HOST UNAVAILABLE",
+    "native014R4DiscoveryAuth": "PASS",
+    "native014R4SearchTruth": "PARTIAL_PASS",
+    "native014R4Ux": "PARTIAL_PASS",
+    "nativeEvidenceUx": "PASS",
+    "nativeIndex": "PASS",
+    "userExperience": "PASS",
+    "development017": "IN_PROGRESS"
+  },
+  "windowsStandaloneTestHost": {
+    "workspaceMember": "src-tauri/windows-test-host-smoke",
+    "productManifestChanged": false,
+    "tauriInitialized": false,
+    "headlessAssertions": [
+      "document protocol minimum policy",
+      "Pi protocol minimum policy"
+    ],
+    "executable": {
+      "path": "src-tauri/target/debug/sidera-windows-test-host-smoke.exe",
+      "bytes": 2040832,
+      "sha256": "7B1A9F6BCFFAE7815AC579DEE404A1A6F5969C08041B6967CF4373D593700996"
+    },
+    "staticChecks": {
+      "manifestResourcePresent": true,
+      "commonControlsV6Present": true,
+      "taskDialogIndirectImported": true
+    },
+    "boundedExecution": {
+      "attempts": 1,
+      "deadlineSeconds": 10,
+      "exitCode": 0,
+      "windowCreated": false,
+      "status": "PASS"
+    },
+    "historicalDesktopLibBoundary": {
+      "status": "TEST-HOST UNAVAILABLE",
+      "windowsStatus": "STATUS_ENTRYPOINT_NOT_FOUND",
+      "missingEntryPoint": "TaskDialogIndirect",
+      "repeatedExecutionStopped": true,
+      "productFailure": false
+    }
+  },
+  "automatedTechnical": {
+    "targetedCoreTests": {
+      "passed": 57,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "typescriptBuild": "PASS",
+    "documentReaderR1Audit": {
+      "checks": 105,
+      "status": "PASS"
+    },
+    "documentReaderR2Audit": "STATIC PASS",
+    "agentRunCenterAudit": "PASS",
+    "productionBuild": {
+      "modules": 1928,
+      "status": "PASS"
+    },
+    "cargoCheckTestsJ2": "PASS",
+    "cargoCheckJ2": "PASS"
+  },
+  "native014R4": {
+    "processBoundary": "one isolated latest Sidera instance",
+    "existingInstitutionSessionReused": true,
+    "sessionCleared": false,
+    "discoveryAuthentication": {
+      "status": "PASS",
+      "sameSearchResumedAfterUserAuthentication": true,
+      "credentialsRecorded": false
+    },
+    "chineseMatrix": {
+      "query": "人工智能",
+      "requestedLimit": 40,
+      "filters": "three document types; no year limit",
+      "authenticationTriggered": true,
+      "searchCompleted": true,
+      "truthStatus": "PARTIAL_PASS",
+      "reason": "the native run proved authenticated resume but did not produce the requested 40-item matrix"
+    },
+    "englishMatrix": {
+      "query": "machine learning",
+      "requestedLimit": 100,
+      "filters": "journal and conference; 2020-2025",
+      "cancelAttempt": {
+        "snapshotCandidatesPreserved": 8,
+        "selectionPreserved": true,
+        "lateResumeObserved": false,
+        "status": "PASS"
+      },
+      "replacementAttempt": {
+        "candidates": 3,
+        "targetReached": false,
+        "hasMore": false,
+        "termination": "source-exhausted",
+        "status": "PARTIAL_PASS"
+      }
+    },
+    "notProven": [
+      "40-item Chinese result target",
+      "100-item English result target",
+      "native cross-page selection",
+      "full provider coverage",
+      "all observed versus synthesized position combinations"
+    ]
+  },
+  "native016": {
+    "candidate": {
+      "path": ".codex-tmp/dev016-r1-native/sidera-dev016.exe",
+      "bytes": 53725696,
+      "sha256": "593FC415BA1AE460056CD4141595DC1A6FFD047553996FA9B1566501BAE1F1DE"
+    },
+    "fixture": {
+      "path": "scripts/fixtures/document-reader-r2-four-page.pdf",
+      "bytes": 76563,
+      "sha256": "2EB19E71946F84D2620ACD6FB9D381835CF15812AF2A19CAEC416C000DC5B065",
+      "pages": 4,
+      "coverage": [
+        "Chinese",
+        "English",
+        "two-column",
+        "90-degree rotation"
+      ]
+    },
+    "reader": {
+      "pdfCanvasCount": 1,
+      "iframeCount": 0,
+      "starfieldRendererCountWhileReaderActive": 0,
+      "selectionAt100Percent": "PASS",
+      "selectionAt125Percent": "PASS",
+      "rotatedPageVisual": "PASS",
+      "rotatedPagePointerSelection": "PASS",
+      "rotatedPageSelectionFailure": {
+        "observedAt": "2026-08-22T17:22:34+08:00",
+        "page": 4,
+        "rotationDegrees": 90,
+        "scalePercent": 125,
+        "symptom": "visible vertical text could not be selected; selectable blue ranges appeared in blank space to the left",
+        "cause": "the already-rotated viewport width and height were pinned onto PDF.js' unrotated TextLayer box, shifting WebView2 hit testing on quarter-turn pages",
+        "fixImplemented": true,
+        "sourceFix": "src/lib/documentPdfJsAdapter.ts",
+        "typescript": "PASS",
+        "readerAudit": "STATIC PASS",
+        "nativeRetest": "PASS",
+        "nativeRetestAt": "2026-08-22T17:39:12+08:00",
+        "nativeRetestCandidateBytes": 53725696,
+        "nativeRetestCandidateSha256": "593FC415BA1AE460056CD4141595DC1A6FFD047553996FA9B1566501BAE1F1DE",
+        "nativeRetestMethod": "Computer Use drag on the visible rotated line in the exact isolated native window",
+        "nativeSelectedText": "otated pages must apply the PDF.js viewport transfor",
+        "selectionVisualAlignment": "PASS",
+        "userSubjectiveRetest": "PASS",
+        "userConfirmedAt": "2026-08-24T00:00:00+08:00",
+        "userConfirmation": "可以正常通过",
+        "userConfirmedSelectionAt125Percent": true,
+        "userConfirmedBlueRangeAligned": true,
+        "userConfirmedFloatingToolbarUsable": true,
+        "userConfirmedMainWindowClickable": true,
+        "userConfirmedErrorNoticeAbsent": true
+      },
+      "normalWindow": "PASS",
+      "maximizedWindow": "PASS",
+      "toolbarHeightPx": 52,
+      "pdfContentAtLeast70Percent": true,
+      "evidenceSideSheetDefaultClosed": true,
+      "evidenceSideSheetOverlaysWithoutCompressingPdf": true,
+      "mainWindowClickableAfterSheetClose": true,
+      "abnormalOrOrphanWindowsObserved": false
+    },
+    "evidencePersistence": {
+      "annotations": 2,
+      "savedEvidence": 1,
+      "editedAnnotationPersisted": true,
+      "exactSelectionPersisted": true,
+      "derivedStoreDeletedOnly": true,
+      "evidenceStoreSha256Before": "4B2251844350D1DBBA65B9E025A0632069C45A281BFECB3A1B26BA2822BE8879",
+      "evidenceStoreSha256After": "4B2251844350D1DBBA65B9E025A0632069C45A281BFECB3A1B26BA2822BE8879",
+      "beforeReparseState": "missing",
+      "afterReparseState": "exact",
+      "silentMoveOrDeletionObserved": false,
+      "status": "PASS"
+    },
+    "index": {
+      "model": "local multilingual-e5-small",
+      "resolvedMode": "hybrid",
+      "segments": 4,
+      "embeddings": 4,
+      "chineseToEnglishRecallAndJump": "PASS",
+      "englishToChineseRecallAndJump": "PASS",
+      "lexicalFallbackTruth": "PASS_BY_AUTOMATED_TEST",
+      "nativePauseResumeCancel": "PASS",
+      "nativeRestartReattach": "PASS",
+      "lateResultIsolation": "PASS",
+      "pauseResumeCancelRun": {
+        "jobId": "doc-index-45202f4723f9950dcab92346",
+        "terminalState": "cancelled",
+        "segments": 12811,
+        "embeddedAtCancel": 176,
+        "errorCode": "SIDERA_DOCUMENT_INDEX_CANCELLED",
+        "lateEmbeddedResultObserved": false
+      },
+      "restartReattachRun": {
+        "jobId": "doc-index-913a3411728b89a113dc845d",
+        "reattachedToSameJobAfterRestart": true,
+        "terminalState": "cancelled",
+        "segments": 12811,
+        "embeddedAtCancel": 512,
+        "errorCode": "SIDERA_DOCUMENT_INDEX_CANCELLED",
+        "lateEmbeddedResultObserved": false
+      }
+    },
+    "parseLifecycle": {
+      "activeStateObserved": true,
+      "closeReopenSameRun": "PASS",
+      "manualStopAndNoLatePages": "PASS",
+      "closeReopenSameRunThenStop": "PASS",
+      "reopenedRun": {
+        "runId": "parse-b3d0e0200baf84fa0920ea0a",
+        "documentVersionId": "version-4541e42d81a5310847c4aea0",
+        "sameRunObservedAfterReopen": true,
+        "pagesObservedAfterReopen": 254,
+        "terminalState": "ready",
+        "pagesCommitted": 300
+      },
+      "cancelledRun": {
+        "runId": "parse-06b79981f8e9ededc83c601d",
+        "documentVersionId": "version-4541e42d81a5310847c4aea0",
+        "terminalState": "cancelled",
+        "pagesCommitted": 5,
+        "expectedPages": 300,
+        "errorCode": "SIDERA_DOCUMENT_PARSE_CANCELLED",
+        "updatedAtMs": 1787364412756,
+        "unchangedAfterThreeSeconds": true
+      },
+      "secondCombinedAttempt": {
+        "runId": "parse-b18f9323b5e25cb0a1ece843",
+        "documentVersionId": "version-a9179de87cceb488b8d6d35f",
+        "readerClosedWhileActive": true,
+        "terminalStateBeforeStopCouldBeTriggered": "ready",
+        "pagesCommitted": 300
+      },
+      "combinedClosureRun": {
+        "observedAt": "2026-08-22T16:55:48+08:00",
+        "candidatePath": ".codex-tmp/dev016-r1-native/sidera-dev016.exe",
+        "candidateBytes": 53725184,
+        "candidateSha256": "1A294A0167EAB8B00714328FF0E41613E6D4926399F87CD405CE20D1AC723109",
+        "fixturePath": "output/pdf/document-reader-lifecycle-300-page-v8-combined.pdf",
+        "fixtureBytes": 1336239,
+        "fixtureSha256": "C79E0BED03CB73B6231B46ADA411A3785CB0E18A7D23CC575391B05F08278DCB",
+        "runId": "parse-3644922f0c69ab1a79ede754",
+        "documentVersionId": "version-796223907280c19125a6f6ce",
+        "versionRunCount": 1,
+        "readerClosedWhileActive": true,
+        "sameRunObservedAfterReopen": true,
+        "pagesObservedAfterReopen": 263,
+        "manualStopTriggeredAfterReopen": true,
+        "terminalState": "cancelled",
+        "pagesCommitted": 295,
+        "expectedPages": 300,
+        "errorCode": "SIDERA_DOCUMENT_PARSE_CANCELLED",
+        "updatedAtMs": 1787388621604,
+        "finishedAtMs": 1787388621604,
+        "unchangedAfterFourSeconds": true,
+        "duplicateRunObserved": false,
+        "latePageAfterStopObserved": false,
+        "status": "PASS"
+      },
+      "latePageAfterStop": "PASS",
+      "reasonForCombinedGap": null
+    }
+  },
+  "isolatedArtifacts": {
+    "documentsStore": {
+      "sha256": "189E210FBF991EB15761F98104D198FD1AAA27E658D2F6B4E71B13004D375924",
+      "bytes": 49152,
+      "userVersion": 2,
+      "documents": 1,
+      "documentVersions": 9,
+      "acquisitionRecords": 10
+    },
+    "derivedStore": {
+      "sha256": "B6ABE14DDF8D92F8CD24328C7677158D3E0A8507DE6FDC5E7157C295A4D0C310",
+      "bytes": 340467712,
+      "userVersion": 4,
+      "parseRuns": 4,
+      "pages": 609,
+      "spans": 424954,
+      "anchors": 424954,
+      "segments": 0,
+      "embeddings": 0,
+      "indexJobs": 0
+    },
+    "indexValidationBackupDerivedStore": {
+      "path": ".codex-tmp/dev016-r1-native/library/Sidera/.derived-backup-20260822-1001/document-derived-v1.sqlite",
+      "sha256": "90EAB9F90DA033E2044BB24D493C31357BDE9F28A68EDEB827F6389060E00879",
+      "bytes": 579129344,
+      "userVersion": 4,
+      "readyJobs": 1,
+      "cancelledJobs": 2,
+      "movedRecoverablyBeforeEvidenceStoreRebuildCheck": true
+    },
+    "evidenceStore": {
+      "sha256": "4B2251844350D1DBBA65B9E025A0632069C45A281BFECB3A1B26BA2822BE8879",
+      "bytes": 36864,
+      "userVersion": 1,
+      "annotations": 2,
+      "savedEvidence": 1
+    }
+  },
+  "knownIssue": {
+    "code": "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING",
+    "scope": "isolated empty/test paper library startup",
+    "cause": "the isolated library has no V20 immersive visual source",
+    "documentOrIndexCorruption": false,
+    "blockingForReaderAcceptance": false,
+    "workaround": "select the static background",
+    "followUp": "narrow empty-project startup UX repair"
+  },
+  "safety": {
+    "realPaperLibraryOpened": false,
+    "realPaperLibraryWritten": false,
+    "v20Rebuilt": false,
+    "networkDownloadUsed": false,
+    "providerUsed": false,
+    "institutionSessionCleared": false,
+    "otherProcessesInspectedOrModified": false,
+    "onlyExactIsolatedAppControlled": true,
+    "exactIsolatedAppClosedAtEnd": false,
+    "exactIsolatedAppLeftOpenForUserAcceptance": true,
+    "stagedCommittedPushedOrPublished": false
+  },
+  "development017Boundary": {
+    "status": "READY",
+    "blockedBy": []
+  }
+}

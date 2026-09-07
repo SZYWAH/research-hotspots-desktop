@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "package": "Sidera-016-R1-Evidence-Rect-Recovery",
+  "generatedAt": "2026-08-22T16:40:33+08:00",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeMixedSelectionAnnotation": "PASS",
+    "userIdleSpinnerExperience": "PASS",
+    "userExperience": "PASS",
+    "development017": "IN_PROGRESS"
+  },
+  "reportedFailure": {
+    "surface": "DocumentReaderShell evidence SideSheet",
+    "symptoms": [
+      "保存批注按钮的加载圆圈可能长期不结束",
+      "同一选区有时可保存、有时拒绝",
+      "界面直接显示 SideraDocumentEvidenceRectsInvalid 稳定错误码"
+    ],
+    "stableErrorCode": "SIDERA_DOCUMENT_EVIDENCE_RECTS_INVALID"
+  },
+  "rootCause": {
+    "geometry": "服务端按 UTF-16 比例线性插值得到 canonical 子矩形，而 PDF TextLayer 的中英文比例字形会产生不同但仍位于权威源 span 内的精确 DOM 矩形；旧校验把这类合法矩形误判为越界。",
+    "loadingState": "批注、证据和高亮请求使用文档版本 epoch 清理 loading；请求过程中 manifest/version epoch 更新会跳过 finally 清理，留下真实请求 loading。",
+    "idleSpinner": "新建批注时 editingAnnotation 与 evidenceMutationId 均为 undefined，旧表达式 evidenceMutationId === editingAnnotation?.id 将 undefined === undefined 误判为 busy；因此保存成功、按钮可点击且没有错误时，图标仍会永久旋转。"
+  },
+  "implementation": {
+    "rust": {
+      "path": "src-tauri/core/src/document_evidence.rs",
+      "changes": [
+        "允许精确 DOM 矩形在同页、同 UTF-16 范围的权威源 span 内使用比例字形几何",
+        "继续拒绝 NaN、越界、跨页、远离源 span 和超过 64 个矩形的输入",
+        "新增中英文比例字形矩形回归测试"
+      ]
+    },
+    "frontend": {
+      "path": "src/components/DocumentReaderShell.tsx",
+      "changes": [
+        "以独立 action token 隔离并清理每一次 selection mutation loading",
+        "旧请求不能清理新请求，新 manifest epoch 不能遗留永久 spinner",
+        "新增显式 noteSaveBusy；只有真实新建请求或带明确 annotation id 的编辑请求才显示 LoaderCircle，空闲态显示静态 Save 图标",
+        "保存按钮通过 aria-busy 暴露真实忙碌状态，undefined 不再与 undefined 比较",
+        "将稳定错误码映射为可操作的中文提示，诊断码不再直接污染普通通知"
+      ]
+    },
+    "audit": {
+      "path": "scripts/sidera_document_reader_r2_audit.mjs",
+      "changes": [
+        "新增 selection mutation token fencing 和友好错误文案断言",
+        "新增空闲静态保存图标、真实请求 spinner、aria-busy 及禁止可选链空值比较的断言"
+      ]
+    }
+  },
+  "automatedVerification": {
+    "rustTargeted": {
+      "command": "cargo test -p research-hotspots-core persistent_anchor_ -- --test-threads=1",
+      "result": "PASS",
+      "tests": "2/2",
+      "taskDialogPopup": false
+    },
+    "typescript": {
+      "command": ".\\node_modules\\.bin\\tsc.cmd -b",
+      "result": "PASS"
+    },
+    "readerAudit": {
+      "command": "node scripts/sidera_document_reader_r2_audit.mjs",
+      "result": "STATIC PASS",
+      "selectionMutationTokenFencing": true,
+      "noteSaveIdleIcon": "save-static-spinner-busy-only"
+    },
+    "productionBuild": {
+      "command": "pnpm build",
+      "result": "PASS"
+    },
+    "releaseCandidate": {
+      "command": "tauri build --no-bundle --config .codex-tmp/dev016-r1-native/tauri.dev016.conf.json",
+      "cargoBuildJobs": 2,
+      "result": "PASS",
+      "path": ".codex-tmp/dev016-r1-native/sidera-dev016.exe",
+      "bytes": 53725184,
+      "sha256": "1A294A0167EAB8B00714328FF0E41613E6D4926399F87CD405CE20D1AC723109"
+    },
+    "debugCandidateBoundary": {
+      "status": "NON_PRODUCT_DEBUG_LAUNCH_FAILURE",
+      "windowsStatus": "0xC0000142",
+      "releaseCandidateAffected": false,
+      "repeatedLaunchStopped": true
+    }
+  },
+  "nativeVerification": {
+    "application": ".codex-tmp/dev016-r1-native/sidera-dev016.exe",
+    "library": ".codex-tmp/dev016-r1-native/library",
+    "fixture": "document-reader-r2-four-page.pdf",
+    "page": 3,
+    "scalePercent": 100,
+    "attempts": [
+      {
+        "selection": "默认片段最多八百个 UTF-16 字符。",
+        "annotation": "R2 中英混合选区回归 2026-08-22",
+        "annotationCountBefore": 6,
+        "annotationCountAfter": 7,
+        "spinnerSettled": true,
+        "rectsInvalidNotice": false,
+        "result": "PASS"
+      },
+      {
+        "selection": "默认片段最多八百个 UTF-16 字符。",
+        "annotation": "R2 第二次混合选区稳定性复测",
+        "annotationCountBefore": 7,
+        "annotationCountAfter": 8,
+        "spinnerSettled": true,
+        "rectsInvalidNotice": false,
+        "result": "PASS"
+      }
+    ],
+    "mainWindowClickable": true,
+    "unexpectedWindow": false,
+    "idleSpinnerRegression": {
+      "flow": "打开第 3 页既有批注编辑器，观察空闲按钮后执行一次真实保存",
+      "idleIcon": "static-save",
+      "idleAriaBusy": false,
+      "requestCompleted": true,
+      "editorClosedAfterSave": true,
+      "errorNotice": false,
+      "userConfirmed": true,
+      "userConfirmation": "通过",
+      "confirmedAt": "2026-08-22T16:40:33+08:00",
+      "result": "PASS"
+    },
+    "result": "PASS"
+  },
+  "boundaries": {
+    "realPaperLibraryOpenedOrWritten": false,
+    "institutionSessionCleared": false,
+    "providerCalled": false,
+    "modelDownloadedOrRenamed": false,
+    "v20Rebuilt": false,
+    "otherProcessesInspectedOrModified": false,
+    "gitStagedCommittedPushedOrPublished": false,
+    "dirtyWorktreePreserved": true
+  },
+  "finalUserAcceptance": {
+    "confirmedAt": "2026-08-24T00:00:00+08:00",
+    "confirmation": "可以正常通过",
+    "rotatedPage125PercentSelection": "PASS",
+    "selectionVisualAlignment": "PASS",
+    "floatingToolbar": "PASS",
+    "mainWindowClickable": true,
+    "errorNoticeObserved": false
+  },
+  "remainingAcceptance": []
+}

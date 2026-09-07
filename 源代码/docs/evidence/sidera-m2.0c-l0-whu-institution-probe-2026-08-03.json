@@ -1,0 +1,114 @@
+{
+  "package": "M2.0c-L0",
+  "title": "武汉大学 aTrust 与全馆发现接入探针",
+  "date": "2026-08-03",
+  "baseline": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "branch": "codex/sidera-m2-rag",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "institutionAccess": "UNVERIFIED"
+  },
+  "institution": {
+    "id": "whu",
+    "name": "武汉大学",
+    "accessMethod": "external-atrust-session",
+    "credentialsHandledBySidera": false,
+    "atrustProcess": "aTrustTray.exe",
+    "atrustRunningMeansDatabaseLoggedIn": false
+  },
+  "networkContract": {
+    "frontendSuppliesUrls": false,
+    "httpsOnly": true,
+    "allowlistedHosts": [
+      "www.lib.whu.edu.cn",
+      "lib.whu.edu.cn",
+      "whu.metaersp.cn"
+    ],
+    "maxConcurrentRequests": 2,
+    "connectTimeoutSeconds": 5,
+    "requestTimeoutSeconds": 8,
+    "redirectLimit": 5,
+    "responseLimitKiB": 256,
+    "cookies": false,
+    "responseBodyPersisted": false
+  },
+  "productSurface": {
+    "settingsCard": "武汉大学机构资源",
+    "resultLifetime": "current-runtime-memory-only",
+    "rows": [
+      "aTrust 客户端",
+      "图书馆官网",
+      "数据库导航",
+      "全馆统一发现"
+    ],
+    "browserActions": [
+      "打开图书馆",
+      "打开数据库导航"
+    ]
+  },
+  "capabilities": [
+    "unified-discovery",
+    "metadata-export",
+    "online-navigation",
+    "full-text-resolution-entry",
+    "dedicated-adapters"
+  ],
+  "validation": {
+    "rustCoreFixtures": {
+      "status": "PASS",
+      "passed": 8,
+      "failed": 0,
+      "externalNetworkRequests": 0
+    },
+    "typescript": "PASS",
+    "vite": {
+      "status": "PASS",
+      "version": "6.4.3",
+      "modules": 1917
+    },
+    "cargoCheckJobs2": "PASS",
+    "l0Audit": "PASS",
+    "providerCalls": 0,
+    "paperDatabaseWrites": 0,
+    "conversationWrites": 0,
+    "credentialWrites": 0
+  },
+  "nativeAcceptance": {
+    "status": "FAIL",
+    "requiresUserAtrustLogin": true,
+    "observedAt": "2026-08-03T12:25:46+08:00",
+    "observations": {
+      "atrustClient": "PASS",
+      "libraryHomeLogin": "PASS",
+      "databaseDirectNavigation": "FAIL",
+      "databasePageState": [
+        "login-visible",
+        "no-data",
+        "service-error"
+      ],
+      "unifiedDiscovery": "UNRESOLVED",
+      "sensitiveBrowserStatePersisted": false
+    },
+    "supersededBy": "M2.0c-L0-R1",
+    "queries": [
+      "人工智能",
+      "machine learning"
+    ],
+    "fullTextDownloads": 0,
+    "paperImports": 0
+  },
+  "nextRoute": {
+    "structuredApi": "direct-unified-search",
+    "browserOnly": "visible-browser-export",
+    "metadataDirectFullTextBrowser": "hybrid"
+  },
+  "boundaries": {
+    "legacyCnkiSeleniumChanged": false,
+    "embeddedBrowserAdded": false,
+    "documentSchemaAdded": false,
+    "agentLibraryToolsAdded": false,
+    "committed": false,
+    "pushed": false
+  }
+}

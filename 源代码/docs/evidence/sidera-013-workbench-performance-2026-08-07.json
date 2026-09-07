@@ -1,0 +1,232 @@
+{
+  "package": "Sidera-013",
+  "development": "开发 013｜文献工作台首屏与持续卡顿治理",
+  "date": "2026-08-07",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativePerformance": "UNVERIFIED",
+  "userPerformanceAcceptance": "UNVERIFIED",
+  "nativePerformanceGate": {
+    "status": "UNVERIFIED",
+    "finalVisibleDesktopAfterSecondNarrowRepair": false,
+    "launchAuthorization": "UNAVAILABLE",
+    "reason": "Final native launch authorization unavailable due Codex usage limit.",
+    "escalationRejectedBySystem": true,
+    "bypassProhibited": true,
+    "productFailure": false
+  },
+  "repository": {
+    "branch": "codex/sidera-m2-rag",
+    "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+    "dirtyWorktreePreserved": true,
+    "commitCreated": false,
+    "pushOrPullRequest": false,
+    "published": false
+  },
+  "database": {
+    "path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\target\\v022-desktop-acceptance-2\\library\\research-hotspots-v7.sqlite",
+    "schemaVersion": 14,
+    "paperCount": 25473,
+    "libraryRevision": 1,
+    "sha256BeforeAndAfter": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+    "hashCountRevisionUnchanged": true,
+    "mainDatabaseContentMutations": 0,
+    "walBytes": 0,
+    "shmBytes": 32768,
+    "sidecarBookkeeping": "Native startup and read-only SQLite connections advanced the bookkeeping timestamps of the 0-byte WAL and 32KB SHM sidecars. This is not a main-database content mutation, but it is also not zero filesystem touching."
+  },
+  "baselineDiagnosis": {
+    "fullValidationMedianMs": 490.7,
+    "fullValidationStages": [
+      {
+        "stage": "quick_check",
+        "medianMs": 366.0,
+        "sharePercent": 74.59
+      },
+      {
+        "stage": "foreign_key_check",
+        "medianMs": 34.3,
+        "sharePercent": 6.99
+      },
+      {
+        "stage": "v20_orphan_reference_checks",
+        "medianMs": 87.3,
+        "sharePercent": 17.79
+      },
+      {
+        "stage": "paper_count",
+        "medianMs": 1.6,
+        "sharePercent": 0.33
+      },
+      {
+        "stage": "metadata",
+        "medianMs": 0.41,
+        "sharePercent": 0.08
+      }
+    ],
+    "clickToFirstBatchMs": 5981.9,
+    "clickToDetailStableMs": 6073.6,
+    "targetBusinessReadIpc": {
+      "developmentStrictMode": 8,
+      "production": 4
+    },
+    "primaryEntryBottleneck": "Repeated full database preparation and duplicated workbench reads serialized by the database-path preparation lock.",
+    "primaryResidenceBottleneck": "The full-screen immersive WebGL background continued processing and rendering on every RAF behind the workbench.",
+    "sqlResidualObserved": "The unfiltered newest query uses USE TEMP B-TREE FOR ORDER BY for ORDER BY COALESCE(year, 0), updated_at."
+  },
+  "baselineNativePerformance": {
+    "maximized": {
+      "drawsPerSecond": 604.0,
+      "rendererProcessCpuPercent": 30.55,
+      "gpuProcessCpuPercent": 53.80,
+      "taskMs": 678.2
+    },
+    "normal": {
+      "drawsPerSecond": 688.0,
+      "rendererProcessCpuPercent": 19.10,
+      "gpuProcessCpuPercent": 32.87,
+      "taskMs": 421.7
+    }
+  },
+  "implementation": {
+    "databasePreparation": "Startup, initialization, and restore explicitly call prepare_library_database, which owns full migration, integrity, foreign-key, V20 reference checks, schema initialization, expired Agent-run recovery, and fingerprint registration.",
+    "ordinaryReadFailureContract": "Ordinary status, query, and facet reads never fall back to full preparation. An unprepared or fingerprint-stale database returns a stable preparation error.",
+    "facetCacheIdentity": "normalized database path + project ID + library revision",
+    "facetReadTransaction": "The library revision and all three facet groups are read in one read-only transaction before the revision-scoped cache entry is published.",
+    "facetInvalidation": "Known library mutations invalidate entries for the affected database; pagination and refresh do not recompute facets.",
+    "bootstrapReuse": "The parent-owned status, facets, and first page are handed to SearchWorkspace as a revision-bound bootstrap snapshot.",
+    "strictModeCoalescing": "Same-key setup, page, and detail promises are shared while in flight; stale-response sequence gates remain in place.",
+    "detailOwnership": "No first paper is selected automatically. PaperDocumentPanel mounts only after explicit selection, then loads the document snapshot and completed-download list.",
+    "workbenchRenderBudgetFps": 24,
+    "agentRenderBudgetFps": null,
+    "renderBudgetContract": "Skipped RAF callbacks do not process or render. The next processed frame advances simulation using wall-clock delta since the previous processed frame; visibility resume resets the timing anchor and budget changes do not rebuild the renderer.",
+    "startupFirstFrameContractPreserved": true,
+    "dprChanged": false,
+    "paperOrDustCountsChanged": false,
+    "staticFallbackAdded": false,
+    "schemaIndexOrSortSemanticsChanged": false
+  },
+  "intermediateColdStartupResourceChain": {
+    "measurementStatus": "PENDING REMEASURE AFTER EXPLICIT-PREPARE SECOND NARROW REPAIR",
+    "finalForDevelopment013": false,
+    "reason": "These values were captured before the explicit prepare_library_database lifecycle, stable unprepared-read failure, and single-transaction facet repair landed. They remain provenance for the intermediate run and must be replaced by the final rerun.",
+    "developmentDomContentLoadedMs": 6775.9,
+    "librarySetup": {
+      "count": 1,
+      "elapsedMs": 2923.9
+    },
+    "v20SnapshotMs": 401.3,
+    "libraryStatusMs": 5.7,
+    "facets": {
+      "count": 1,
+      "elapsedMs": 146.8
+    },
+    "firstPageQuery": {
+      "count": 1,
+      "elapsedMs": 148.1
+    },
+    "backgroundPayloadMs": 647.6,
+    "dynamicBackgroundCompleteApproxMs": 11070,
+    "realDynamicWebglVisible": true,
+    "staticFallbackOrRetry": false
+  },
+  "intermediateNativeWorkbenchInteraction": {
+    "evidenceClass": "INTERMEDIATE NATIVE EVIDENCE",
+    "capturedBeforeExplicitPrepareSecondNarrowRepair": true,
+    "finalForDevelopment013": false,
+    "clickToFirstBatchStableMs": 114.2,
+    "firstBatchRows": 20,
+    "detailAutomaticallyLoaded": false,
+    "entryBusinessReadIpc": 0,
+    "eventListenSubscriptions": 2,
+    "eventListenSubscriptionsAreBusinessReads": false,
+    "explicitSelection": {
+      "detailMountMs": 39.2,
+      "detailStableMs": 60.1,
+      "ipcCount": 2,
+      "ipcDurationsMs": [
+        18.7,
+        25.7
+      ]
+    },
+    "explicitRefresh": {
+      "queryCount": 1,
+      "facetCount": 0,
+      "queryMsMin": 268,
+      "queryMsMax": 269
+    }
+  },
+  "intermediateNativePerformance": {
+    "evidenceClass": "INTERMEDIATE NATIVE EVIDENCE",
+    "capturedBeforeExplicitPrepareSecondNarrowRepair": true,
+    "finalForDevelopment013": false,
+    "maximized": {
+      "drawsPerSecond": 121.2,
+      "rendererProcessCpuPercent": 7.64,
+      "gpuProcessCpuPercent": 7.14,
+      "taskMs": 347.926
+    },
+    "normal": {
+      "drawsPerSecond": 120.0,
+      "rendererProcessCpuPercent": 9.07,
+      "gpuProcessCpuPercent": 6.97,
+      "taskMs": 314.103
+    },
+    "frameHashesDiffer": true,
+    "backgroundRemainedDynamic": true,
+    "normalWindow": "INTERMEDIATE PASS",
+    "maximizedWindow": "INTERMEDIATE PASS"
+  },
+  "automatedResults": {
+    "pnpmBuild": "PASS",
+    "cargoCheckJ2": "PASS",
+    "rustCoreTargeted": "PASS; 2 targeted filters, each 1/1",
+    "workbenchReadPathAudit": "PASS",
+    "backgroundOwnershipAudit": "PASS",
+    "dynamicStartupR3Audit": "PASS; 15/15",
+    "p2bCommitAudit": "PASS",
+    "p2bV14CompatibilityAudit": "PASS",
+    "p2bR2Audit": "PASS",
+    "f1aAudit": "PASS",
+    "desktopShellAudit": "PASS",
+    "workbenchPerformanceAudit": "PASS",
+    "desktopNewFiveTests": {
+      "compile": "PASS",
+      "execution": "TEST-HOST UNAVAILABLE",
+      "windowsExitCode": "0xffffffff",
+      "productFailure": false
+    },
+    "extraCargoCheckTests": {
+      "status": "FAIL",
+      "cause": "Existing integration targets contain unresolved modules.",
+      "formalCargoCheckGate": false,
+      "doesNotOverrideCargoCheckJ2Pass": true
+    }
+  },
+  "preservedAcceptanceStates": {
+    "development012R3": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED",
+    "p2bR2": "NATIVE CONTROLLED IMPORT PARTIAL PASS; desktop restart presentation, visible rollback/blocking, and native explicit local search remain UNVERIFIED",
+    "f1a": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE SINGLE-DOCUMENT ACQUISITION UNVERIFIED"
+  },
+  "safety": {
+    "providerCalls": 0,
+    "institutionNetworkRequests": 0,
+    "fullTextDownloads": 0,
+    "mainDatabaseContentMutations": 0,
+    "hotspotRebuilds": 0,
+    "commits": 0,
+    "pushes": 0,
+    "pullRequests": 0,
+    "releases": 0,
+    "unrelatedProcessesStopped": 0
+  },
+  "remainingBoundary": {
+    "queryPlan": "The unfiltered newest ordering still uses a temporary B-tree.",
+    "intermediatePreSecondRepairRefreshQueryMs": "268-269",
+    "schemaIndexOrSortAuthorization": "NOT GRANTED",
+    "requiredNextStep": "Any further SQL/index/sort optimization must first be validated on an exact copy of the real library and requires explicit authorization before touching the selected database.",
+    "nativePerformance": "NATIVE PERFORMANCE UNVERIFIED",
+    "userAcceptance": "USER PERFORMANCE ACCEPTANCE UNVERIFIED",
+    "nativeRerunBlocker": "Final native launch authorization unavailable due Codex usage limit; this is not a product failure and must not be bypassed."
+  }
+}

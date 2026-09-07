@@ -1,0 +1,298 @@
+{
+  "schemaVersion": 1,
+  "package": "Sidera-017-OCR-Evidence-Agent",
+  "generatedAt": "2026-08-27T14:55:15+08:00",
+  "status": {
+    "development016": "USER EXPERIENCE PASS",
+    "r1Implementation": "IMPLEMENTED",
+    "r1AutomatedTechnical": "PASS",
+    "r1NativeOcr": "PASS",
+    "r1UserOcrAcceptance": "PASS",
+    "r2Implementation": "IMPLEMENTED",
+    "r2AutomatedTechnical": "PASS",
+    "r2RealProviderEvidence": "PASS",
+    "r2NativeAgentUx": "PASS",
+    "r2UserExperience": "PASS",
+    "overall": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PASS / USER EXPERIENCE PASS"
+  },
+  "implementation": {
+    "derivedStore": {
+      "file": "Sidera/document-derived-v1.sqlite",
+      "schemaVersion": 5,
+      "migration": "NON_DESTRUCTIVE_V4_TO_V5",
+      "ocrTables": [
+        "document_ocr_jobs",
+        "document_ocr_pages",
+        "document_ocr_spans",
+        "document_ocr_active_results"
+      ],
+      "nativeTextOverwritten": false,
+      "indexMarkedStaleAfterOcr": true,
+      "automaticIndexRebuild": false
+    },
+    "ocr": {
+      "model": "PP-OCRv5_mobile_det+PP-OCRv5_mobile_rec",
+      "runtime": "ONNX Runtime CPU",
+      "intraOpThreads": 2,
+      "directML": false,
+      "runtimeDownload": false,
+      "globalConcurrentPages": 1,
+      "maxBatchPages": 8,
+      "timeoutSeconds": 90,
+      "upload": {
+        "scheme": "sidera-document://localhost/ocr-upload/{token}",
+        "webview": "main",
+        "contentType": "image/png",
+        "tokenTtlSeconds": 30,
+        "singleUse": true,
+        "maxBytes": 12582912,
+        "maxEdgePixels": 3000,
+        "maxPixels": 12000000,
+        "imagePersisted": false
+      },
+      "states": [
+        "awaiting-upload",
+        "queued",
+        "running",
+        "ready",
+        "failed",
+        "cancelled",
+        "superseded"
+      ]
+    },
+    "documentAgent": {
+      "existingPiSessionReused": true,
+      "secondAgentStateMachineCreated": false,
+      "conversationUsesResolvedActiveLibrary": true,
+      "scopes": [
+        "selected-anchor",
+        "current-page",
+        "document-retrieval"
+      ],
+      "tools": [
+        "sidera_search_document_segments",
+        "sidera_get_document_segments_by_ids",
+        "sidera_finalize_document_evidence"
+      ],
+      "maxSegments": 8,
+      "maxTextBytes": 32768,
+      "maxReferences": 6,
+      "referenceKind": "document-anchor",
+      "unreadReferencesRejected": true,
+      "crossDocumentRejected": true,
+      "crossPageRejected": true,
+      "documentContentTrustedAsInstruction": false
+    },
+    "reader": {
+      "entryPoints": [
+        "selection-toolbar",
+        "evidence-side-sheet"
+      ],
+      "agentSurface": "pure-black-overlay",
+      "evidenceSideSheetSuspendedWhileAgentOpen": true,
+      "evidenceSideSheetRestoredAfterAgentClose": true,
+      "pdfLayoutCompressed": false,
+      "persistentAgentRail": false,
+      "galaxyFocusForDocumentAnchor": false,
+      "mainAgentCitationOpensExactDocumentVersion": true,
+      "mainAgentCitationRestoresPageAnchor": true
+    }
+  },
+  "automatedVerification": {
+    "core": {
+      "documentOcr": {
+        "result": "PASS",
+        "passed": 4,
+        "failed": 0
+      },
+      "documentAgent": {
+        "result": "PASS",
+        "passed": 3,
+        "failed": 0
+      },
+      "documentIndex": {
+        "result": "PASS",
+        "passed": 11,
+        "failed": 0
+      },
+      "piProtocol": {
+        "result": "PASS",
+        "passed": 8,
+        "failed": 0
+      }
+    },
+    "audits": {
+      "documentReaderR1": "PASS 105",
+      "documentReaderR2": "STATIC PASS",
+      "documentSelectionGeometry": "PASS",
+      "documentOcrR1": "STATIC PASS",
+      "documentAgentR2": "STATIC PASS",
+      "piBasicConversation": "PASS",
+      "piLocalPaperRag": "PASS"
+    },
+    "frontendProductionBuild": {
+      "command": "pnpm build",
+      "result": "PASS",
+      "modules": 1929
+    },
+    "rustCompilation": {
+      "cargoCheckTestsJ2": "PASS",
+      "cargoCheckJ2": "PASS",
+      "existingWarnings": 13,
+      "warningClass": "dead_code",
+      "windowsTestExecutableRun": false,
+      "taskDialogPopup": false
+    },
+    "resourceAudit": {
+      "fullModelManifestAndHashes": "PASS",
+      "fullLicense": "PASS",
+      "liteOcrExcluded": "PASS",
+      "runtimeNetworkDownload": false
+    }
+  },
+  "nativeR1Verification": {
+    "application": "isolated-development-017-candidate",
+    "fixture": "scripts/fixtures/document-reader-r3-scanned-ocr.pdf",
+    "realPaperLibrary": false,
+    "pages": [
+      {
+        "page": 1,
+        "layout": "Chinese",
+        "result": "PASS",
+        "confidence": 0.942,
+        "spanCount": 9
+      },
+      {
+        "page": 2,
+        "layout": "English",
+        "result": "PASS",
+        "confidence": 0.967865,
+        "spanCount": 9
+      },
+      {
+        "page": 3,
+        "layout": "bilingual-double-column",
+        "result": "PASS",
+        "confidence": 0.813,
+        "spanCount": 13
+      },
+      {
+        "page": 4,
+        "layout": "rotated-90",
+        "result": "PASS",
+        "confidence": 0.667,
+        "spanCount": 5,
+        "expectedAnchorPresent": true
+      },
+      {
+        "page": 5,
+        "layout": "low-contrast",
+        "result": "PASS",
+        "confidence": 0.938,
+        "spanCount": 6
+      }
+    ],
+    "singleFlightSequentialPages": [
+      3,
+      4,
+      5
+    ],
+    "cancelIdempotent": true,
+    "lateReadyPromotionObserved": false,
+    "explicitMissingNativeSourceStableError": true,
+    "explicitOcrPreferencePersisted": true,
+    "ocrResultPersistedAcrossAppLifetime": true,
+    "ocrTextSelectionAt125Percent": "PASS",
+    "ocrSelectionGeometryFix": {
+      "rootCause": "detector horizontal padding scaled with full line width and expanded long OCR lines to the page edge",
+      "detectorFix": "horizontal padding now scales from line height",
+      "readerFix": "OCR selections render from normalized OCR span geometry while the native browser selection remains transparent",
+      "isolatedDatabasePageIndex": 1,
+      "oldMeanConfidence": 0.634,
+      "newMeanConfidence": 0.967865,
+      "activeSpanCount": 9,
+      "activeMinimumX": 0.08524788391777509,
+      "singleLineSelection": "PASS",
+      "fourLineSelection": "PASS",
+      "selectedTextMatchesFourLines": true,
+      "zoomPercent": 125,
+      "unexpectedNotice": false
+    },
+    "savedEvidenceSource": "ocr"
+  },
+  "r2Verification": {
+    "realOcrFixtureExercisesAllThreeScopes": "PASS",
+    "searchBeforeReadRequired": true,
+    "readBeforeCitationRequired": true,
+    "stablePageAnchorProduced": true,
+    "mainAgentDocumentReferenceDoesNotEnterGalaxyFocus": true,
+    "mainAgentDocumentReferenceOpensBoundVersionAndPage": "IMPLEMENTED / NATIVE UNVERIFIED",
+    "isolatedNativeWindowDiscovered": true,
+    "computerUseWindowContentApproval": "APPROVED",
+    "realProviderFixtureTurn": "PASS",
+    "providerTurn": {
+      "providerCalls": 1,
+      "fixtureOnly": true,
+      "scope": "current-page",
+      "source": "ocr",
+      "page": 2,
+      "promptCharacters": 151,
+      "verifiedReferenceCount": 1,
+      "referencedPage": 2,
+      "answerIdentifiesReferencedPage": true
+    },
+    "nativeClickablePageReturn": "PASS",
+    "nativePageReturn": {
+      "startedOnPage": 3,
+      "clickedReferencePage": 2,
+      "endedOnPage": 2,
+      "anchorHighlighted": true,
+      "zoomPercent": 125
+    },
+    "nativeReadingScopes": {
+      "selectedAnchor": "PASS",
+      "currentPage": "PASS",
+      "documentRetrieval": "PASS"
+    },
+    "nativeExplicitDocumentIndex": {
+      "result": "PASS",
+      "mode": "FTS + E5",
+      "segmentCount": 5,
+      "automaticStart": false,
+      "documentRetrievalEnabledOnlyAfterReady": true
+    },
+    "nativeAgentOverlay": {
+      "evidenceSideSheetHiddenWhileOpen": true,
+      "evidenceSideSheetRestoredOnClose": true,
+      "selectedTextRestoredOnClose": true,
+      "pageZoomAndSavedEvidencePreserved": true,
+      "layoutCompressed": false
+    },
+    "normalWindowLayout": "PASS",
+    "maximizedWindowLayout": "PASS",
+    "userSubjectiveAcceptance": "PASS"
+  },
+  "userAcceptanceBatch": {
+    "reportedAt": "2026-08-27",
+    "item1": "PASS",
+    "item2": "PASS AFTER FIX",
+    "item3": "PASS",
+    "item4": "PASS",
+    "item5": "PASS",
+    "item2OriginalFailure": "selected OCR text and visible blue selection rectangles did not align at 125%",
+    "finalUserConfirmation": "page 2 at 125% selection rectangles follow the selected text"
+  },
+  "safety": {
+    "realPaperLibraryOpened": false,
+    "realPaperLibraryWritten": false,
+    "realPaperTextSentToProvider": false,
+    "v20Rebuilt": false,
+    "galaxyBackgroundModified": false,
+    "fullTextDownloaded": false,
+    "modelDownloadedAtRuntime": false,
+    "institutionSessionCleared": false,
+    "otherProcessesInspectedOrModified": false,
+    "stagedCommittedPushedOrPublished": false
+  },
+  "remainingAcceptance": []
+}

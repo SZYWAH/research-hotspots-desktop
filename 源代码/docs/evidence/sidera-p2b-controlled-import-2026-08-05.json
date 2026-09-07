@@ -1,0 +1,86 @@
+{
+  "package": "Sidera-P2b",
+  "task": "开发 011 / P2b 受控主库提交与来源治理",
+  "date": "2026-08-05",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "product": "UNVERIFIED",
+  "nativeControlledImport": "UNVERIFIED",
+  "p1Status": "PARTIAL / ADAPTER DEFERRED",
+  "p2Stage": "P2b",
+  "schema": {
+    "mainPaperLibraryVersion": 14,
+    "importReviewVersion": 3,
+    "declaredV14Validation": "strict-no-silent-repair",
+    "paperForeignKeyIdentity": "project_id+paper_id",
+    "governanceTables": [
+      "paper_import_commits",
+      "paper_import_commit_items",
+      "paper_source_records",
+      "paper_identity_aliases"
+    ]
+  },
+  "commitContract": {
+    "scope": "whole-batch",
+    "transaction": "all-or-nothing",
+    "mergePolicy": "fill-empty-only",
+    "previewBinding": [
+      "previewId",
+      "previewHash",
+      "batchVersion",
+      "expectedRevision"
+    ],
+    "idempotencyKey": "clientCommitId",
+    "batchStateAuthority": "import-review-ledger",
+    "mainWriteAuthority": "paper-import-commit-ledger",
+    "explicitReconciliation": true,
+    "automaticReplay": false,
+    "invalidDoiPolicy": "source-record-only",
+    "frozenBatchPolicy": "read-only-copy-to-new-active-batch",
+    "historyIncludesCommittedPaperIds": true
+  },
+  "rollback": {
+    "scope": "whole-batch",
+    "safeOnly": true,
+    "force": false,
+    "conflictMeansNoWrite": true,
+    "revisionAndFingerprintChecks": true
+  },
+  "excluded": {
+    "hotspotGeneration": 0,
+    "fullTextDownloads": 0,
+    "providerCalls": 0,
+    "agentRuns": 0
+  },
+  "automatedValidation": {
+    "typescript": "PASS",
+    "vite": "PASS (Vite 6.4.3, 1919 modules)",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "importCommitTests": "10/10 PASS",
+    "importReviewTests": "9/9 PASS",
+    "schemaV14Tests": "10/10 PASS",
+    "tooNewSchemaRejection": "1/1 PASS",
+    "p2bAudit": "40/40 PASS",
+    "p2aAndInstitutionRegressions": "PASS",
+    "projectDocumentationAudit": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "nextStages": {
+    "p2c": "NOT_STARTED",
+    "f1": "NOT_STARTED"
+  },
+  "nativeAcceptance": [
+    "preview an entirely decided review batch",
+    "commit the complete batch atomically",
+    "repeat the same clientCommitId without duplicate writes",
+    "restart and reconcile review and main-library ledgers",
+    "verify source records and identity aliases",
+    "verify main-library revision and paper-count changes",
+    "roll back a safe batch",
+    "block a conflicting rollback without writes"
+  ],
+  "automatedInstitutionNetworkRequests": 0,
+  "automatedProviderCalls": 0,
+  "automatedFullTextDownloads": 0
+}

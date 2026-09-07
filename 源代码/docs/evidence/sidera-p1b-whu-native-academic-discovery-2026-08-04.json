@@ -1,0 +1,57 @@
+{
+  "package": "Sidera-P1b-001",
+  "status": "IMPLEMENTED_CANDIDATE",
+  "automatedTechnical": "PASS",
+  "nativeCompleteGate": "UNVERIFIED",
+  "implemented": {
+    "productModes": [
+      "academic-discovery",
+      "database-direct",
+      "catalog"
+    ],
+    "automaticResourceTypeFilters": [
+      "article",
+      "conference-paper",
+      "thesis"
+    ],
+    "fullTextRoutes": [
+      "direct-html-pdf",
+      "doi",
+      "openurl-link-resolver",
+      "provider-record",
+      "publisher-page",
+      "browser-fallback"
+    ],
+    "databaseDirect": {
+      "registered": ["Web of Science", "武汉大学数据库导航"],
+      "advancedProviderAdapters": "P6"
+    }
+  },
+  "automatedChecks": {
+    "typescript": "PASS",
+    "vite": "PASS (1918 modules)",
+    "rustInstitutionSearchTests": "PASS (19/19)",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "p1bAudit": "PASS",
+    "r4RegressionAudit": "PASS",
+    "documentationAudit": "PASS (266/266)",
+    "diffCheck": "PASS",
+    "cargoFmtCheck": "UNVERIFIED (existing dirty-tree formatting drift outside P1b scope)"
+  },
+  "nativeAcceptance": {
+    "academicQueryChinese": "UNVERIFIED",
+    "academicQueryEnglish": "UNVERIFIED",
+    "multipleSourceProviders": "UNVERIFIED",
+    "recordOpen": "UNVERIFIED",
+    "fullTextRouteOpen": "UNVERIFIED",
+    "wosDirectOpen": "UNVERIFIED",
+    "catalogCleanup": "UNVERIFIED",
+    "crossPageContinuity": "UNVERIFIED",
+    "restartSessionReuse": "UNVERIFIED"
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "downloads": 0
+}

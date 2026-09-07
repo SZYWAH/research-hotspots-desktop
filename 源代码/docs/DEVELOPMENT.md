@@ -8,7 +8,7 @@
 
 状态：权威开发过程入口
 
-更新时间：2026-08-03
+更新时间：2026-09-05
 
 ## 文档职责
 
@@ -26,12 +26,324 @@
 
 ## 最终目标摘要
 
-将现有科研热点工作站发展为以本地论文证据为基础、可按需联网检索、结果可追溯的科研 Agent。最终默认入口是全屏沉浸式星空中的极简对话空间；理论星图提供真实语义位置和可解释关系；论文库、热点库、报告库与分析工作台由折叠导航或 Agent 调用。
+将现有科研热点工作站发展为本地优先、机构资源可接入、全文证据可追溯的科研操作系统与 Agent。最终默认入口是全屏沉浸式星空中的极简对话空间；一次研究意图能够串联本地/机构论文发现、统一身份与去重、受控题录导入、单篇全文获取、文档解析、原生阅读、页码证据问答、比较综述和成果沉淀。供应商网页只承担登录、原始记录、特殊交互和故障回退，不拥有主要研究流程。
+
+## 当前工作包：开发 014-R7｜机构会话静默恢复
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE SILENT LIFECYCLE PASS / NATIVE LOGIN-REQUIRED CLASSIFICATION PASS / NATIVE CAPABILITY TRUTH PASS_BOUNDED / NATIVE PROCESS EXIT PASS / EFFECTIVE SAVED SESSION RESTORE UNVERIFIED / USER EXPERIENCE UNVERIFIED`。
+
+- 新增独立 `sidera_institution_session_restore`，只在用户首次进入“机构资源”时调用；应用启动和其他页面不访问武大。恢复复用固定 `app_local_data_dir/institution-webview-v1/whu`，不导出、复制或记录 Cookie，也不自动打开认证窗口。
+- 隐藏机构 WebView 以独立 restore epoch 与 generation 顺序验证数据库 SSO、统一发现和个人图书馆；每项 10 秒、总计 30 秒。离页、手工连接、显式清除和新恢复事务使旧回调失效。实现中发现“数据库非 Ready 后跳过后两项”的真实短路缺陷，已作单点修复，三项现在独立判定。
+- 2026-09-03 精确根因：个人图书馆检查器引用了未在自身脚本中定义的 `host`；检查每次都在路由动作前抛错，最终被误报为“10 秒内未能确认”。窄修改为局部定义脱敏 `pageTitle/host`，识别官方 `/page/902099/show` 登录落地页，并在预算内有限重试同源 `/login` 路由；未改动其他能力或认证语义。
+- 自动门：core 恢复分类 2/2、R7 静态审计 23/23、`cargo check --tests -j 2`、`cargo check -j 2`、`cargo build -j 2` 和既有前端生产构建均为 `PASS`；只保留既有 `dead_code` warning。9 月 3 日主窗口退出钩子更新后，增量检查耗时 9.92 秒、构建 46.67 秒。R6 专项回归继续通过。
+- 原生观察：窗口重开后首次进入显示 starting，恢复过程无认证弹窗、只有一个可点击 Sidera 主窗；最终为数据库 `login-required`、统一发现 `ready`、个人图书馆 `login-required / OFFICIAL_LIBRARY_LOGIN_LANDING`。9 月 5 日校正：当时旧 PID 15124 在窗口关闭后仍存活，原“进程重启/部分有效会话恢复”的解释无效，保留能力分类与窗口观察。
+- 退出修复：`main` 的 `CloseRequested` 现请求正常退出整个应用。9 月 5 日对哈希已核验新版 PID 26540 执行主窗正常关闭后，精确 PID、全部 Sidera 进程及窗口均消失，`NATIVE PROCESS EXIT PASS`。无需重新构建。
+- 执行偏差：曾误启动一次根 Tauri desktop lib 测试宿主，在进入断言前因 `TaskDialogIndirect / STATUS_ENTRYPOINT_NOT_FOUND` 弹窗退出。该 harness 已由 D-170 明确为历史 `TEST-HOST UNAVAILABLE`，后续禁止再运行；它不是产品功能回归，也不影响可运行 core、checks 与正式开发版证据。
+- 剩余停止门：在可用内存回到 2 GiB 安全线以上后建立有效认证前态；再正常关闭并启动同一哈希新版，记录新 PID/开始时间，进入机构资源应短暂显示“正在确认”、无意外窗口并恢复有效能力。通用主窗退出门已经通过，但不能代替这组认证恢复对照。证据：[开发 014-R7 静默恢复](./evidence/sidera-014-r7-session-restore-2026-09-01.json)。
+
+## 最近完成工作包：开发 014-R6｜结构化分页收口
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STRUCTURED TRANSPORT PASS / NATIVE STRUCTURED PAGINATION PASS / NATIVE SEARCH TRUTH PASS / NATIVE CANCELLATION PASS / NATIVE UX PASS`。
+
+- `whu-academic-discovery-v2-structured` 优先读取官方页面已经收到的白名单结构化 JSON；正文只在受限 `SecretBytes` 内存中存在，解析后清空。结构化失败只允许首屏前执行一次显式 DOM 回退；已接受任何结构化页后不再混入 DOM。
+- 下一页由最近接受响应的 `page_number` 或 `first/last` 推导，点击只有收到身份不同且范围严格前进的新响应才算成功。重复页、倒退页、旧 task/epoch/generation 和迟到响应均拒绝；所有终止原因保持真实。
+- 中文“人工智能”目标 40 实得 40 条，接受 9 个结构化页面、总命中 280,113、15 个供应商、`target-reached`。英文“machine learning”目标 100 实得 76 条，接受 20 个结构化页面、总命中 530,969、32 个供应商、`page-limit`；不补造缺失 24 条。
+- 原生同时通过跨页选择、每页 10 条、本地排序零新增搜索 IPC、活动检索取消后旧 40 条快照和 1 条选择保持、迟到响应不恢复任务、机构网页默认隐藏，以及正常/最大化可点击主窗。证据：[开发 014-R6 结构化分页](./evidence/sidera-014-r6-structured-pagination-2026-09-01.json)。
+
+## 最近完成工作包：开发 017｜按需 OCR 与页码证据 Agent
+
+R1 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE OCR PASS / USER OCR ACCEPTANCE PASS`。`document-derived-v1.sqlite` 从 v4 非破坏升级至 `user_version=5`；Full 使用固定 PP-OCRv5 mobile det/rec、CPU 两线程、无 DirectML，Lite 不含 OCR 资源且不运行时下载。主 WebView 通过单次 30 秒 PNG token 上传最多 12MiB、3000px 长边/1200 万像素的当前页，后端全局单任务、90 秒超时、取消幂等并拒绝迟到提交。原生与 OCR 文本并存，`auto` 优先有效原生文本，显式缺失来源不静默回退；OCR 结果与来源偏好已在隔离项目中证明跨应用生命周期持久化。
+
+R2 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / REAL PROVIDER EVIDENCE PASS / NATIVE AGENT UX PASS / USER EXPERIENCE PASS`。现有 Pi/RAG 增加 `selected-anchor / current-page / document-retrieval` 三种只对当前 turn 有效的 ReadingContextScope，以及 search/read/finalize 三个文档工具；最多读取 8 段、32KiB，最终最多 6 个已读 `document-anchor`。选择浮层与证据 SideSheet 是唯一入口，Agent 使用纯黑覆盖面板，不建立第二套会话或持久层，也不压缩 PDF。唯一一次真实 Provider 调用只使用隔离扫描 fixture 第 2 页 OCR 文本，返回正确回答与 1 条可点击页码引用；从第 3 页点击后准确回到第 2 页。五项用户检查全部通过。
+
+### 开发 017 当前自动与原生事实
+
+- OCR core 4/4、Document Agent 3/3、Document Index 11/11、Pi 协议 8/8 通过；`cargo check --tests -j 2` 与正式 `cargo check -j 2` 通过，仅保留 13 条既有 `dead_code` warning。
+- reader R1/R2、OCR R1、document-agent R2、Pi 基础会话和本地 RAG 审计通过，`pnpm build` 通过；Full 模型文件、manifest、SHA-256 与 Apache-2.0 许可证一致，Lite 资源审计确认不捆绑 OCR。
+- 隔离扫描 PDF 的中/英/双栏/旋转/低对比页已完成原生 OCR；没有访问真实论文库，没有向 Provider 发送真实正文，没有下载模型、重建 V20 或处理星图背景。证据：[开发 017 OCR 与页码证据 Agent](./evidence/sidera-017-ocr-evidence-agent-2026-08-25.json)。
+- 用户已授予唯一隔离 Tauri 窗口的电脑操控权限；原生复验先修复证据 SideSheet 覆盖问答面板，以及 Pi 会话未复用已解析活动库目录的两个真实缺陷。随后三种证据作用域、125% OCR 选区与恢复、显式 `FTS + E5 · 5 个片段`、唯一真实 Provider 问答、`[1] 第 2 页` 引用、3→2 精确回跳和正常/最大化布局均通过；没有操作其他进程或发送真实论文正文。OCR 可读性、来源切换与最终交互手感已由用户完成五项验收。
+- 用户的第 2 项复验曾暴露 OCR 长行矩形向左扩到页面边缘。后端检测框水平 padding 已从“按整行宽度”改为“按行高”，前端对 OCR 选择使用规范化 span 几何并隐藏浏览器原生选择底色。隔离第 2 页重跑后平均置信度 `0.967865`、9 spans、最小 `x=0.085247...`；125% 单行和四行选区自动原生复验均贴合，实际选择文本覆盖预期四行。该缺陷技术门和用户复验均为 `PASS`。
+
+## 前序工作包：开发 016｜全文证据台 R2
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / WINDOWS STANDALONE TEST HOST PASS / NATIVE EVIDENCE UX PASS / ROTATED TEXTLAYER FIX NATIVE RETEST PASS / NATIVE INDEX PASS / USER EXPERIENCE PASS`。本包在开发 015 的不可变 PDF 阅读 R1 上建立精确文本选择、稳定页证据、独立持久批注/保存证据以及显式 FTS/E5 混合索引；不改变原始 DocumentVersion、论文库、V20、机构连接器或 Agent 状态机。旋转 TextLayer 命中层左移已确认并完成盒尺寸窄修，最新原生候选自动拖选与用户最终手感均通过；后续开发 017-R1/R2 已全部完成。
+
+### 实现范围
+
+1. PDF.js 仍只有一个 Canvas；透明 TextLayer 使用 v5 scale/user-unit/rotation 变量与 viewport 几何，按近可见页读取 `SideraDocumentPageText`。搜索、DOM 选择、高亮、批注统一使用不含 runId 的 `SideraDocumentEvidenceAnchor`。
+2. 新增非重建型 `Sidera/document-evidence-v1.sqlite` 保存 annotations、saved_evidence 和 source preference。精确公开锚与保存时 canonical baseline 分离；重解析只返回 exact、reanchored、ambiguous、missing。create/update 稳定错误和身份围栏禁止覆盖、插入或移动原 anchor。
+3. `document-derived-v1.sqlite` 升为 `user_version=4`；segments、FTS5、index_jobs 与 384 维 float16 embeddings 全部按 job_id 隔离。分段上限 800 UTF-16、重叠 120；本地 multilingual-e5-small 固定 CPU 2 线程、batch 16、DirectML 关闭。索引可 start/current/snapshot/pause/resume/cancel，后台 worker 排他且可重启恢复，promotion 与有界 GC 同事务。
+4. 搜索模式为 auto、lexical、hybrid；lexical/未就绪不加载模型，auto 模型失败明确降级 lexical，hybrid 不伪装成功；加权 RRF 为 lexical 0.45、semantic 0.55、k=60，并返回 resolved mode、fallback 和精确 anchor。无 mode 的旧 `sidera_document_search` JSON 保持兼容。
+5. 阅读页继续 52px 单行工具栏和正文优先；全文搜索为图标，唯一新增文字入口“证据”打开默认关闭纯黑 SideSheet，文档版本并入折叠区。选择后才出现三动作浮层；批注可编辑，索引状态只在运行中心增加一个独立紧凑行，不计入 Agent run。
+
+### 自动门与边界
+
+- Rust core：derived 23/23、evidence 8/8、index 11/11、document protocol 7/7、Pi protocol 8/8、research search 25/25，全部 `PASS`。
+- 前端：`npx --no-install tsc -b`、reader R1 105、reader R2 `STATIC PASS`、Agent 运行中心、F1a、014-R2 visual 92/92、012-R3 dynamic 15/15 与 `pnpm build`（Vite 1,928 modules、本地 PDF worker）均 `PASS`。构建中发现的 `text-ink/38` 非法 utility 已改为明确 arbitrary opacity 后复跑通过。
+- Rust 与测试宿主：`cargo check --tests -j 2` 与正式 `cargo check -j 2` 均 `PASS`。独立 `sidera-windows-test-host-smoke` 静态含 manifest、Common Controls v6 与 `TaskDialogIndirect` import，唯一一次有界运行 exit 0、无窗口，记为 `WINDOWS STANDALONE TEST HOST PASS`。旧 desktop lib unit harness 的 `0xC0000139 / STATUS_ENTRYPOINT_NOT_FOUND` 只作为历史 `TEST-HOST UNAVAILABLE` 保留，禁止再次触发。
+- 四页 fixture 为 76,563 bytes、SHA-256 `2EB19E71946F84D2620ACD6FB9D381835CF15812AF2A19CAEC416C000DC5B065`。原生已通过非旋转页 100%/125% 精确选择、高亮/批注/证据持久化、派生删除重建后 3/3 `missing → exact`、本地 E5 双向跨语言召回、正常/最大化、SideSheet overlay、reader renderer=0、主窗口点击和无异常窗口。两条 12,811 片段长任务已通过索引 pause/resume/cancel、重启重挂及迟到结果隔离。独立 300 页 v8 fixture 的 `parse-3644922f0c69ab1a79ede754` 又在同一 run 中连续完成活动时关闭阅读器、重开观察 263/300、手动停止；终态 `cancelled`、295/300，4 秒后页数与更新时间不变，且该版本只有 1 个 run。因此连续解析组合门升级为 `PASS`。用户随后在旋转页 125% 证明旧候选的可见文字无法命中、蓝色选择落在左侧空白区；根因是 90°/270° 页把已旋转 viewport 尺寸写入 PDF.js 未旋转 TextLayer 盒。盒尺寸交换窄修已实现，并在最新候选中通过 TypeScript、静态审计、2-job Tauri 构建及可见原生拖选；选中文本与蓝色范围均对应可见竖排文字，记为 `NATIVE RETEST PASS`。
+- 2026-08-22 批注窄修消除了中英文比例字形精确 DOM 矩形被 canonical 线性几何误拒的问题，并用 selection action token 保证真实保存 loading 必定收口。用户随后暴露出独立的空闲图标误判：新建批注的两个可选 id 同为 `undefined` 时被误判为 busy；现改为显式 `noteSaveBusy`，空闲显示静态 Save，只有真实请求显示 spinner。隔离 fixture 第 3 页连续两次混合选区批注均落库，计数 `6 → 7 → 8`、无 `RECTS_INVALID`；最新候选又通过空闲静态图标和真实保存后编辑器关闭的原生回归，记为 `NATIVE MIXED-SELECTION ANNOTATION PASS / NATIVE IDLE-SPINNER REGRESSION PASS`。用户已回复“通过”，该窄项升级为 `USER IDLE-SPINNER EXPERIENCE PASS`；开发 016 聚合用户体验现在只受旋转页 125% 指针精确选区约束。
+- 本轮只操作精确指定的隔离候选与隔离项目；没有联网下载、调用 Provider、打开或写真实论文库、重建 V20、清除机构会话、查看或操作其他进程；未暂存、提交、推送或发布。隔离空库的 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 是缺少 V20 视觉源的非阻断启动 UX 问题，不是文档损坏。证据：[016 自动基线](./evidence/sidera-016-document-evidence-r2-2026-08-12.json)、[016-R1 原生收口](./evidence/sidera-016-r1-native-closure-2026-08-12.json)、[016-R1 批注矩形恢复](./evidence/sidera-016-r1-evidence-rect-recovery-2026-08-22.json)。
+
+## 前序工作包：开发 015｜文档原生阅读台 R1
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE READER PASS (CODEX VISIBLE DESKTOP) / USER EXPERIENCE UNVERIFIED`。本轮把 F1a 已存在的不可变 DocumentVersion 接入本地 PDF.js 原生阅读、派生全文索引与阅读位置恢复；不改变原始文件、论文库、机构连接器、V20 或 Provider 边界。P1 仍为 `PARTIAL / ADAPTER DEFERRED`，WOS、CNKI、Scopus 没有正式连接器。
+
+### 实现与数据边界
+
+1. `Sidera/documents-v1.sqlite` 继续保存 DocumentVersion、不可变 blob 与 SHA-256。新增 `Sidera/document-derived-v1.sqlite` 只保存 parse run、page、span、UTF-16 anchor、FTS 和 reader state；产品文件名为 v1，当前 Schema 是 `user_version=2`，v1→v2 显式回填 UTF-16 长度。派生失败可重建，绝不改写原始 PDF。
+2. 本地打包 `pdfjs-dist@5.4.149` 与 worker。主 WebView 使用不透明 `sidera-document://localhost/version/{token}` 读取版本；GET/HEAD/OPTIONS、单 Range 与稳定错误由 Rust 拥有，前端拿不到 blob 路径或任意 URL。50MB/300 页门在解析前拒绝超限文档。
+3. 阅读工作台只保留一个 PDF renderer；PDF 内容区至少 70%，页码、缩放、搜索进入紧凑工具条，搜索/文档详情按需浮出。reader active 时根级 starfield Canvas 为 0；搜索通过 UTF-16 anchor 跳页，离开重开恢复版本页码与缩放。
+4. 阅读器重开若 manifest 仍为 active parse，则恢复 parse snapshot 并继续有限轮询，不另起第二 run；`document-reader-viewport` 是唯一外层滚动所有者。协议错误响应保留 CORS 和稳定错误码；research-search 的 `request_tasks` 使用上限 32 的 LRU 并保护活动请求。这四项是最后硬化，不改变 reader JSON 或原始文档身份。
+5. OCR、E5、批注、AI 阅读工具与跨文档证据不属于 R1；它们不得被隐藏在首屏解析或自动触发。
+
+### 自动、原生与证据
+
+- 自动门：reader audit 105/105、derived core 14/14、document store 9/9、P2a-R2 84/84、`pnpm build` 1,928 modules 且本地 worker bundle 为 `PASS`。2026-08-09 补跑中，core LRU 定向测试 1/1 `PASS`；首次桌面 `cargo test` 被无关 integration target `sidera_pi_runtime_protocol` 缺失 `sidera_rag` / `sidera_stream_gate` 阻断。随后定向到 desktop lib 的 `sidera_document_protocol::tests` 已完成编译，但 Windows test host 在进入断言前以 `0xC0000139 / STATUS_ENTRYPOINT_NOT_FOUND`（`TaskDialogIndirect`）终止，因此协议断言记为 `TEST-HOST UNAVAILABLE`，不是产品、协议或断言 `FAIL`，也不写成协议测试 `PASS`。最新 `cargo check --manifest-path src-tauri/Cargo.toml -j 2` 为 `PASS`，仅有 13 条既有 `dead_code` warning；此前 `cargo build --manifest-path src-tauri/Cargo.toml -j 2` 只保留为先前包证据。最终独立复审仍为 P0/P1/P2=0。
+- 可见桌面 fixture `Simple_AI_20260430_111347.pdf`：74,996 bytes、2 页、version `version-b433cace57bf4bd5bbe5e5a1`、SHA-256 `cdac21fe62ac20328e983a930c80dad66b0eb9b19f99abfa96977fe5d5074f9c`。PDF.js 单 renderer / 2 canvases，无 iframe fallback/错误，约 0.75s ready；“人工智能”命中第 1/2 页并跳转，1/2 页、110/120%、离开重开恢复通过。
+- 1360×860 与 1707×1019 均通过；跳页后 `window.scrollY=0`、shell/toolbar y=70，物理缩放可点击，readerActive 时 starfield canvas=0。Range bytes0-7 返回 206、`Content-Range: bytes 0-7/74996`、`%PDF-1.3`，HEAD 200、OPTIONS 204。416 只由 core 自动测试证明，WebView 原生 fetch 没有独立状态证据。
+- 派生结果为 ready runs 1、pages 2、spans 505、anchors 505、FTS rows 2，reader state 持久化。真实论文库只以 immutable + `query_only` 读取，没有重建 V20 或写入；写入仅发生在已授权 documents-v1 与 derived store。用户体验保持 `UNVERIFIED`。证据：[sidera-015-document-reader-r1-2026-08-09.json](./evidence/sidera-015-document-reader-r1-2026-08-09.json)。
+
+## 当前窄修：开发 014-R5｜多分面公平分页与远端继续性真值
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PAGINATION TRUTH PASS_BOUNDED / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PASS_BOUNDED`。
+
+- `fair_sequential_page_budget` 为尚未执行的每个分面保留最低页容量；搜索级全局预算与分面级作用域预算分开，观察页码只在当前分面内递增。
+- DOM fallback 在报告页面预算终态前调用一次只读 `inspect_academic_next_page`。明确没有下一页时报告 `source-exhausted / hasMore=false`；仍存在下一页但本地预算耗尽时才保留 `page-limit / hasMore=null`。探针不点击、不导航，也不改变产品 IPC/JSON。
+- 自动门：research core 26/26、R5 audit 8/8、R4 audit 52、P2a-R1 99、P2a-R2 84、机构工作台 117/117、`pnpm build` 1,929 modules、`cargo check --tests -j 2`、`cargo check -j 2`、`cargo build -j 2` 全部 `PASS`；Rust 只保留 13 条既有 `dead_code` warning。
+- 原生门：用户在隔离单实例完成正式登录；英文“machine learning / 期刊+会议 / 2020–2025 / 100”实得 3 条、扫描 2 页、覆盖 4 个供应商、接收 6/检查 16，并以 `SIDERA_RESEARCH_SEARCH_SOURCE_EXHAUSTED` 收口。正常/最大化首条可见、网页隐藏、主窗可点击、1 个 Sidera 顶层窗和无 CMD/孤儿认证窗通过，选择保持 1 条。
+- 真实结果不足一页，所以 100 条、可见会议结果、跨页选择及完整 observed/synthesized 矩阵继续 `UNVERIFIED`。本轮电脑操控没有越过 WebView 子 HWND 安全边界重试排序下拉；0 检索 IPC 由源码/审计证明，R4 的原生“最新”排序通过仍作为历史证据。没有访问真实论文库、清理会话、重建 V20、调用 Provider、下载全文或操作其他进程。证据：[R5 分页真值](./evidence/sidera-014-r5-pagination-truth-2026-08-28.json)。
+
+## 前序工作包：开发 014-R4｜任务绑定发现认证与检索真值加固
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE DISCOVERY AUTH PASS / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PASS_BOUNDED`。该工作包不新增连接器，只把 discovery-fulltext 认证并入原搜索事务、排除认证等待对活跃搜索预算的消耗，并补足目标达成、远端继续性与检索位置的可证明语义。
+
+### 实现契约
+
+1. 发现认证复用当前 taskId/searchId、候选快照和取消句柄；认证 ready 后恢复同一 search，前端不能重新 start。90 秒只累计活跃抓取/解析时间，等待用户认证暂停计时；停止同时取消认证等待与原搜索。
+2. `retrievalPosition.basis=observed|synthesized`：供应商页面真实观察到的位置才为 observed，兼容抽取或无法证明官方顺序的结果为 synthesized；去重继承首次最早位置。
+3. `ResearchSearchTruth.targetReached` 只表示达到本地 40/100 候选目标；`hasMore` 只有远端证据充分时为 true/false，否则为 null。`limitReached` 只保留兼容镜像，不能推导 totalHits、来源耗尽或完整覆盖。
+4. 首屏保持查询、连接摘要、真值摘要和结果优先；活动来源与技术细节默认折叠，本地 10 条分页/排序不产生 IPC。P1 保持 `PARTIAL / ADAPTER DEFERRED`，WOS/CNKI/Scopus 仍在 P6。
+
+### 自动与原生边界
+
+- R4 audit 45/45、research core 24/24、正式 `cargo check/build -j 2` 均为 `PASS`；import-read 18、visual 92、dynamic 15、P2b-R2、F1a、desktop shell、workbench read 回归通过。
+- 2026-08-27 原生使用唯一最新 Tauri 实例完成正式 discovery SSO。中文目标 40 实得 10 条、扫描 2 页、覆盖 3 个供应商并来源耗尽；英文目标 100 实得 3 条、扫描 20 页、覆盖 4 个供应商并达到页面预算，`hasMore` 保持未知。英文停止保留旧 3 条与 1 条选择，5 秒无迟到恢复；重新完成后本地“最新”排序不启动新检索。正常/最大化、网页隐藏、主窗点击和无孤儿窗口为有界 `PASS`。40/100、真实跨页选择与完整 position-basis 矩阵未达到，故 search truth 只为 `PARTIAL PASS`。证据：[R4 自动与最新原生真值](./evidence/sidera-014-r4-auth-search-truth-2026-08-09.json)、[016-R1 联合原生收口](./evidence/sidera-016-r1-native-closure-2026-08-12.json)。
+
+开发 014 当前聚合状态同步为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE AUTH PARTIAL PASS / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PARTIAL PASS / USER EXPERIENCE PARTIAL PASS`；三类认证目标已有有界通过，完整检索真值和 UX 继续分门验收。
+
+## 前序工作包：开发 014-R3｜纯黑浮层、星图状态与题录通知修复
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE APPEARANCE PASS (BOUNDED) / NATIVE INPUT OWNERSHIP HISTORICAL FAIL / INPUT FIX IMPLEMENTED / INPUT FIX NATIVE RETEST PASS / NATIVE LIBRARY AUTH FIRST-TRANSACTION RETEST PASS / NATIVE IMPORT READ PASS / USER INPUT+AUTH EXPERIENCE PASS_BOUNDED`。机构 SideSheet 局部纯黑、Agent 理论模式可用性真值、历史视觉来源、P2b 题录只读读取和通知生命周期的既有自动/外观事实继续保留；历史输入所有权失败不被新证据覆盖，输入窄修和首次个人图书馆事务已完成原生复验。开发 014 的 `discovery-fulltext`、原生检索真值与完整 UX 仍为 `UNVERIFIED`。不重建 V20、不写当前真实论文库、不改变 012-R3 动态首帧契约。
+
+### 用户反馈基线与修复判断
+
+- “连接与来源”浮层仍带蓝黑/青色渐变，与 Sidera 工作台 `#000000` 主视觉不一致；该问题只属于局部 SideSheet，不能通过修改全局 panel token 解决。
+- 当前真实库正式入库后为 revision 1、25,473 篇且 active V20 缺失，历史结构完整视觉源仍为 r0、25,463 篇。沉浸图能显示，是因为 012-R3 明确允许历史 V20 作为只读视觉来源；理论图仍只接受 current active V20。旧运行时先切模式再读取理论载荷，因而把“理论数据待更新”表现为黑屏或“理论背景渲染失败”，不是那 10 篇论文破坏了 WebGL。
+- 历史来源 r0/r1 提示常驻画布左上角会干扰沉浸构图；它是按需诊断信息，应从已挂载载荷投影到现有“…”菜单，而不是重新读库。
+- 题录提交状态和历史的普通读取仍会进入迁移/Schema ensure/审查回执对账等可写路径；其错误又以没有生命周期的全局通知长期留在 Agent 和星图页面。修复必须同时收口读取权限、错误作用域、自动关闭和迟到结果隔离。
+- 历史原生基线为 `NATIVE INPUT OWNERSHIP HISTORICAL FAIL`：用户观察到鼠标可以移动但 Sidera 无法点击，只有任务管理器强制结束 Sidera 后输入才恢复。没有 Application Hang、崩溃或 GPU reset 证据；冻结瞬间没有捕获主 HWND enabled/owner，故精确根因仍为 `UNVERIFIED`。旧截图只能证明外观，不能证明窗口输入所有权；后续复验通过不能抹掉该历史失败。
+
+### 最小实现与不变量
+
+1. `WorkbenchSideSheet.css` 声明唯一局部 token `--workbench-side-sheet-surface: #000`，Panel、Header、关闭按钮和机构能力分组引用；Body 透明。删除局部青色/蓝黑/白色渐变，但保留 16% 遮罩、边框、阴影、圆角、状态色、hover/focus、桌面/窄屏几何和退出动画，不修改全局 `--color-panel`。
+2. 新增 `TheoryAvailabilityState = idle | checking | not-ready | failed`。理论顶栏和“查看语义位置”统一先调用一次 `get_v20_galaxy_payload`；ready 才写入理论偏好、focus 与模式并执行单 renderer 交接。not-ready 保留当前沉浸 Canvas、动画时间、checkpoint 和 `immersive` 偏好，显示“理论星图待更新”非模态面板。Escape/继续沉浸恢复焦点且 0 IPC/0 重建；“前往分析流水线”只导航，不建任务。IPC/超时与真实 WebGL 错误继续分开。
+3. 左上角常驻来源节点退出画布。“…”菜单增加约 260px 的只读视觉来源分组，只依据 `mountedImmersivePayload` 展示 source r0、current r1、论文数、freshness 与“非当前热点分析”，展开不产生 IPC。冷启动理论偏好在 current V20 缺失时仍按 012-R3 进入真实动态沉浸回退，首帧 ready 门不变。
+4. `get_v20_galaxy_payload` 改用既有 prepared registry 的 `open_library_database_read_only`。题录 `status/history` Tauri 命令名和 JSON 保持不变，但同样使用 prepared `READ_ONLY + query_only` 主库连接，只验证 Schema v14/import ledger；读取不再执行 `migrate_library_file`、DDL、schema ensure、mutation permit 或 receipt repair。
+5. 主库 `paper_import_commits` 继续是提交事实唯一权威。ledger 存在而 review receipt 缺失仍返回权威状态；review store 只读打开不创建目录、不切 WAL、不建表、不启 Immediate transaction。两端均不存在时统一返回 `SIDERA_IMPORT_COMMIT_STATUS_NOT_FOUND`。显式提交/回滚仍保留既有可写对账。
+6. desktop `invoke` 将字符串/对象拒绝统一转成保留稳定错误码的 `Error`。`AppNoticeScope` 增加 `import-review`，通知选项增加 `dismissAfterMs`；后台状态与历史错误分别汇报并在 8 秒后自动关闭，成功重读、离页或 X 立即清理。提交/回滚阻断错误继续常驻，详细错误码只进入题录诊断。database path/project/revision/generation 门覆盖 A-B-A 迟到响应。
+7. Windows owned window 继续使用真实主 Window 与 `owner_raw` 建立应用归属，但生产认证、个人图书馆 popup 和共享机构浏览器路径不得调用 `set_enabled(false)`。主窗口恢复幂等执行 `set_enabled(true)`；连接 close/destroyed 与 500ms fallback 都可实际重试，只有恢复成功后才记录领取，避免一次失败永久消耗恢复权。
+8. 机构浏览器显示/隐藏使用进程级单调 `clientRequestId` 排序。原生 hide/show 成功后才能提交 `guard.visible`；迟到 show 不能覆盖新 hide，过期 hide 仍可安全隐藏。show 先应用 bounds、再显示，失败统一 hide 回滚。前端关闭呈现必须等待物理 hide 成功，失败仅按 0/45/120ms 三次有限重试并保留诊断，禁止无限重试或先改布局后异步隐藏。
+
+### 自动验证与精确副本证据
+
+- 前端/静态门：`pnpm build` 为 `PASS`（Vite 6.4.3，1,922 modules，8.12s）；题录读取与通知 16/16、理论可用性 10/10、更新后的 014-R2 视觉 92/92、012-R3 动态启动 15/15、工作台 read path、性能 105、机构工作台专项最新 117/117、桌面壳 16/16、P2a、P2b、P2b-R2 17、v14 兼容 20、F1a 20 均为 `PASS`。首次个人图书馆关闭验证窄修独立复审为 P0/P1/P2=0。
+- Rust 门：正式 `cargo check --manifest-path src-tauri/Cargo.toml -j 2`、desktop lib 测试二进制 `--no-run` 编译与 `cargo build --manifest-path src-tauri/Cargo.toml -j 2` 均为 `PASS`。四项定向测试各 1/1 通过：prepared review store 的 `query_only` 读取、all-skip 状态/历史只读、missing status/history，以及真实库精确副本 `import_read_real_copy`。额外 `cargo check --tests` 因既有 `tests/sidera_pi_runtime_protocol.rs` 集成目标模块引用漂移而 `FAIL`；这不属于本修复回归、不改变正式 `cargo check` 的通过结论，也不能据此宣称全测试通过。
+- all-skip 首跑因合成 `setup_library` 仍保持 `user_version=0`，被新的 v14 只读契约正确拒绝。只在测试夹具执行既有 schema ensure 后补 `user_version=14`，复跑 1/1 通过；产品读取契约没有降级或回退迁移。
+- 精确副本测试读取 history=1、主库权威 batch=`committed` 且没有 review store。副本主文件 SHA-256 前后均为 `B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA`，大小 214,532,096 bytes，Schema v14、25,473 篇、revision 1、active V20 0；副本只产生 0-byte WAL 和 32KB SHM bookkeeping。最新原生门后的真实库 immutable + `query_only` 最终复核亦保持相同主文件指纹、ready snapshots 4，且 main/WAL/SHM 的 size+mtime 前后均不变。
+
+### 原生门与边界
+
+- `cargo build --manifest-path src-tauri/Cargo.toml -j 2` 为 `PASS`。外观候选 PID 61844 与最新输入/认证候选 PID 62020 均在无可见 CMD、单个 Sidera 实例下复验，没有并行启动第二套编译或服务。
+- 最大化与正常窗口 UIA Rect `(260,119)-(2062,1303)` 的既有截图仍确认 SideSheet 为 `#000`；理论按钮由 UIA 触发后沉浸 Canvas 保持挂载，连续截图星位变化且不黑屏；出现“理论星图待更新”，流水线动作只导航且未自动创建 job。“…”菜单显示 historical V20 r0 / 25,463、current library r1 / 25,473 和“非当前热点分析”，画布左上无常驻来源。上述只构成 `NATIVE APPEARANCE PASS (BOUNDED)`。
+- 旧 Escape 焦点回归和截图没有捕获冻结瞬间主 HWND enabled/owner，故历史门保持 `NATIVE INPUT OWNERSHIP HISTORICAL FAIL` 并撤回聚合 `NATIVE VISUAL PASS`。新一轮正常窗口 SideSheet X/Escape、机构 WRY show 可见/物理 hide、认证窗口关闭、正常/最大化窗口物理点击均通过；认证 X 关闭到消失 65ms、主窗口回前台 371ms、主窗口 disabled 数 0，用户也明确确认最大化与机构浏览器隐藏后主窗口可点击，当前为 `INPUT FIX NATIVE RETEST PASS`。
+- 题录页在正常窗口显示“读取诊断 · 审查批次正常 · 提交状态正常 · 提交历史正常”，且无长期 toast；隔离 fault fixture 又证明 batch/status/history 分别返回稳定错误码。history toast 59ms 出现、+4003ms 仍在、+8304ms 消失；X 后 100ms 消失，离开“检索与导入”150ms 清除，成功重读 50.8ms 恢复且无 toast，因此聚合为 `NATIVE IMPORT READ PASS`。提交/回滚阻断错误常驻未单独注入，仍是独立 `UNVERIFIED` 边界。
+- 最终 immutable + `query_only` 复核确认真实库 SHA-256 `B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA`、214,532,096 bytes、Schema v14、25,473 篇、revision 1、active rows 0、ready snapshots 4；main、WAL 0 byte 与 SHM 32,768 bytes 的 size+mtime 在复验前后均不变。
+- 生产 `set_enabled(false)` 清零、幂等恢复、物理 hide 后提交、`clientRequestId` 顺序屏障、两阶段 show 回滚和三次有限 hide 重试均已实现。2026-08-09 16:40:32+08 的 PID 62020 最终快照显示主 HWND `0x33049E` 为 visible/enabled、uncloaked，owner=0、rootOwner=self，最大化 rect `(-11,-11)-(2571,1539)`；非主可见顶层窗口为 0，library/auth WRY `0x1F10988` 及 renderer PID 46180 均 hidden，唯一可见 interactive WebView 为 main，无孤儿输入拦截层。当前严格记录为 `INPUT FIX IMPLEMENTED / INPUT FIX NATIVE RETEST PASS`，且不覆盖历史失败。
+- 自动与文档收口阶段的 Provider 调用、主动机构网络访问、全文下载、V20/热点重建和当前真实论文库写入均为 0；最新原生认证由用户在官方隔离 WebView2 页面中完成。保留大型 dirty worktree，不 reset、checkout、clean、批量格式化、暂存、提交、推送、PR 或发布。证据：[sidera-014-r3-visual-truth-and-notice-2026-08-08.json](./evidence/sidera-014-r3-visual-truth-and-notice-2026-08-08.json)。
+
+## 前序工作包：开发 014｜机构资源工作台 R1
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE AUTH PARTIAL PASS / NATIVE SEARCH TRUTH UNVERIFIED / NATIVE UX UNVERIFIED / USER EXPERIENCE PARTIAL PASS`。认证能力拆分为：`database-access` 有界 `PASS`、`library-account` 最新首次事务复验为 `NATIVE LIBRARY AUTH FIRST-TRANSACTION RETEST PASS`、`discovery-fulltext` 为 `UNVERIFIED`。P1 继续为 `PARTIAL / ADAPTER DEFERRED`；当前没有 WOS、CNKI、Scopus 自动连接器，这三类连接器及多源覆盖属于 P6。个人图书馆认证通过不等于真实检索、完整原生 UX 或整个产品体验已经通过，各类结论必须独立更新。
+
+### 用户反馈基线与产品判断
+
+- 2026-08-08 实机截图与反馈确认，机构页同时出现“打开数据库会话”“登录我的图书馆”“打开机构浏览器/机构网页已在侧栏”等操作。数据库 SSO 与个人图书馆原本是不同身份，但旧前端都先启动会话、再打开共享浏览器，第三个按钮又只控制同一浏览器表面，用户看到的是重复入口而不是清晰目标。
+- 认证弹窗关闭后，旧链只清理浏览器可见状态，没有一个拥有 close-time 检查、父页刷新与最终身份收敛的事务权威；多个窗口/状态机还可能让迟到 close 覆盖新结果。因此“浏览器中已登录、关闭后程序仍未登录”是状态同步缺口，不是用户操作错误。
+- 旧结果每次只展示 10 条，未解释这是检索上限还是分页单位，也没有总命中量、覆盖、来源返回顺序、去重或完成原因。当前自动结构化结果只来自既有武大统一发现路线所暴露的来源，不能据此宣称 WOS、CNKI、Scopus 或全馆检索能力。
+- “数据库直达”若只是打开官网、要求用户重复登录、搜索和整理，只能作为人工访问或故障回退，不能构成 Sidera 的核心价值。目标价值仍是自动检索、候选审查、受控入库、全文证据、聚类/可视化和 Agent 闭环。
+- 页头、机构说明、认证状态、来源卡、查询区和常驻按钮组纵向叠加，把真正的检索结果推到首屏以下。开发 014 因此重排信息层级，不以继续堆叠入口解决功能不足。
+
+### 实现契约
+
+1. 新增单一 `InstitutionAuthCoordinator`。数据库访问、统一发现全文与个人图书馆保留为三个目标，但整个应用一次只允许一个活动连接事务；相同目标复用并聚焦，另一个目标返回 busy。transaction ID + generation 隔离迟到回调；稳定 `ready` 不被晚到 close 降级，失败/取消不清除此前已证明的 ready，主窗口恢复只领取一次。
+2. 连接窗口关闭先进入 `verifying`，并在同一个 4 秒总预算内执行目标专属验证：`database-access` 与 `discovery-fulltext` 继续最多检查当前页 3 次，再刷新并检查隐藏的绑定父页；`library-account` 只检查当前页 1 次，随后在同一可见 WebView、同一 WebView2 environment/UDF 中直接轮询固定的武大个人图书馆 landing。只有目标专属身份成立才进入 `ready`；否则进入可解释的 `failed/cancelled`。个人图书馆的官网 popup 由绑定当前 transaction/generation 的受管子 WebView 使用 `NewWindowResponse::Create + window_features` 承接，保留 POST、`window.opener` 与共享 WebView2 environment/UDF；旧的 URL `navigate` 重放与 `Deny` 已退出产品链。子窗口销毁只推进匹配 token 的事务，legacy callback、旧 generation 和二次 popup 不得改变认证真值。公开负载不包含 query、fragment、ticket、Cookie、密码。旧兼容入口委托同一协调器，不能再自行并发 ensure session + ensure browser。
+3. 机构首屏收敛为紧凑主检索、单行连接摘要和默认关闭的“连接与来源”抽屉。抽屉承载三个连接目标、人工来源、浏览器显示/隐藏及诊断；旧 hero、常驻工具条和大块状态说明退出首屏。WOS、CNKI、Scopus 仅显示“仅人工访问 · 尚无连接器”。
+4. 搜索请求支持记录类型、年份范围及 40/100 条候选目标，前端不能指定连接器。Rust 在结果上限前完成过滤、规范化与去重，返回 `resultLimit / limitReached / pagesScanned / recordsReceived / recordsAccepted / duplicatesMerged / totalHits? / coverage / completionReason / orderBasis / providerBreakdown / retrievalPosition`。未知 total 保持未知，当前候选数不冒充供应商全库命中量。
+5. 结果每页 10 条只是本地呈现；分页、跨页选择以及来源返回/最新/最早/标题显示排序不产生新 Tauri invoke。来源返回顺序保留 `connectorId/rank/page/position/facet` 追溯，本地显示排序不得冒充供应商全局排序。
+
+### 自动、原生与数据边界
+
+- 自动门为 `PASS`：`pnpm build` 通过（1,920 modules）；正式 `cargo check --manifest-path src-tauri/Cargo.toml -j 2`、desktop lib 测试二进制 `--no-run` 编译、`cargo build --manifest-path src-tauri/Cargo.toml -j 2` 与 `git diff --check` 通过；core auth 7/7、research 22/22、institution 21/21、机构工作台专项最新 117/117 及相关回归通过；最新首次关闭验证窄修独立复审为 P0/P1/P2=0。
+- 早期 desktop lib 执行环境的 `0xc0000139` 仍按历史 `TEST-HOST UNAVAILABLE` 保留。额外 `cargo check --tests` 因既有 `tests/sidera_pi_runtime_protocol.rs` 集成目标模块引用漂移而 `FAIL`；该附加命令不是正式 `cargo check`，不改变正式检查的 `PASS`，也不能被表述为全测试通过。
+- 为消除调试启动时伴随出现的可见 CMD 窗口，`src-tauri/src/main.rs` 的 Windows 入口在 debug/release 均使用 `windows_subsystem = "windows"`；最新候选只启动一个可见 Sidera 且没有新增 CMD 窗口。
+- localhost 1360×864 UI 检查确认首屏、筛选和默认关闭抽屉为 `PASS`。它不是 Tauri 原生窗口，不能用于升级真实检索或完整 UX 门；最新个人图书馆认证结论来自用户实际 Tauri 操作，而非 localhost 推断。
+- 原生认证按能力与时间线拆分：数据库访问保持“已连接”、主窗口可点击且无异常窗口，记为有界 `NATIVE DATABASE ACCESS AUTH PASS`。旧候选清除会话后的首次个人图书馆登录完成后，关闭窗口仍落为 Cancelled，记为 `FIRST-TRANSACTION HISTORICAL FAIL`；第二次复用已建立会话后关闭为 Ready，只记 `SECOND-ENTRY PASS_BOUNDED`，不得覆盖首次失败。加入同一可见 WebView landing direct poll 后，最新 PID 62020 再次清除会话并完成首次登录，用户确认“已就绪、手动关闭、主窗口可点击、无异常窗口”，记为 `NATIVE LIBRARY AUTH FIRST-TRANSACTION RETEST PASS / FIRST-TRANSACTION RETEST PASS / USER INPUT+AUTH EXPERIENCE PASS_BOUNDED`。统一发现全文 `discovery-fulltext` 仍为 `UNVERIFIED`，故认证聚合门只能是 `NATIVE AUTH PARTIAL PASS`。
+- 原生检索真相门必须在不下载全文、不入库的前提下验证中文/英文查询、40/100 目标、筛选、去重、已知/未知 total、供应商分解、逐条检索位置、本地分页/排序和跨页选择；未完成前为 `NATIVE SEARCH TRUTH UNVERIFIED`。
+- 正常/最大化窗口的 SideSheet X/Escape、机构浏览器 show/hide、物理点击与无异常窗口已完成输入层复验，当前输入与认证体验为 `USER INPUT+AUTH EXPERIENCE PASS_BOUNDED`。但首屏检索真值、发现全文、完整失败恢复和全流程机构 UX 未完成，聚合状态仍为 `NATIVE UX UNVERIFIED / USER EXPERIENCE PARTIAL PASS`。
+- 真实库已经通过 immutable + `query_only` 复核：主文件 SHA-256 `B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA`、大小 214,532,096 bytes、Schema v14、25,473 篇、library revision 1、active V20 rows 0、ready snapshots 4；main、WAL 0 byte 与 SHM 32,768 bytes 的 size+mtime 前后不变。该复核不运行迁移、不写论文库。
+- 最终补记时仓库仍为分支 `codex/sidera-m2-rag`、HEAD `ede6e0b4ddc3980816ec4e4d694f59c33461b159`，staged 0、unstaged 41、untracked 85；大型 dirty worktree 全部保留。全局 `git diff --check` 通过，并使用逐命令 `safe.directory`，未修改用户全局 Git 配置。
+- 自动与文档收口的 Provider 调用、主动机构网络访问、全文下载、热点重建和当前真实论文库内容写入均为 0；原生认证访问由用户在隔离 WebView2 的官方页面中完成，凭据、Cookie、ticket 和表单值未进入 Sidera 状态、日志或证据。不提交、不推送、不创建 PR、不发布。证据：[sidera-014-institution-workspace-r1-2026-08-08.json](./evidence/sidera-014-institution-workspace-r1-2026-08-08.json)。
+
+### 个人图书馆首次登录原生收口
+
+- 历史复验必须保留两次进入的差异：旧候选清除会话后的首次登录已完成，但关闭认证窗口仍显示 Cancelled，记为 `FIRST-TRANSACTION HISTORICAL FAIL`；第二次打开无需再次输入凭据，关闭后变为 Ready，只记 `SECOND-ENTRY PASS_BOUNDED`。第二次成功不能覆盖首次失败，它证明 Cookie 会话已建立，也把缺口收窄到首次关闭时的身份观察链。
+- popup 链已使用 coordinator 绑定的受管认证子窗口、`NewWindowResponse::Create + window_features`、共享 WebView2 environment/UDF 与 transaction/generation token。最新窄修进一步让 `library-account` 在 4 秒总预算内只读取当前页 1 次，再使用同一可见 WebView 直接轮询固定 landing；`database-access` 和 `discovery-fulltext` 的 3 次当前页检查与隐藏绑定父页刷新保持不变。
+- 最新 PID 62020 清除会话后，用户首次登录得到 Ready，随后手动关闭认证窗口；主窗口可点击且无异常窗口，明确回复为“1.已就绪 2.手动关闭 3.可点击 4.无”。该结果记为 `NATIVE LIBRARY AUTH FIRST-TRANSACTION RETEST PASS / FIRST-TRANSACTION RETEST PASS / USER INPUT+AUTH EXPERIENCE PASS_BOUNDED`，但不升级 `discovery-fulltext`、真实搜索真相或完整原生 UX。
+
+### 开发 013 有界用户反馈与未闭合定量门
+
+- 2026-08-07 evidence 快照记录 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PERFORMANCE UNVERIFIED / USER PERFORMANCE ACCEPTANCE UNVERIFIED`。2026-08-08 用户随后在正常窗口、最大化窗口并明确选文后均反馈“正常”，有界主观体验更新为 `USER PERFORMANCE ACCEPTANCE PASS (BOUNDED)`。
+- 该反馈没有重新采集二次窄修后的冷启动 resource chain、首屏/详情耗时、IPC、draws/CPU/Task 与动态两帧，因此 `NATIVE PERFORMANCE UNVERIFIED` 继续成立；不得把主观“正常”反推为最终定量技术 PASS。
+
+## 前序工作包：开发 013｜文献工作台首屏与持续卡顿治理
+
+状态：2026-08-07 evidence 快照为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PERFORMANCE UNVERIFIED / USER PERFORMANCE ACCEPTANCE UNVERIFIED`；2026-08-08 用户在正常/最大化窗口并明确选文后反馈“正常”，有界主观门为 `USER PERFORMANCE ACCEPTANCE PASS (BOUNDED)`，最终定量原生门仍为 `NATIVE PERFORMANCE UNVERIFIED`。本工作包只治理文献工作台普通读取、首次挂载、详情延迟加载和根级动态背景在工作台的帧预算；不重做 P1、P2a、P2b、F1a 或 012-R3。开发 012-R3 继续为 `NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED`；P2b-R2 与 F1a 的原生状态保持既有 `UNVERIFIED`。
+
+### 只读诊断与准确时间链
+
+- 当前实际选择库为 `src-tauri/target/v022-desktop-acceptance-2/library/research-hotspots-v7.sqlite`，Schema v14、25,473 篇论文、library revision 1。修复前 `query_paper_library` 与 `paper_library_facets` 都通过重量级 `open_library_database`，每次重新承担迁移快速路径、完整性/外键/V20 引用检查、Schema 确保与 Agent 过期任务恢复；同一路径互斥锁使并发调用实际串行。
+- 完整校验中位 490.7ms，阶段占比如下。各项百分比按完整中位数计算并保留测量精度；未列的微小差额来自调度与计时边界。
+
+| 阶段 | 中位耗时 | 完整校验占比 |
+| --- | ---: | ---: |
+| `quick_check` | 366.0ms | 74.59% |
+| `foreign_key_check` | 34.3ms | 6.99% |
+| V20 orphan reference checks | 87.3ms | 17.79% |
+| paper count | 1.6ms | 0.33% |
+| metadata | 0.41ms | 0.08% |
+
+- 应用启动已读取 facets 与第一页，进入 `SearchWorkspace` 后又无条件读取；开发版 React StrictMode 重放 effect，旧 sequence 门只能丢弃旧响应，不能取消已经进入 Rust/SQLite 的调用。第一页返回后默认首篇选择又重复读取文档快照和下载列表。基线点击到首批内容 5,981.9ms、详情 6,073.6ms；该路径目标业务读取 IPC 为开发版 8、生产版 4。
+- SQL 首屏先执行 `COUNT(*)`，无筛选 `ORDER BY COALESCE(year, 0), updated_at` 的真实计划使用 `USE TEMP B-TREE FOR ORDER BY`；动态拼接前的可选 OR 条件会削弱索引，year facet 的 `CAST(year AS TEXT)` 增加临时分组/排序。普通首屏没有持续大面积 backdrop blur，CSS 模糊不是当前主因。
+- 工作台背后仍由根级沉浸 WebGL 全屏绘制约 6,000 篇论文星与最多 2,000 个尘埃粒子，DPR 上限 2；旧 `motionScale=0.2` 只减慢模拟，不降低 RAF/render 频率。最大化基线约 604 draws/s、Renderer process CPU 30.55%、GPU process CPU 53.80%、Task 678.2ms；正常窗口约 688 draws/s、Renderer CPU 19.10%、GPU CPU 32.87%、Task 421.7ms。
+
+### 最小实现与不变量
+
+1. 引入按规范化 database path 所有的 `LibraryReadPreparationRegistry` 和显式 `prepare_library_database` 生命周期。启动、初始化与恢复在同一路径锁下运行完整 prepare 并登记数据库指纹；普通状态、分页和分面只检查已准备登记，未准备或指纹变化稳定失败，绝不隐式回落 full prepare。准备有效后打开 `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX` 连接，启用 `query_only`、外键和 2 秒 busy timeout，并检查 `user_version == 14`。
+2. 分面缓存键为 database path + project ID + library revision；revision 与 source/field/year 三组 facet 在同一个只读事务中读取，同键首次计算合并，旧 revision 清理，已知写路径按数据库主动失效。`query_paper_library` 使用按实际条件拼接的谓词，移除 `? IS NULL OR column = ?`；year facet 按原生整数分组，仅最终值转为字符串。翻页或刷新不再调用 facets。
+3. 父层建立 `PaperLibraryBootstrapSnapshot`，携带路径、项目、revision、facets 与首屏 page；`SearchWorkspace` 只在 identity 与默认首屏输入完全匹配时复用。状态、页面和详情请求以模块级同键 Promise 合并 StrictMode 在途调用，响应序号门继续隔离迟到结果。
+4. `selectedPaperId` 不再自动回退到可见列表第一篇。工作台进入与刷新只呈现列表；用户明确选中文献后才挂载 `PaperDocumentPanel`，并发读取文档快照和完成下载列表，因此详情不阻塞首屏可用。
+5. `AgentImmersiveStarfieldCanvas` 新增可热切换的 `renderBudgetFps`；`AgentDualBackgroundPage` 仅在 workbench 传入 24，Agent 不限。预算保存在 ref 中，不进入 renderer 创建 effect 的依赖；未到预算间隔的 RAF 只预约下一帧，下一次实际处理按距上次处理帧的墙钟 delta 推进，visibility 恢复重置时间锚。
+6. 初始化末尾同步执行的真实 `renderer.render()` 不受帧预算影响，012-R3 的首帧启动门、historical-v20 显式版本语义、失败终态和无静态正常回退全部保持。不降低 DPR、论文/尘埃数量，不改成静态背景，也不修改当前论文库 Schema、索引或排序语义。
+
+### 中间原生性能证据（非最终门）
+
+- 显式 prepare 二次窄修前的开发冷启动中间资源链：`DOMContentLoaded` 6,775.9ms；setup 1 次、2,923.9ms；V20 snapshot 401.3ms；status 5.7ms；facets 146.8ms且 1 次；query 148.1ms且 1 次；background payload 647.6ms，约 11,070ms 完整结束并可见真实动态画面。该组数字已标记为非最终，二次窄修后的 resource chain 待复测更新；最终复测仍必须由真实动态 WebGL 首帧完成，无静态回退、重试或自动热点分析。
+- 显式 prepare 二次窄修前，从已就绪 Agent 点击工作台到 20 条首屏稳定显示为 114.2ms，详情未自动加载，业务读取 IPC 为 0；另有 2 个 event listen 订阅。显式选文后详情面板 39.2ms 挂载、60.1ms 稳定，恰好 2 IPC（18.7ms / 25.7ms）；显式刷新只有 1 query、没有 facets，Rust `queryMs` 为 268–269ms。该证据 `finalForDevelopment013=false`。
+- 同一中间采样中，最大化窗口约 121.2 draws/s、Renderer process CPU 7.64%、GPU process CPU 7.14%、Task 347.926ms；正常窗口约 120 draws/s、Renderer CPU 9.07%、GPU CPU 6.97%、Task 314.103ms。两帧 SHA-256 不同，证明当时版本背景真实动态；它不能证明二次窄修后的最终原生性能门。
+- 数据库前后保持 Schema v14、25,473 篇、revision 1；完整 SHA-256 `B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA` 不变，main database content mutations 为 0、WAL 为 0 bytes。原生启动与只读连接使 0-byte WAL 和 32KB SHM 的 SQLite bookkeeping 时间戳前移；该事实不属于内容写入，但明确排除“零文件系统触碰”的表述。
+
+### 自动验证、偏差与安全边界
+
+- `pnpm build` 为 `PASS`；正式 `cargo check --manifest-path src-tauri/Cargo.toml -j 2` 为 `PASS`；Rust core 两组定向测试各 1/1 `PASS`。工作台读取专项、背景所有权、R3 冷启动 15/15、P2b 提交/v14/R2、F1a、桌面壳和工作台性能专项均为 `PASS`。
+- 新增桌面端 5 项测试已经编译，但 Windows 测试宿主以 `0xffffffff` 退出，准确记录为 `TEST-HOST UNAVAILABLE`，不能宣告这 5 项运行通过。额外 `cargo check --tests` 因既有 integration target unresolved modules 为 `FAIL`；该附加命令不是正式 `cargo check`，不改变正式检查的 `PASS`。
+- 原生性能结论为 `NATIVE PERFORMANCE UNVERIFIED`；最终可见桌面启动授权因 Codex usage limit 不可用，非产品 `FAIL`。2026-08-07 快照中的用户体感为 `USER PERFORMANCE ACCEPTANCE UNVERIFIED`；2026-08-08 正常/最大化及选文反馈将有界主观门更新为 `USER PERFORMANCE ACCEPTANCE PASS (BOUNDED)`。012-R3 仍为 `NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED`，P2b-R2 与 F1a 状态不变。
+- 验证期间 Provider 调用、真实机构网络访问、全文下载、热点重建和当前真实论文库内容写入均为 0；没有提交、推送、PR 或发布。证据：[sidera-013-workbench-performance-2026-08-07.json](./evidence/sidera-013-workbench-performance-2026-08-07.json)。
+
+### 残余与下一步
+
+- 无筛选“最新”排序仍使用临时 B-tree，二次窄修前中间采样的显式刷新 query 为 268–269ms。若继续优化，必须先取得 Schema/索引或排序语义修改授权，并只在真实库精确副本上验证。
+- 用户已完成正常/最大化窗口与选文的有界主观体验并反馈“正常”；仍需在低负载条件下补齐二次窄修后的定量技术复验，故门分别为 `NATIVE PERFORMANCE UNVERIFIED / USER PERFORMANCE ACCEPTANCE PASS (BOUNDED)`。历史 evidence 的 `USER PERFORMANCE ACCEPTANCE UNVERIFIED` 状态继续保留。
+- P2b-R2 的桌面重启/可见回滚/阻断/显式本地检索与 F1a 的本地/机构单篇文档闭环继续按各自原生门验收，不并入 013。
+
+## 前序工作包：开发 012-R3 / 冷启动动态快照重建闭环（保留开发 011-R2 与 F1a 回归）
+
+状态：开发011-R2为`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE LOCAL SEARCH UNVERIFIED`；开发 012 / F1a为`IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED`；开发012-R2为`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STARTUP UNVERIFIED`。开发011的10条真实新增提交已由用户确认，记为`NATIVE CONTROLLED IMPORT PARTIAL PASS`；无可见Tauri进程时的只读磁盘复核进一步确认主库账本、来源记录、提交明细与审查回执持久化。随后以该真实提交数据库的精确SQLite副本运行生产回滚实现，已经证明整次删除10条新增记录、revision单次递增、来源与账本收口，以及后续编辑时安全阻止回滚；所选正式论文库未被修改。桌面UI重启恢复、可见回滚交互与本地显式检索仍未验收，因此整体不得提前记录`NATIVE CONTROLLED IMPORT AND LOCAL SEARCH PASS`。F1a必须完成本地PDF、机构单篇PDF、重启、去重和哈希复验后才可记录`NATIVE SINGLE-DOCUMENT ACQUISITION PASS`。012-R2必须以真实动态WebGL首帧完成冷启动，不接受计时器自动切换静态背景代替修复。
+
+开发012-R3为`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED`。012-R2的自动技术结果只作为首帧生命周期基线；R3 已以自己的自动、真实数据库和实际 Tauri 证据完成收口，用户视觉验收仍不得由技术门替代。
+
+### 开发 012-R3：冷启动动态快照重建闭环
+
+#### 只读诊断证据
+
+- 当前实际选择库：`src-tauri/target/v022-desktop-acceptance-2/library/research-hotspots-v7.sqlite`；Schema v14，论文数 25,473，library revision 1。
+- `v20_analysis_state` 为 0 行，因此没有 active snapshot ID、revision 或状态可供读取。库内有 4 个 `ready` 历史快照，全部属于 library revision 0；最新结构完整历史快照含 25,463 篇论文、160 个热点和 25,463 条 membership。
+- 真实库代码路径首轮严格审计曾命中 `V20_VISUAL_SOURCE_HOTSPOT_PAPER_COUNT_MISMATCH`，只读量化确认这是校验假设错误而非快照损坏：4 个快照中 `v20_hotspots.paper_count` 均为热点构建时的证据计数，最新快照合计 5,340；最终 membership 按热点合计 25,463，160 个热点全部不同。视觉来源完整性继续严格检查快照级总数和两类孤儿引用，但不建立数据库写入端从未承诺的逐热点相等关系。
+- 开发011 / P2b的正式提交把论文数从25,463提高到25,473、library revision从0提高到1，并按既有产品约束使active state失效而不自动运行热点分析。数据库路径、v14兼容入口和论文主表均与该变化一致，当前证据排除选错库和迁移后主库不可读。
+- `App → AgentDualBackgroundPage.ensurePayload → loadAgentImmersiveBackground → Rust read_analysis_state` 在 Canvas 挂载前结束：`read_analysis_state` 返回无 active state，旧 loader 直接失败，后续 WebGL Canvas、同步首帧和 `onReady` 均没有执行机会。准确根因是 P2b 合法的 active 失效语义与沉浸载荷的 active 硬前提冲突，而不是需要在提交事务内重建热点。
+
+#### 窄范围实现与契约
+
+1. P2b 保持“正式入库后不自动运行热点分析”；本轮不修改提交事务、论文主表、F1a文档库或机构网络路径。
+2. Rust 增加只读视觉来源选择。active state 明确存在时只接受当前 revision 且结构完整的快照；stale、超前、损坏或引用不完整直接返回明确错误，不得退回历史结果。
+3. active state 缺失时，可显式选择最新结构完整的 `ready historical-v20` 供沉浸背景使用。载荷必须标明视觉来源类型、current/source revision和freshness；UI与诊断不得把它称为当前热点分析。
+4. 理论背景继续只消费当前active V20。冷启动偏好理论但当前分析不可用时，只允许转入同样提交真实动态首帧的沉浸背景；静态背景仍只用于用户主动诊断。
+5. 载荷调用增加明确期限，Canvas挂载增加独立看门狗；二者只能进入一次性`failed`终态，不增加无限重试、不自动运行分析、不伪造`ready`。启动页仍只由首个无WebGL错误的真实动态帧结束。
+6. 若未来产品要求真正重建V20，另立可观察、可取消且低负载的分析阶段；不能隐藏在P2b提交或冷启动等待中。
+
+#### 验证与边界
+
+- 自动门：TypeScript、Vite 6.4.3（1,919 modules）、Rust core 定向测试 11 项、`cargo check -j 2`、真实数据库沉浸载荷、R3 冷启动专项 15 项、P2b 提交/v14/R2、F1a、桌面壳 16 项、项目文档和差异检查均为`PASS`。真实数据库载荷选择`historical-v20 / stale-by-library-revision`，source r0 / 25,463、current r1 / 25,473，抽样6,000篇唯一论文和160个唯一热点，重复哈希稳定且全程只读。
+- 原生门：真实 Tauri 连续冷启动3次，均不点击回退、重试或静态背景；启动页退出后保持单一immersive GPGPU WebGL Canvas，context未丢失。900ms帧对比分别改变120,885 / 119,364 / 116,300像素，即3.0871% / 3.0483% / 2.9700%，证明不是静态截图；正常窗口、恢复最大化和最大化冷启动均为`PASS`。
+- revision变化门：三次均使用此前正式导入已从r0推进到r1、论文数25,463→25,473且active为空的当前真实库，因此“正式入库导致revision变化后再次冷启动”已覆盖；验证期间library writes为0、hotspot rebuilds为0，未为了验收再写库或运行热点分析。
+- 运行与工具边界：第3次后只保留一个响应中的Sidera进程PID 41708。tasklist确认Console session中的Sidera窗口，Tauri visible API返回`visible=true`，实际Tauri WebView截图包含自定义标题栏、动态星河、历史来源提示和Agent输入面；同一WebView帧对比完成动态证明。Computer Use helper在一次reset/retry后仍返回`0x80070003`，只记为工具`UNAVAILABLE`，不是产品`FAIL`。
+- 当前状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED`。证据：[sidera-012-r3-cold-start-dynamic-snapshot-2026-08-06.json](./evidence/sidera-012-r3-cold-start-dynamic-snapshot-2026-08-06.json)。
+- 保留大型dirty worktree和全部未跟踪证据；不调用Provider、不访问真实机构网络、不下载全文、不自动运行热点分析、不写当前论文库，不提交、不推送、不创建PR、不发布。
+
+### 开发 012-R2：冷启动真实动态首帧闭环
+
+- 开发012-R1把8秒自动静态放行当作产品可用性保护，但用户原生反馈明确否定该方向：开发阶段应修通动态背景的真实启动生命周期，而不是隐藏故障。012-R1因此记录为`PRODUCT FAIL / SUPERSEDED`，其失败证据保留但运行时路径已删除。
+- 根因链分为三段：背景切换在读取载荷前等待RAF，WebView2冷窗口显现时可能节流该RAF；沉浸背景的就绪上报依赖首个动画RAF；理论背景把深度/密度诊断与动画调度作为启动门。这会让场景具备渲染条件却一直无法向根级返回终态。
+- 现在背景切换以宏任务让出旧渲染器生命周期，不等待RAF。沉浸背景初始化结束后同步执行首个真实`renderer.render()`，成功后一次性上报；理论背景在运行时门通过后同步执行首帧，先清查WebGL错误，再通过独立`onFirstFrame`上报。后续RAF只推进动画，不拥有启动完成权。
+- 初始化和首帧渲染异常进入根级`failed`；首次成功之后的运行时错误由背景自身诊断/恢复，不得把已经完成的启动阶段倒退。显式“使用静态背景继续”只作为用户主动诊断入口，自动测试和原生验收均不能把它记为正常冷启动PASS。
+- TypeScript、Vite（1919 modules）、桌面壳专项16项、项目文档审计和差异检查均已通过；验证过程不访问机构网络、不调用Provider、不写主论文库、不下载全文。证据：[`sidera-012-r2-dynamic-startup-first-frame-2026-08-06.json`](evidence/sidera-012-r2-dynamic-startup-first-frame-2026-08-06.json)。唯一最新Tauri冷启动仍需完成；原生窗口必须在不点击静态入口的情况下进入动态Agent页面，才可记录`NATIVE STARTUP PASS`。
+
+### 开发 012-R1：冷启动动态背景超时降级
+
+- 状态：`PRODUCT FAIL / SUPERSEDED BY 012-R2`。以下为失败历史；自动8秒静态放行不再存在。
+- 原生故障表现为启动页长期停留在“正在点亮本地知识星图……”。数据初始化已经结束，阻塞点是Agent动态背景的载荷或WebGL首帧没有向根级启动门返回`onReady/onError`终态。
+- 实现保留真实`onInitialReady → onReady`作为首选路径；`mounting-agent`超过8秒仍无终态时，根级切换静态深空背景并进入应用。计时器在任何终态后清理，迟到回调不得恢复旧启动阶段。
+- TypeScript、Vite、桌面壳专项、项目文档审计和差异检查均已通过；验证过程不访问机构网络、不调用Provider、不写论文库。当前为`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STARTUP UNVERIFIED`。
+
+### 计划与实际
+
+1. 提交状态读取改为主库账本优先、审查库回执best-effort对账；界面次级刷新失败不再覆盖已提交事实。
+2. 本地文献检索取消输入即执行；IME安全的显式Enter/按钮查询、空值no-op、相同查询幂等、旧结果保留、请求序号隔离以及Rust/SQLite排序分页已经实现。
+3. 新增独立`Sidera/documents-v1.sqlite`、`AcquisitionRecord`与`DocumentVersion`；本地PDF和已完成的单篇机构PDF按SHA-256原子写入不可变blob并去重，同一论文支持多个版本。文档库v2新增显式版本类型：出版社正式版、作者稿、扫描版、用户导入版和待确认；既有v1本地导入迁移为用户导入版，机构文件保持待确认，避免无依据推断。
+4. 本地PDF支持先选文件、再由用户明确关联论文；文件名、目录和PDF正文不参与身份选择，本地获取记录不绑定机构SourceRecord。机构路线先以不透明SourceRecord ID打开Rust验证并脱敏的官方来源；用户在共享机构会话中显式完成单篇PDF下载后，机构附件再将不透明完成下载ID精确解析到该论文入库时保留的SourceRecord。前端不能传任意URL或路径，网页打开也不等同于已获得全文。
+5. 来源解析、来源导航、下载选择和来源匹配失败分别以`source-route / source-navigation / download-selection / source-match`阶段写入可跨重启恢复的逐论文失败账本；歧义或无匹配时拒绝接入且不创建DocumentVersion。论文详情可查看来源、版本、完整哈希、获取失败并打开原始文件，用户可显式重试对应步骤。不批量下载、不调用Provider、不运行热点重建。
+
+### 自动验证、证据与原生边界
+
+- TypeScript、Vite、Rust `document_store`定向测试、`import_commit`定向测试与`cargo check -j 2`已通过；专项证据为[sidera-p2b-r2-controlled-import-local-search-2026-08-06.json](./evidence/sidera-p2b-r2-controlled-import-local-search-2026-08-06.json)和[sidera-f1a-single-document-acquisition-2026-08-06.json](./evidence/sidera-f1a-single-document-acquisition-2026-08-06.json)。
+- 使用真实已提交论文库与审查库的SQLite备份副本运行`import_rollback_real_copy`忽略测试，2/2通过：正常副本恢复至25463篇、revision 2、来源记录归零；另一副本先编辑目标论文后，回滚被`SIDERA_IMPORT_ROLLBACK_REVISION_DRIFT`与`SIDERA_IMPORT_ROLLBACK_PAPER_DRIFT`阻止。该证据验证生产回滚逻辑与数据漂移保护，不替代可见桌面交互验收。
+- 以只读方式在25,473篇真实库上分别运行5次中文与英文“计数＋最新40条”查询：`人工智能`中位254.63ms，`machine learning`中位243.88ms；证明显式触发后的SQLite分页查询保持短时，但输入过程零请求、IME和单次Enter仍需桌面验收。
+- 自动过程不访问机构外网、不调用Provider、不下载全文、不写用户当前主论文库。
+- 原生仍需验证：桌面重启后界面恢复已持久化的提交历史，以及可见界面能够触发并正确呈现已在真实副本证明的回滚/冲突结果；输入20字零查询、Enter一次一查询与大库流畅性；本地PDF、单篇机构PDF、重启、重复导入和哈希一致性。
+- 本工作包不提交、不推送、不创建PR、不发布；保留全部dirty worktree与未跟踪证据。
 
 ## 阶段事实
 
 | 工作包 | 技术状态 | 产品视觉状态 | 结论 |
 | --- | --- | --- | --- |
+| 开发 016 全文证据台 R2 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | WINDOWS STANDALONE TEST HOST PASS / NATIVE EVIDENCE UX PASS / ROTATED TEXTLAYER FIX NATIVE RETEST PASS / NATIVE INDEX PASS / USER EXPERIENCE PASS | 证据持久化/重定位、真实 E5 双向召回、布局、完整索引控制及连续解析关闭重开停止已原生通过；旋转页 125% 盒尺寸窄修及用户最终手感通过，后续 017-R1/R2 已完成 |
+| 开发 015 文档原生阅读台 R1 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | NATIVE READER PASS (CODEX VISIBLE DESKTOP) / USER EXPERIENCE UNVERIFIED | 本地 PDF.js、派生页/段/FTS、UTF-16 锚点、阅读位置、私有 Range 协议与双窗口尺寸通过；开发 016 已接管精确证据、批注与 E5，OCR/Agent 仍后置 |
+| 开发 014-R5 多分面公平分页与远端继续性真值 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | NATIVE PAGINATION TRUTH PASS_BOUNDED / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PASS_BOUNDED | 英文矩阵从虚假 20 页/page-limit 纠正为真实 2 页/source-exhausted；100 条、会议结果、跨页选择与完整 position-basis 仍未验证，P1 继续 PARTIAL / ADAPTER DEFERRED |
+| 开发 014-R4 任务绑定发现认证与检索真值加固 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | NATIVE DISCOVERY AUTH PASS / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PASS_BOUNDED | 最新中文 10/40 与英文 3/100 真实矩阵、停止隔离、本地排序及正常/最大化窗口已验证；真实来源量不足以覆盖跨页选择和完整 position-basis，P1 仍为 PARTIAL / ADAPTER DEFERRED |
+| 开发 014-R3 纯黑浮层、星图状态与题录通知修复 | IMPLEMENTED / AUTOMATED TECHNICAL PASS / INPUT FIX IMPLEMENTED | NATIVE APPEARANCE PASS (BOUNDED) / NATIVE INPUT OWNERSHIP HISTORICAL FAIL / INPUT FIX NATIVE RETEST PASS / NATIVE LIBRARY AUTH FIRST-TRANSACTION RETEST PASS / NATIVE IMPORT READ PASS / USER INPUT+AUTH EXPERIENCE PASS_BOUNDED | 历史输入失败保留；正常/最大化、机构 WebView hide、首次个人图书馆事务与题录隔离 fault-notice 生命周期当前复验通过；阻断错误常驻单独注入仍未验证 |
+| 开发 014 机构资源工作台 R1 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | NATIVE AUTH PARTIAL PASS / NATIVE SEARCH TRUTH UNVERIFIED / NATIVE UX UNVERIFIED / USER EXPERIENCE PARTIAL PASS | 单一连接协调器、目标专属关闭验证、检索真相负载与紧凑首屏已实现；数据库访问和个人图书馆首次事务有界通过，发现全文、检索真值和完整 UX 未验证，P1 仍为 PARTIAL / ADAPTER DEFERRED |
+| 开发 013 文献工作台首屏与持续卡顿治理 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | NATIVE PERFORMANCE UNVERIFIED / USER PERFORMANCE ACCEPTANCE PASS (BOUNDED) | 轻量读取、bootstrap/在途合并、revision 分面缓存、显式详情和 24 FPS 工作台预算自动技术通过；用户已在正常/最大化及选文后反馈“正常”，最终定量 trace 仍待完成 |
+| 开发 012-R3 冷启动动态快照重建闭环 | IMPLEMENTED / AUTOMATED TECHNICAL PASS | NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED | 三次实际 Tauri 冷启动、revision 变化后启动、正常/最大化窗口和真实动态帧均通过；用户视觉验收仍独立待完成 |
 | M1.3c 理论坐标 + 沉浸外壳 | PASS | FAIL | 技术资产保留，产品路径归档 |
 | M1.3d 独立沉浸/理论双背景 | PASS | FAIL | 空间边界正确，流动与理论恒星材质未通过 |
 | M1.3e 沉浸流动与理论恒星材质修订 | PASS | UNVERIFIED | 技术闭环完成，等待修复后桌面复验和用户视觉确认 |
@@ -43,26 +355,611 @@
 | M1.3h 双背景动态语义聚焦闭环 | PASS（可复用基础设施） | FAIL / SUPERSEDED | 自动操控背景与上下文凝聚不采用；解析、动态槽、双背景协调和 R10 返回保留 |
 | M1.3i Sidera 回答后显式证据聚焦 | PASS（技术资产） | FAIL / SUPERSEDED | 两段式理论聚焦、异步压暗/移动、关闭布局和灰色数据球被用户否决 |
 | M1.3j 一键直达聚焦与论文恒星近景 | PASS（前端与 Tauri 低负载；Cargo 延后） | UNVERIFIED | 一键路由、关闭与换项已实机复验；恒星材质等待用户视觉确认 |
-| M1.3k Sidera 桌面产品壳、启动页与默认入口 | PASS（前端/审计/原生启动） | UNVERIFIED | Sidera 原生窗口已低并发编译并置于前台；窗口交互与启动节奏等待用户验收，不改变 M1.3j 视觉结论 |
+| M1.3k Sidera 桌面产品壳、启动页与默认入口 | PASS（前端/审计/原生启动） | NATIVE MOTION UNVERIFIED | 启动反馈层已脱离品牌文档流；原生坐标稳定性与窗口动画等待复验，不改变 M1.3j 视觉结论 |
 | M1.3l 双沉浸样式与流动知识星河 | PASS（自动与 Tauri 低负载） | PASS | 用户实机确认效果不错；流动星河主视觉通过 |
 | M1.3l-R1 全局星空导航壳 | PASS（自动与 Tauri 热更新检查） | UNVERIFIED | 移除 Agent 标题栏、遮罩和抽屉实体底板；等待用户复验 |
 | M2.0b Pi 本地论文轻量混合 RAG | PASS（自动技术） | FAIL | 检索与多轮有效；真实会话暴露消息编排、Markdown、库概况和证据收口缺陷 |
 | M2.0b-R1 对话编排、阅读面板与证据闭环 | PASS（自动技术） | UNVERIFIED | 统一轮次、Markdown、阅读面板、库概况与证据完成门已实现；等待真实桌面三轮验收 |
 | M2.0b-R2 对话控件与空间构图连续性 | PASS（自动技术，含投影连续性与物理中心回归） | UNVERIFIED | 输入控件统一居中；展示星图恢复物理画布中心，论文轨道避让由 Journey 锚点负责，等待真实桌面复验 |
-| M2.0b-R3 对话体验收口 | PASS（自动技术） | UNVERIFIED | 空会话底部输入、首发固定阅读面板、无背景用户消息、自增高输入和提示生命周期已实现；等待原生视觉验收 |
+| M2.0b-R3 对话体验收口 | PASS（自动技术） | NATIVE MOTION UNVERIFIED | 固定阅读宽度保留；文字稳定门已通过自动回归，折叠输入高度回归已修复，等待原生多尺寸/缩放复验 |
 | M2.0b-R4 Agent 会话、工具能力与 Liquid Glass 收口 | PASS（自动技术） | FAIL / SUPERSEDED | 原生验收发现 SQL 拼接令会话库残缺且 Agent 无法对话；由 R4-R1 修复 |
 | M2.0b-R4-R1 Agent 会话存储与诊断修复 | PASS（自动技术，Rust 用例真实执行） | PARTIAL PASS / UNVERIFIED | 实际残缺库原地恢复、原生窗口和检测入口通过；三项结果、真实首发与历史 CRUD 待验收 |
 | M2.0b-R4-R2 Agent 后台连续性与清透光学玻璃修复 | PASS（自动技术） | UNVERIFIED | 普通导航不再中止回答，标题栏状态与清透连续玻璃已实现；等待真实后台回答、审批和视觉验收 |
 | M2.0b-R4-R3 Agent 长缓存默认与真实首段流式修复 | PASS（自动技术） | UNVERIFIED | `long`默认与一次性迁移、首字流式、工具旁白撤回和证据替换已实现；等待真实 Provider缓存与流式体验验收 |
+| M2.0c-L0 武大 aTrust 与全馆发现接入探针 | PASS（自动技术） | NATIVE ACCESS PROBE FAIL / SUPERSEDED | aTrust 与官网通过，但错误直达 MetaERS 后显示登录、暂无数据和服务异常；由 L0-R1 修复 |
+| M2.0c-L0-R1 武大正式 SSO 路由与机构状态判定修复 | PASS（自动技术） | NATIVE ACCESS PROBE FAIL / SUPERSEDED | 自动夹具通过，但真实官网是 JavaScript 壳，未生成 SSO 目标；由 L0-R2 修复 |
+| M2.0c-L0-R2 武大动态 SSO 配置解析修复 | PASS（自动技术） | NATIVE ACCESS PROBE PASS | 正式 MetaAuth 路由、馆藏多库页面和中英文查询已由用户原生验收；不等同于全馆或全文能力 |
+| M2.0c-L1a 应用内机构会话与武大多库检索预览 | PASS（自动技术） | NATIVE IN-APP SEARCH FAIL / SUPERSEDED | 官方认证 `window.open` 被旧实现无条件拒绝，应用内登录无法完成；由 L1a-R1 修复 |
+| M2.0c-L1a-R1 应用内认证跳转与机构状态修复 | PASS（自动技术） | NATIVE IN-APP INSTITUTION AUTH FAIL / SUPERSEDED | URL 级 GET 重放丢失 POST/opener/弹窗上下文并导致灰屏；由 L1a-R2 取代 |
+| M2.0c-L1a-R2 真实认证弹窗与首航恢复修复 | PASS（自动技术） | NATIVE IN-APP INSTITUTION AUTH FAIL / SUPERSEDED | 原生数据库 SSO 在 20 秒后超时；只完成可诊断失败，没有打通闭环，由 L1a-R3 取代 |
+| M2.0c-L1a-R3 应用内机构认证与检索真实闭环 | PASS（自动技术） | IN PROGRESS / NATIVE CLOSED-LOOP UNVERIFIED | 脱敏导航轨迹、入口/会话策略分层、终态隔离与 DOM 就绪门已实现；等待完整原生闭环 |
+| M2.0c-L1a-R3-R1 武大真实检索适配器与双会话闭环 | PASS（自动技术） | INSTITUTION AUTH PASS / CATALOG EXTRACTION FAIL / PRIMARY ROUTE MISALIGNED / SUPERSEDED | 数据库认证主链通过，但 OPAC 提取出现数字、JavaScript 和同书重复记录，且馆藏图书不应作为论文检索主入口；由 L1a-R4 取代 |
+| M2.0c-L1a-R4 论文级统一发现与馆藏目录降级修复 | PASS（自动技术） | NATIVE ACADEMIC DISCOVERY FAIL / SUPERSEDED | 手工官网核心网页链可用，但 active search 重放 popup URL、真实分面未确认且抽取未到达；由 P1b-R1 取代 |
+| Sidera-P1b-001 武大统一学术发现原生化与 P1 收口 | PASS（自动技术） | NATIVE ACADEMIC DISCOVERY FAIL / SUPERSEDED | 三表面与只读全文路线保留；旧分面/结果 WebView 生命周期未通过实机，由 P1b-R1 修复 |
+| 开发 002 / Sidera-P1b-R1 统一发现真实分面与原生快照闭环 | PASS（自动技术） | IN PROGRESS / NATIVE ACADEMIC DISCOVERY UNVERIFIED | 任务绑定结果 WebView、真实分面/顺序子检索、严格快照和原始页面切换已实现；等待最新桌面闭环 |
+| 开发 003 / Sidera-P1b-R2 统一发现认证回写与任务恢复闭环 | PASS | IN PROGRESS / NATIVE DISCOVERY AUTH UNVERIFIED | 最新原生事实为 DISCOVERY AUTH CALLBACK/STATE SYNC FAIL；独立状态、受管弹窗、父页回写和同任务恢复已实现，自动门禁通过，等待原生验收 |
+| 开发 004 / Sidera-P1c 通用机构浏览器内核、应用内认证与下载基座 | PASS（自动技术） | IN PROGRESS / NATIVE INSTITUTION BROWSER UNVERIFIED | 共享浏览器配置、应用内多标签、唯一认证模态和下载暂存已实现；等待最新可见 Tauri 原生闭环 |
+| 开发 005 / Sidera-P1c-R1 真实弹窗语义与固定浏览器视口修复 | PASS（自动技术） | IN PROGRESS / NATIVE POPUP AND PERFORMANCE UNVERIFIED | 修复前 PROVIDER ACCESS PASS / POPUP ROUTING FAIL / EMBEDDED BROWSER PERFORMANCE FAIL；Create兼容弹窗、MetaERSP bridge和固定视口已实现，等待原生复验 |
+| 开发 006 / Sidera-P1c-R2 原生研究双栏与侧边机构浏览器收口 | PASS（自动技术） | IN PROGRESS / NATIVE SPLIT WORKSPACE UNVERIFIED | 用户确认网页滚动性能 PASS，但网页独占导致产品构图与原生连续性 FAIL；三态双栏、持久比例和窄屏单面切换已实现，等待原生复验 |
+| 开发 007 / Sidera-P1c-R3 主窗口所有权窄修 | PASS（自动技术） | PARTIAL / NATIVE WINDOW OWNERSHIP UNVERIFIED | 统一使用真实顶层 Window 与 Windows owner_raw；P1 手工访问能力保留，自动统一发现适配器延后 |
+| 开发 008 / Sidera-P2a 文件题录审查与身份基座 | PASS（自动技术） | PRODUCT UNVERIFIED | 六类文件候选、身份匹配、冲突展示、逐条决定与独立审查库已实现；不写主论文库 |
+| 开发 009 / Sidera-P2a-R1 武大后台检索连接器与原生审查闭环 | PASS（自动技术） | NATIVE PARTIAL PASS / CROSS-VIEW CONTINUITY FAIL | 中文10条/2来源、英文9条/4来源和审查创建已由用户确认；跨页返回被迟到失败覆盖，旧SSO错误通知未清理 |
+| 开发 010 / Sidera-P2a-R2 后台检索快照权威化与跨页连续性修复 | PASS（自动技术） | NATIVE CONTINUITY UNVERIFIED | 单一进程级状态权威、完整任务令牌、根级生命周期、失败保留旧结果和作用域通知已实现；等待原生连续性复验 |
+| 开发 011 / Sidera-P2b 受控主库提交与来源治理 | PASS（自动技术） | PRODUCT FAIL / SUPERSEDED | 主库v14、审查库v3与受控提交机制已实现；首次原生初始化暴露早期v14契约不兼容，由开发011-R1取代兼容入口 |
+| 开发 011-R1 / Sidera-P2b-R1 早期 v14 兼容识别与安全补全 | PASS（自动技术） | PRODUCT UNVERIFIED | 三类v14契约识别、独立备份与SHA256、事务补全、未知结构拒绝和幂等重开已实现；等待真实早期v14库原生验收 |
 
-## 当前工作包：M2.0b-R4-R3 Agent 长缓存默认与真实首段流式修复
+## 2026-08-03 并行修复记录：启动页固定锚点与 Agent 文字稳定门
+
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE MOTION UNVERIFIED`。本修复与 M2.0c-L1a-R1 使用明确文件边界并行实施；机构 Rust、机构会话、论文库和 Provider 路径均未由本修复修改。
+- 启动页保留品牌、题字和出处原有文档流，把状态/失败节点统一放入绝对反馈层，消除条件节点改变居中组高度的问题；自动审计验证该层为`position: absolute`，真实`getBoundingClientRect().top`差值门限保持`<= 0.5 CSS px`待原生测量。
+- Agent 阅读内容不再因折叠条件卸载。收展和历史抽屉共用五阶段几何门，内容淡出后才更新布局，`transitionend + 500ms`兜底后再经过两帧稳定并淡入；epoch、不可交互态和卸载清理阻止快速操作或迟到回调提前恢复。
+- `SideraTitleBar`的最大化按钮与标题栏双击共用一个带锁处理函数。根级 Agent 在切换前等待`140ms`淡出；切换后等待 resize 静默`120ms`、最多`900ms`和两帧稳定。普通拖拽/贴靠由 Agent 自身 resize 监听进入同一隐藏门，最小化路径保持不变。
+- reduced-motion 取消`140/400/180ms`文字等待，尺寸稳定后下一帧恢复；没有对文字使用 scale 或 zoom。草稿、滚动位置、会话、生成状态、审批和证据聚焦继续由原挂载实例持有。
+- 用户原生复验发现收展文字已稳定，但折叠输入栏被错误撑至约`100px`且占位文字与按钮不在同一视觉中心。根因是空值占位文本或旧宽度的`scrollHeight`被写入持久内联高度，收展与窗口稳定阶段没有重新测量；静态审计只检查了`42–100px`源码令牌，没有覆盖最终几何。
+- 新增内部纯高度解析器：空值忽略占位文本测量并固定`42px`，非空按真实内容限制在`42–100px`，超限启用内部滚动。`useLayoutEffect`在草稿、折叠状态、`settling`和窗口隐藏门释放时于绘制前重算；阅读、审批、页脚三层折叠壳均保持挂载并使用`min-height: 0 + overflow: hidden + 0fr`消除固有高度。折叠宽度继续使用`440px`上限，按钮保持相对当前输入栏垂直居中。
+- 自动验证：TypeScript `PASS`；Vite 6.4.3 `PASS`（1918 modules）；桌面壳 15 项、Agent R3/R4/R4-R2/R4-R3、空间构图 R2、项目文档审计与`git diff --check`均为`PASS`。未运行 Rust，Provider 调用数为 0。
+- 原生验收：冷启动状态/失败反馈坐标、连续五次收展、历史抽屉、最大化/还原、系统贴靠、边缘拖动、1100/1360/1920px、100%/125%/150%、快速重复、超时与 reduced-motion 均为`UNVERIFIED`。通过最新可见 Tauri 窗口复验前不得记录`NATIVE MOTION PASS`。
+- 提交：本修复不提交、不推送、不创建 PR、不发布。
+
+## 当前工作包：开发 011-R1 / Sidera-P2b-R1 早期 v14 兼容识别与安全补全
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED`。开发011首次原生初始化已记录为`PRODUCT FAIL / SUPERSEDED`；R1只修复早期v14兼容识别和安全补全，P1继续为`PARTIAL / ADAPTER DEFERRED`，P2仍在P2b，完整原生门通过前不得记录`NATIVE CONTROLLED IMPORT PASS`。
+
+### 计划与实际
+
+1. 初始化前只读检查完整v14契约，不再把`user_version=14`当作可写充分条件。分类固定为`current-v14 / known-precontract-v14 / unknown-invalid-v14`，并把`schemaContractStatus`返回给前端。
+2. `current-v14`只执行严格验证并直接打开，不写入、不生成兼容备份；重复打开结果幂等。
+3. `known-precontract-v14`只接受已登记的精确早期签名。修复前生成独立`.pre-v14-contract.<timestamp>.sqlite`备份与SHA256，校验源指纹后在`BEGIN IMMEDIATE`事务内只补缺失契约对象；已有论文、来源、身份别名、提交账本和审查决定不覆盖。
+4. 补全后必须通过完整当前v14契约和外键检查才提交。任一步失败整笔回滚；成功后的再次打开分类为`current-v14`且不重复备份。
+5. `unknown-invalid-v14`立即拒绝且零变更，不自动猜测、重建、删表或覆盖。初始化结果同时返回`compatibilityRepairApplied`、`migrationBackupPath`与`migrationBackupSha256`，界面可明确解释安全补全结果。
+
+### 验证与边界
+
+- 自动夹具覆盖当前v14无改写、已知早期空治理库补全、已有治理行与复合外键保留、未知无效v14零变更、事务中途失败回滚及补全后幂等重开；自动过程只使用临时合成数据库，不升级用户当前所选真实论文库。
+- TypeScript和隔离`cargo check -j 2`由实现工作包记录为`PASS`；本轮文档收口只运行静态专项、项目文档审计和`git diff --check`，不并行启动重型编译。证据：[sidera-p2b-v14-compatibility-r1-2026-08-05.json](./evidence/sidera-p2b-v14-compatibility-r1-2026-08-05.json)。
+- 原生仍需验证真实早期v14库可在保留原数据和独立备份的前提下补全、当前v14不重复备份、未知结构安全拒绝，并继续完成预览、提交、对账和回滚闭环；通过前保持`PRODUCT UNVERIFIED`。
+- 本工作包不提交、不推送、不创建PR、不发布；不访问机构外网、不调用Provider、不下载全文，保留全部dirty worktree和未跟踪证据。
+
+## 前序工作包：开发 011 / Sidera-P2b 受控主库提交与来源治理
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT FAIL / SUPERSEDED`。P1继续为`PARTIAL / ADAPTER DEFERRED`；P2进入P2b，但首次原生初始化因早期v14契约不兼容失败，兼容入口由开发011-R1接管；P2c与F1均未开始、未完成。
+
+### 计划与实际
+
+1. 主论文库升级为schema v14，审查库升级为schema v3。主库新增`paper_import_commits / paper_import_commit_items / paper_source_records / paper_identity_aliases`；审查批次保存batchVersion、基准revision、提交状态、提交ID、提交计数、完成/回滚时间和错误码。
+2. 提交前生成确定性预览，并绑定`previewId + previewHash + batchVersion + expectedRevision`。只有逐条决定完备、没有阻塞项且主库revision未变化的完整批次可以执行；过期预览、身份漂移、批次变化或主库变化均拒绝。
+3. 一个批次只使用一个SQLite事务。`insert`创建论文，`merge`只把候选非空值填入主库空字段，既有非空字段固定为`preserve-existing`；论文、来源记录、身份别名、提交项、提交账本和revision任一步失败都整批回滚。
+4. `clientCommitId`和主库提交账本保证重复请求幂等，主库账本是提交/回滚事实的唯一权威；审查库只是可修复的状态投影。若进程在主库事务成功与审查状态更新之间退出，状态查询先返回主库账本，再best-effort reconciliation审查状态，不自动重放写入；审查库暂不可读也不能遮蔽有效提交。
+5. 回滚以整个提交批次为边界。只有revision、后续引用、论文指纹和身份别名都满足安全前提时执行；任一冲突返回整批阻塞并保持零写入，不提供force回滚。
+6. P2b只治理题录实体、来源与身份，不自动生成热点，不获取、下载或解析全文，不调用Provider，也不触发Agent任务。P2c/F1继续后置。
+
+### 验证与边界
+
+- 自动门覆盖主库v14/审查库v3、四张治理表、五个提交命令、确定性预览哈希、批次/revision绑定、整批事务、只填空值、幂等键、账本对账、安全回滚以及热点/全文/Provider零自动副作用。证据：[sidera-p2b-controlled-import-2026-08-05.json](./evidence/sidera-p2b-controlled-import-2026-08-05.json)。
+- 首次原生初始化在进入受控提交前即因早期v14契约不兼容失败，产品结论为`PRODUCT FAIL / SUPERSEDED`；开发011-R1完成兼容补全后，仍需继续验证预览、提交、重复提交、重启对账、来源/身份记录、主库revision变化和安全/冲突回滚。
+- 本工作包不提交、不推送、不创建PR、不发布；保留全部dirty worktree与未跟踪证据。
+
+## 前序工作包：开发 010 / Sidera-P2a-R2 后台检索快照权威化与跨页连续性修复
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE CONTINUITY UNVERIFIED`。开发009更正为`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PARTIAL PASS / CROSS-VIEW CONTINUITY FAIL`；P1继续为`PARTIAL / ADAPTER DEFERRED`，P2仍停留在P2a。
+
+### 计划与实际
+
+1. 将活动运行和展示结果拆为进程级`ResearchSearchStore`：稳定`displayedSnapshot`、当前`activeAttempt`、独立`lastFailure`及最近32条脱敏生命周期记录。新任务开始时旧结果继续显示；失败或取消保留旧结果和候选选择，成功、部分成功或明确零结果才原子晋升。
+2. 旧学术DOM运行降为私有传输，并绑定`taskId + clientRequestId + epoch + sequence + webviewGeneration`。它不再写公共旧search/searchSnapshots或发布学术旧事件；馆藏目录继续使用旧事件。所有eval、超时和导航回调先校验完整令牌，迟到`EVAL_TIMEOUT`不得覆盖终态快照。
+3. `clientRequestId`和`startReason = user-search | retry | compatibility`进入启动契约；同一请求ID重复触发幂等。学术兼容命令只投影新状态，不创建第二任务或反向写新编排器。
+4. 研究搜索状态、初始化读取和唯一事件监听上移到App根级；机构工作区只展示根级状态并提交用户动作。普通页面导航、组件卸载和重挂不开始、不取消任务，返回后恢复同一searchId、查询、候选、来源和选择。
+5. 数据库身份与当前可见认证页面解耦；机构通知按scope和状态版本收口。数据库SSO或搜索恢复后只清除对应旧错误，来源失败留在任务/来源卡，不用陈旧Toast替代。
+6. 导入审查继续消费稳定展示快照；即使另一个检索尝试正在执行，也可按searchId、generation、producerVersion和候选ID创建批次。主论文库、机构UDF、Provider、Pi、RAG和下载协议均未改变。
+
+### 原生基线、验证与边界
+
+- 用户已确认：中文“人工智能”10条、万方和国家哲学社会科学文献中心2来源`PASS`；英文“machine learning”9条、Crossref/PubMed/ScienceDirect/SwePub 4来源`PASS`；正常检索不打开网页及创建审查批次`PASS`。9条不是缺陷，40条只是上限。
+- 用户同时确认：跨页面后成功结果被0条失败覆盖、迟到`SIDERA_INSTITUTION_EVAL_TIMEOUT`污染展示、SSO已就绪仍显示“数据库 SSO 会话初始化失败”为`FAIL`。原生事实保存在[sidera-p2a-r2-native-continuity-2026-08-05.json](./evidence/sidera-p2a-r2-native-continuity-2026-08-05.json)，不覆盖开发009自动证据。
+- 自动门覆盖卸载/重挂不新建任务、进行中跨页、迟到回调隔离、请求幂等、失败/取消保留旧结果、成功晋升、认证解耦、作用域通知、兼容馆藏和跨页快照入审查；自动过程真实机构网络、Provider、主库写入和全文下载均为0。
+- 原生仍需复验中文/英文快照字段跨页一致、进行中导航、失败/取消保留旧结果、旧SSO通知消失、审查批次重启恢复，以及主库revision/论文数/下载/Provider零非预期变化。页面视觉小问题、结果扩量、新来源、全文和Agent工具继续后置；P2b已由开发011作为独立工作包实施，但不反向改写开发010的原生连续性结论。
+- 本工作包未提交、未推送、未创建PR、未发布；全部dirty worktree与既有证据保留。
+
+## 前序工作包：开发 009 / Sidera-P2a-R1 武大后台检索连接器与原生审查闭环
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PARTIAL PASS / CROSS-VIEW CONTINUITY FAIL`。P1继续为`PARTIAL / ADAPTER DEFERRED`；旧网页筛选适配器仍为实验回退，不以开发009改写P1完成状态。
+
+### 计划与实际
+
+1. 新增UI无关的`LiteratureConnector / ResearchSearchOrchestrator`与`whu-academic-discovery-v2`能力契约，把会话检查、等待官方认证、连接方式解析、检索、规范化、部分失败和取消统一为可测试状态机。当前实际候选生产者仍是`whu-academic-discovery-v1-dom-fallback`，不得记作正式v2传输完成。
+2. 增加WebView2协议脱敏层与进程内临时Cookie容器；连接目标优先结构化接口或同UDF请求，DOM只作为实验回退。当前协议结果只参与传输候选判定，Cookie读取/同源请求尚未接入运行搜索。Cookie、ticket、账号、密码、完整敏感URL和响应正文不进入前端、日志或证据。
+3. 新增`SideraNormalizedCandidateDraft`，只接收期刊论文、会议论文和学位论文；保留来源、实际生产适配器版本、字段级provenance、全文状态和不透明题录/全文定位，并按DOI、来源数据库＋供应商记录ID、规范详情、题名＋第一作者＋年份去重。规范详情进入审查前移除认证查询参数。
+4. 新增后台搜索启动、取消、快照和快照入审查命令。蓝色原生检索不请求网页展示；认证失效时只显示官方登录表面，显式“核对原始记录”才打开网页。
+5. “加入导入审查”只提交当前快照的不透明候选ID，并校验searchId、generation和候选实际生产适配器版本；映射到开发008的审查模型后写入`Sidera/import-review-v1.sqlite`，主论文库继续只读。
+6. 编排器为未来Agent预留服务入口，但本包不新增Agent工具，不实现主库写入、全文下载、PDF解析或Provider调用。
+
+### 验证与边界
+
+- 自动门覆盖编排契约、实验回退的真实传输标识、协议候选与实际传输分离、任务代际、论文类型过滤、来源部分失败、不透明定位、审查映射和过期快照拒绝；TypeScript、Vite、Rust core、`cargo check -j 2`、专项/回归、文档与diff分别记录。它不证明真实结构化接口或同会话请求已经落地。
+- 自动过程真实机构外网请求、Provider调用、主论文库写入和全文下载均为0。证据：[sidera-p2a-r1-background-search-review-2026-08-05.json](./evidence/sidera-p2a-r1-background-search-review-2026-08-05.json)。
+- 用户已确认中英文非空、多来源和审查创建；跨页面连续性与旧通知清理为`FAIL`。审查重启恢复、显式原始记录核对，以及主库revision/论文数/下载/Provider零非预期变化仍为`UNVERIFIED`。
+- 本工作包未提交、未推送、未创建PR、未发布；全部dirty worktree与既有证据保留。
+
+## 前序工作包：开发 008 / Sidera-P2a 文件题录审查与身份基座
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED`。P2a采用文件优先路线启动，不以供应商网页自动检索全部通过为前置条件；正式写入主论文库仍属于P2b。
+
+### 计划与实际
+
+1. 新增`SideraImportReviewBatch / Candidate / IdentityEvidence / IdentityMatch / ImportDecision`统一模型，支持CSV、JSON、JSONL、NDJSON、BibTeX与RIS。
+2. 身份解析严格按规范DOI、来源数据库＋供应商记录ID、规范详情URL、规范题名＋第一作者＋年份排序；候选分类为`new / merge / conflict / invalid`，信息不足不自动补写或合并。
+3. 在所选论文库旁建立独立`Sidera/import-review-v1.sqlite`，保存批次、候选、匹配证据和逐条决定。主`research-hotspots-v7.sqlite`只读且schema、论文数量、revision不变。
+4. 新增创建、列表、打开、保存决定和放弃批次的Rust命令；React在“检索与导入”中提供文件选择、批次恢复、冲突/证据展示、逐条决定和放弃入口。
+5. P2a不执行确认入库、全文下载、PDF解析、沉浸阅读或Agent工具；机构结构化快照未来可复用候选接口，但不属于当前完成门。
+
+### 验证与边界
+
+- Rust core定向覆盖六类格式、损坏文件、缺失字段、DOI/供应商重复、题名冲突、决定持久化与项目隔离；专项审计检查独立数据库和主库只读边界。
+- 自动过程真实机构请求、Provider调用、主论文库写入和全文下载均为0。原生仍需用小型真实RIS或BibTeX验证批次展示、身份依据、重复/冲突、决定恢复和主库revision不变。
+- 技术证据：[sidera-p2a-import-review-2026-08-05.json](./evidence/sidera-p2a-import-review-2026-08-05.json)。本工作包未提交、未推送、未创建PR、未发布。
+
+## 前序工作包：开发 007 / Sidera-P1c-R3 主窗口所有权窄修与P1部分收口
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE WINDOW OWNERSHIP UNVERIFIED`。P1总状态调整为`PARTIAL / ADAPTER DEFERRED`；手工机构访问、登录、数据库直达和全文逐级跳转保留，自动统一发现筛选与结构化抽取标记为`DEFERRED / EXPERIMENTAL`。
+
+### 计划与实际
+
+1. 新增统一主窗口宿主解析器，所有路径都用`app.get_window("main")`取得真实顶层`Window`；Windows读取HWND并以`owner_raw()`建立拥有关系，非Windows保留无raw owner降级。
+2. 隐藏统一发现结果、统一发现认证、个人图书馆认证、共享机构浏览器普通/认证popup，以及主窗口禁用、恢复、聚焦和关闭全部迁移到统一宿主。
+3. 禁止`get_webview_window("main")`、`parent_raw()`和子窗口语义；保留`NewWindowResponse::Create`、共享UDF、opener、POST、`window_features`与任务代际隔离。
+4. 错误区分主窗口缺失、Windows句柄不可用、owner绑定失败和WebViewWindow创建失败。供应商页面自身失配继续报告网页兼容错误，不扩大DOM补丁。
+
+### 验证与边界
+
+- TypeScript、Vite、`cargo check -j 2`与主窗口所有权专项审计用于自动门；原生仍需复验蓝色检索、MetaERS popup、认证关闭恢复及CNKI/WOS/分栏回归。
+- 技术证据：[sidera-p1c-r3-main-window-ownership-2026-08-05.json](./evidence/sidera-p1c-r3-main-window-ownership-2026-08-05.json)。本工作包未提交、未推送、未创建PR、未发布。
+
+## 前序工作包：开发 006 / Sidera-P1c-R2 原生研究双栏与侧边机构浏览器收口
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE SPLIT WORKSPACE UNVERIFIED`。P1保持`IN PROGRESS`。用户已确认开发005固定网页视口的滚动性能`PASS`，同时确认网页独占令产品构图与原生功能连续性`FAIL`；本工作包只修复构图、响应式与既有状态连续性。
+
+### 计划与实际
+
+1. 将前端布尔网页开关替换为内部`closed / split / immersive`展示状态。数据库会话、题录、全文和机构入口默认请求`split`；远程导航不能自动进入沉浸网页，`immersive`只由用户明确点击。
+2. 新增纯`SideraInstitutionSplitLayout`解析器：宽屏默认50/50，用户偏好在30%–70%内，原生面至少420px、网页面至少640px；版本化键`research-agent:sidera-institution-browser-layout:v1`只保存合法比例，损坏或缺失回退50%。
+3. 宽屏以原生研究面、8px分隔条和真实 WebView组成双栏。分隔条支持指针捕获、`requestAnimationFrame`合并、方向键2%步进与`Home`复位；释放时才持久化最终比例。
+4. 左侧继续挂载来源、搜索、停止、认证/错误、脱敏轨迹、来源桶、结构化结果、题录和全文入口；右侧继续挂载标签、地址、前进后退、刷新、下载、popup和认证状态。来源切换与切换其他 Sidera页面不关闭或重建网页标签。
+5. 小于1180px时保持同一`split`状态，以固定“原生研究 / 机构网页”切换一次显示一面；打开网页目标自动切网页面，返回原生只改变可见面。关闭最后标签回到`closed`。
+6. WebView几何只由首次显示、显隐、活动标签、窗口/ResizeObserver布局变化和分隔拖动驱动；普通滚轮、左侧滚动与网页内部滚动无监听。前端与 Rust的`<1px` no-op、活动标签单次 bounds和 geometry/focus分离继续沿用 P1c-R1。
+
+### 验证与边界
+
+- 自动门：纯布局解析覆盖1100/1360/1920px、比例偏好、动态最小宽度和端点；专项覆盖三态、键盘/指针分隔、最后标签、沉浸往返、来源切换、窄屏单面和滚动0 bounds IPC。
+- 低负载执行 TypeScript、Vite、机构浏览器 core、`cargo check -j 2`、P1c-R2专项、P1c-R1/P1c/P1b-R2/L1a-R4回归、项目文档审计和`git diff --check`；自动过程真实机构请求、Provider、论文库写入和下载均为0。
+- 原生完成门：1360/1920双栏、比例拖动与重启、CNKI/WOS/额外供应商、左侧原生操作连续性、1100单面、沉浸往返、跨页面恢复、认证 popup、下载暂存和共享 UDF。该门继续作为P1回归验收，但“不得进入P2”的旧硬门已被开发007–008取代；P2a可通过文件优先的独立审查库推进。
+- 技术证据：[sidera-p1c-r2-native-split-browser-2026-08-05.json](./evidence/sidera-p1c-r2-native-split-browser-2026-08-05.json)。本工作包未提交、未推送、未创建 PR、未发布。
+
+## 前序工作包：开发 005 / Sidera-P1c-R1 真实弹窗语义与固定浏览器视口修复
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE POPUP AND PERFORMANCE UNVERIFIED`。P1保持`IN PROGRESS`；开发 004 基础壳烟测仍有效，但修复前最新实机已经明确`PROVIDER ACCESS PASS / POPUP ROUTING FAIL / EMBEDDED BROWSER PERFORMANCE FAIL`，不能被源码、审计或构建覆盖。
+
+### 计划与实际
+
+1. 完整读取六份主线文档并审计 dirty worktree；确认 P1/P1b/P1c 文件均为用户未提交实现，未 reset、checkout、clean、删除、批量格式化、提交、推送、创建 PR或发布。
+2. 在`institution_browser` core先建立纯模型：popup disposition/phase/resolution、脱敏 origin/path、`popupId + openerTabId + generation`终态隔离、MetaERSP bridge、safe GET迁移门、失败/超时/关闭，以及`<1px` bounds epsilon。
+3. 删除普通 popup 的`queue_browser_tab + Deny`。所有合法普通 HTTP/HTTPS popup先用共享`institution-webview-v1/whu` UDF的应用自有`WebviewWindow`承接，并传递`window_features(features)`后返回`NewWindowResponse::Create`；认证 modal的真实 Create路径继续保留。
+4. 将`whu.metaersp.com/loading`作为 transient bridge观察。opener离开 bridge并进入 CNKI、WOS或规范供应商目标时关闭 bridge；关闭、失败或30秒超时后迟到 page-load不能创建标签或覆盖状态。Tauri 2.11.5高层 API不能证明请求方法/直接收编 popup实例，所以未证明 safe GET时保留独立窗口，不做 URL猜测重放。
+5. 根 workbench在`browserRequested=true`时切换为固定 focus mode：隐藏文献标题、机构控制和原生结果，只保留 Sidera标题栏、浏览器标签/导航、下载入口、返回入口和填满余高的 WebView host；返回时恢复原 workbench滚动位置、查询快照和选中来源。
+6. 删除 document capture-scroll bounds同步。前端 ResizeObserver/resize以`<1px`去重；Rust只对活动标签执行一次`set_bounds(Rect)`，不再遍历隐藏标签设置 position/size。bounds、visibility、focus分离，geometry不聚焦；首次显示和明确标签操作可聚焦。
+
+### 验证与边界
+
+- core 定向模型覆盖 MetaERSP→CNKI/WOS、opener fallback无 ghost、规范目标去重、safe GET与opener/POST保留、auth分类、bridge timeout、close、failure、stale generation和bounds no-op。
+- TypeScript与Vite分别执行；专项静态审计验证 Create/window features、敏感状态边界、普通滚轮零 bounds IPC、活动标签单次 bounds、geometry零focus与固定 focus viewport。P1c、P1b-R2、L1a-R4和项目文档审计作为回归。
+- Rust验证固定为 core定向测试与`cargo check --manifest-path src-tauri/Cargo.toml -j 2`，不并行重型任务；只对本包修改的两个 Rust文件执行 rustfmt。自动过程真实机构请求、Provider调用、论文库写入和下载均为0。
+- 原生完成门按顺序执行：CNKI/WOS及另一供应商单一可用页面；认证 popup回父页；快速滚轮；3–5标签与正常/最大化、100/125/150%；下载；重启共享 UDF复用。未执行前两项修复只标记`UNVERIFIED`，不能写 PASS。
+- 技术证据：[sidera-p1c-r1-popup-focus-viewport-2026-08-05.json](./evidence/sidera-p1c-r1-popup-focus-viewport-2026-08-05.json)。本工作包未提交、未推送、未创建 PR、未发布。
+
+## 前序工作包：开发 004 / Sidera-P1c 通用机构浏览器内核、应用内认证与下载基座
+
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE BASIC SHELL SMOKE PASS / NATIVE COMPLETE GATE UNVERIFIED`。P1 继续为`IN PROGRESS`；最新可见 Tauri 已确认共享浏览器壳与武大官网同窗加载，但前序`DISCOVERY AUTH CALLBACK/STATE SYNC FAIL`仍须由真实认证回写闭环重新判定，不能由基础烟测、源码或编译通过覆盖。
+- 根因：固定`institution-whu`子 WebView、任务结果 WebView、数据库直达窗口和多个认证 popup 先后各自拥有浏览、认证或结果生命周期，导致用户看到的网页、共享登录状态和原生检索状态反复分叉。当前工作包把“用户浏览”与“自动检索”正式拆开。
+- 用户可见网页由 Rust 管理的`institution-shared-v1`共享浏览器配置承载；所有项目共用`institution-webview-v1/whu`持久 UDF。标签页运行态保存在内存，Cookie/站点存储由 WebView2 UDF 持久保留。
+- 普通 HTTP/HTTPS 地址、站内链接和`window.open`进入应用内标签页；`mailto:`与`tel:`交给系统处理；顶级`javascript:`、`file:`、`data:`及其他本地/可执行 scheme 被拒绝。远程页面不绑定 Tauri capability，也不能直接调用本地命令。
+- 必须保留真实 opener、POST、window features 或回调语义的认证新窗口，由固定标签`institution-browser-auth`的唯一应用模态承接；模态与标签页显式复用同一 UDF/environment，并继续把数据库 SSO、统一发现身份和个人图书馆状态分别回写到现有机构状态机。
+- 后台自动检索仍使用不可见、任务绑定的专用 WebView；它负责提交、分面、抽取和快照，不能被普通浏览标签页或手工 popup 覆盖。原生题录/全文入口和“查看当前来源”默认打开共享浏览器，不再强制跳到系统浏览器。
+- 用户显式下载 PDF 或附件时，文件进入`institution-downloads-v1/<download-id>`暂存目录。清单记录安全文件名、MIME、大小、SHA-256、来源标签、创建时间与脱敏 provenance；敏感完整 URL 只在当前运行内存中用于请求，不写入清单。取消为尽力而为，重试仅在仍持有内存定位的当前运行有效。
+- 下载完成只表示“暂存文件可用”，不自动写论文库、不创建论文身份、不解析全文、不调用 AI Provider；后续 F1/F2 仍负责文档身份、版本、解析与沉浸阅读。
+- 自动门：浏览器 core 纯函数、TypeScript、Vite、`cargo check -j 2`、P1c 专项、既有机构回归、项目文档审计、P1c 新增/核心机构 Rust 模块 rustfmt 与`git diff --check`。全仓`cargo fmt --check`仍会命中 dirty tree 中既有非 P1c 格式漂移，本包不批量重排用户草稿。自动过程不访问真实机构外网、不调用 Provider、不写论文库，也不主动下载。
+- 最新可见 Tauri 基础烟测：进入“文献工作台 → 机构资源”并打开共享机构浏览器后，标签、地址栏、前进/后退/刷新、下载入口、返回原生结果和`institution-shared-v1`配置标识均可见，武大图书馆官网在同一窗口子 WebView 内成功加载。该结果只记为`NATIVE BASIC SHELL SMOKE PASS`，不覆盖认证、弹窗、下载、任意地址输入和重启复用的完整验收。
+- 原生完成门：最新可见 Tauri 中验证任意地址导航、标签新建/切换/关闭、前进后退刷新停止、普通 popup 进入标签、真实统一认证模态回写、跨项目共享会话、PDF/附件下载及清单、重启会话与下载记录恢复；同时回归统一发现、数据库直达与馆藏目录。全部通过前不得标记 P1 COMPLETE。
+- 证据：[开发 004 / P1c 自动技术证据](./evidence/sidera-p1c-institution-browser-kernel-2026-08-04.json)。
+
+## 前序工作包：开发 003 / Sidera-P1b-R2 统一发现认证回写与任务恢复闭环
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE DISCOVERY AUTH UNVERIFIED`。P1 保持`IN PROGRESS`；最新真实结果为`DISCOVERY AUTH CALLBACK/STATE SYNC FAIL`。
+
+- 边界：完整读取六份主线文档，保留开发 001、002 与其他 dirty tree；未 reset、checkout、clean、删除、提交、推送、创建 PR 或发布。未清除 UDF、未执行重新登录、未读取账号密码/Cookie/ticket，自动过程机构外网、Provider、论文库写入与下载均为 0。
+- 根因：P1b-R1 的任务结果 WebView 能保留真实结果上下文，但其嵌套`on_new_window`在 active task 时直接`Deny`，任务结束后默认`Allow`。官方认证页实际显示已登录，却没有应用所有的关闭/成功回调，父结果页也没有刷新或 DOM 复查；前端又只用`databaseAuth`代表整体登录。
+- 状态修复：core/session 增加`academicDiscoveryAuth`与`discoveryAuthWindowVisible`，保留独立`sourceReadiness`和`libraryAccountAuth`。UI 分别呈现检索入口、全文身份、数据库 SSO 与个人图书馆，并新增`awaiting-auth / resuming-after-auth`阶段及重试入口。
+- 弹窗修复：结果页合法 HTTP/HTTPS popup 统一进入固定单例应用自有窗口，继续使用`window_features(features)`与`NewWindowResponse::Create`复用 opener environment/UDF、POST 和 opener；重复请求聚焦现有窗口，非网络协议拒绝，远程窗口无 Tauri capability。
+- 回写修复：`whu-discovery-auth-v1`只检查有上限页面文本与脱敏 origin/path，识别已登录/机构访问已建立。自动成功和用户关闭前都执行检查；确认后关闭窗口、reload 正确父结果 WebView并等待其重新成为可识别 search-form/records/zero-results。
+- 恢复修复：保存`taskId、epoch、sequence、webviewGeneration、query、resultWebviewLabel、phase`与 popup`authEpoch`。认证等待暂停普通 90 秒活动预算及相关页面等待器；父页恢复后同一任务继续 P1b-R1 分面、分页、严格抽取与去重。取消、创建失败、认证失败、恢复失败及旧回调使用稳定状态收口。
+- 自动结果：TypeScript、Vite 6.4.3（1918 modules）、Rust core 定向 21 项、`cargo check -j 2`、P1b-R2 12 项、P1b-R1 8 项、P1b/L1a-R4/L1a-R3-R1/L1a-R3/L0-R2 脱敏机构回归、项目文档审计、rustfmt modified files 与`git diff --check`均为`PASS`；机构外网、Provider、论文库写入及下载均为 0。
+- 原生完成门：用户须在最新可见 Tauri 中点击统一登录，看到弹窗已登录，自动或手动收口后主程序变为 ready，同一任务继续产生结构化论文，并在重启后复用。完成前不得记录`NATIVE DISCOVERY AUTH PASS`或 P1 COMPLETE。
+- 证据：[sidera-p1b-r2-discovery-auth-resume-2026-08-04.json](./evidence/sidera-p1b-r2-discovery-auth-resume-2026-08-04.json)
+
+## 前序工作包：开发 002 / Sidera-P1b-R1 统一发现真实分面与原生快照闭环
+
+状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE ACADEMIC DISCOVERY UNVERIFIED`。P1 保持`IN PROGRESS`；最近一次真实 active search 仍为`NATIVE ACADEMIC DISCOVERY FAIL`。
+
+- 工作树边界：直接保留 L0–P1b 全部 dirty tree 与证据；未 reset、checkout、clean、删除、提交、推送、创建 PR 或发布。自动过程未访问真实机构网络、未调用 Provider、未写论文库、未下载全文，也未触碰机构 UDF 或凭据。
+- 根因：active search 的`on_new_window`曾把官方结果 URL 普通导航回主`institution-whu`并`Deny`，丢失真实 window.open/opener/POST 语义；后续筛选和抽取仍在主 WebView 运行。旧脚本锚定纯标签且不删除计数，无法匹配“文章 (154,863)”等真实标签，未确认筛选后错误呈现 0 条。
+- 生命周期修复：active search 创建隐藏的应用自有结果 WebView，继承同一 WebView2 environment/UDF 与 opener 上下文，并绑定`taskId + epoch + sequence + webviewGeneration + label`。新任务、取消、关闭、generation 变化和迟到 page-load 都有隔离门；手工 popup 只作为网页，不生成伪快照。
+- 分面修复：标签先移除中英文括号数字、空白和可访问性后缀；选中态覆盖 hidden input、checked、`:checked`、aria checked/selected/pressed 及 Material/Primo 类。每次点击等待页面或分面签名变化；发现 radio/互斥时顺序执行文章、会议论文、学位论文三个受控子检索并合并。
+- 抽取修复：inspect、最多三页分页和 extract 全部在绑定结果 WebView 执行；只接受`journal-article / conference-paper / thesis`，图书、电子书、期刊刊名、菜单、脚本和 unknown 拒绝。按 DOI、供应商记录 ID、规范详情、题名＋第一作者＋年份去重；只有显式零结果证据才能成功返回空快照。
+- 产品状态：新增`opening-web-result / web-result-available / facet-processing / extracting / native-snapshot-complete / filter-unconfirmed / adapter-drift`阶段。完成后结果 WebView 默认隐藏并展示原生列表，“查看原始页面”才显式显示网页；数据库直达与馆藏目录保持原实现。
+- 自动验证：TypeScript/Vite 1918 modules`PASS`；Rust core institution_search 19/19`PASS`；`cargo check -j 2` `PASS`；P1b-R1 脱敏夹具覆盖带计数中英文分面、input/aria/Material 选中态、popup 绑定、顺序子检索、图书混入、分页、迟到回调、原生/网页切换并`PASS`，机构请求与 Provider 调用为 0。Windows Rust lib 测试宿主在测试代码前因缺少`TaskDialogIndirect`入口返回`0xc0000139`，单独记录`ENVIRONMENT FAIL`并停止重跑；它不构成原生验收。
+- 原生验收：必须在最新 Tauri 复用现有 UDF 分别检索“人工智能”和“machine learning”，看到原生结构化论文列表而非网页或伪零；再打开题录/全文、验证跨页与页面切换、重启复用，并确认论文库 revision、下载与 Provider 调用无变化。完成前不得写`NATIVE ACADEMIC DISCOVERY PASS`或 P1 COMPLETE。
+- 证据：[sidera-p1b-r1-native-snapshot-2026-08-04.json](./evidence/sidera-p1b-r1-native-snapshot-2026-08-04.json)
+
+## 前序工作包：Sidera-P1b-001 武大统一学术发现原生化与 P1 收口
+
+状态：`AUTOMATED TECHNICAL PASS / NATIVE ACADEMIC DISCOVERY FAIL / SUPERSEDED BY P1b-R1`。
+
+- 启动前完整读取六份主线文档并记录 dirty tree；未 reset、checkout、clean、删除、提交、推送、发布或改写现有证据。
+- 代码事实核对确认 R4 已有 Rust 独立学术/馆藏快照、结构化论文与 OPAC v3 清洗，但“数据库直达”尚未独立呈现，网页资源类型未自动确认，全文只有粗粒度状态。
+- 前端新增“统一学术发现 / 数据库直达 / 馆藏目录”三表面。数据库直达登记 Web of Science 与武汉大学数据库导航，复用原数据库会话，不实现供应商高级检索。
+- 统一发现固定脚本在真实结果页逐项选择文章、会议论文、学位论文，并要求三项选中状态全部可确认；否则返回`SIDERA_INSTITUTION_ACADEMIC_FILTER_UNCONFIRMED`。结构化提取继续拒绝图书、导航和脚本噪声。
+- Rust 新增六类全文路线及不透明打开定位；DOI、解析器、供应商记录、出版社页面与浏览器回退互相区分。本轮没有下载、入库、解析或 Provider 调用。
+- 自动验证使用本地源码契约与脱敏夹具：TypeScript PASS；Vite 1918 modules PASS；P1b 专项 PASS；R4 回归 PASS；Rust institution_search 19/19 PASS；`cargo check -j 2` PASS；项目文档 266/266 PASS；`git diff --check` PASS。全仓 `cargo fmt --check`只读发现既有 dirty tree 多文件格式漂移，为避免重排用户草稿未执行批量格式化，记录为 UNVERIFIED。
+- 原生实机已证明该版本 active search 未到达真实分面与抽取链，结果 0 条不是合法零结果；因此该候选结论为 FAIL，而非仅“完整门未验证”。P1b-R1 完成最新 Tauri 闭环前 P1 不标记 COMPLETE。
+- 证据：[sidera-p1b-whu-native-academic-discovery-2026-08-04.json](./evidence/sidera-p1b-whu-native-academic-discovery-2026-08-04.json)
+
+## 前序工作包：M2.0c-L1a-R4 论文级统一发现与馆藏目录降级修复
+
+### 1. 工作包
+
+- 日期：2026-08-04
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0–L1a-R4 为 `dirty worktree`；保留全部现有修改、并行任务成果和未跟踪证据，不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE ACADEMIC DISCOVERY FAIL / SUPERSEDED BY P1b-R1`
+- 目标：把 OPAC 降级为“馆藏目录”，默认通过武大当前官方统一学术发现入口检索期刊论文、会议论文和学位论文；本包只形成内存元数据、来源识别、全文可用性和受控应用内跳转，不入库、不下载、不解析全文、不调用 AI Provider。
+
+### 2. 实际实现
+
+1. 机构资源页新增“学术论文 / 馆藏目录”来源切换，默认选择学术论文。Rust 分别维护两类任务快照、结果定位和来源就绪状态；切换来源或普通页面不清空另一来源结果，也不清除现有 WebView2 UDF。
+2. 馆藏适配器升级为 `whu-opac-catalog-v3`。脚本按完整书目容器提取，先移除脚本、样式、隐藏和格式化辅助节点，再按显式题名、有效书目链接和最长可读文本选择唯一题名；Rust 质量门拒绝纯数字、`doclist[...]`、`fmt_issn`、`dispfmt`、评级代码和检索导航。
+3. 馆藏结果先按馆藏记录身份，再按规范详情、ISBN/ISSN、题名与年份去重；20 条上限施加在唯一书目而不是候选 DOM 节点。无法形成真实书目时返回 `SIDERA_INSTITUTION_CATALOG_ADAPTER_DRIFT`，不会输出伪记录或假零结果。
+4. 新增 `whu-academic-discovery-v1`。运行时优先使用 L0 探针动态解析的正式统一发现目标；未解析时进入武大官网并只激活文字严格匹配“珞珈学术搜索/学术搜索”的官方元素。找不到真实入口时明确返回 `SIDERA_INSTITUTION_DISCOVERY_ROUTE_UNRESOLVED`，不会退回 OPAC 冒充论文检索。
+5. 学术适配器要求真实题名、受控详情定位，以及 DOI 或“作者＋期刊/会议/授予单位/年份”等论文身份证据；默认接受期刊、会议与学位论文，排除图书、馆藏、导航和脚本。混合页面中的无效候选被单条拒绝，已验证论文继续返回但快照标为 `partial`。
+6. 论文结果增加期刊/会议/授予单位、卷期页码、来源供应商、全文状态和不透明全文定位。去重依次使用 DOI、供应商记录 ID、规范详情、题名＋第一作者＋年份；题录和全文打开均由 Rust 从当前快照解析不透明 ID，前端不能提交任意 URL。
+7. 用户在最新原生桌面手动完成机构登录并确认检索可用；非图书类结果能够通过题录/链接解析/供应商页面逐级到达全文。该结果证明认证与连接器编排主链成立，但没有产生全文文件、文档版本、解析索引或 Agent 可引用证据。
+
+### 3. 自动验证与证据
+
+- TypeScript `PASS`；Vite 6.4.3 `PASS`（1918 modules）；Rust core `institution_search` 18/18 `PASS`；`cargo check -j 2` `PASS`。L1a-R4 专项、L1a/L1a-R1/L1a-R2/L1a-R3/L1a-R3-R1/L0-R2 回归、项目文档审计与 `git diff --check`均为`PASS`；自动过程不访问真实机构网络或 Provider。
+- 专项夹具覆盖 OPAC 同一书目中的数字、`doclist`和真实题名，唯一记录上限与跨形式去重；统一发现覆盖期刊、会议、学位论文、图书混入、身份缺失、全文定位、零结果与 DOM 漂移。
+- 论文库写入、下载和 Provider 调用均为 0。
+- 证据：[sidera-m2.0c-l1a-r4-academic-discovery-2026-08-04.json](./evidence/sidera-m2.0c-l1a-r4-academic-discovery-2026-08-04.json)
+
+### 4. 原生验收进度与剩余完成门
+
+- 已通过：用户确认机构认证、数据库直达及官网手工检索/逐级全文访问正常，限定记录`NATIVE CORE WEB FLOW PASS`；它不是 Sidera 原生结构化发现验收。
+- 待补齐：复用当前机构 UDF，在馆藏目录检索“人工智能”不得出现数字标题、JavaScript、格式化函数或同书重复项。
+- 待补齐：默认学术论文分别记录“人工智能”和“machine learning”的真实论文结果、来源桶和题录；合计至少两个真实来源数据库，否则保持`partial`。
+- 待补齐：跨页面与重启后会话、任务和快照行为继续正确；论文库 revision、下载数和 Provider 请求数没有非预期变化。
+- active search 后续实机为`NATIVE ACADEMIC DISCOVERY FAIL`并由 P1b-R1 取代。手工网页链通过不等于原生论文快照、题录入库、全文获取、文档解析或 Agent 原文证据可用。
+
+### 5. 产品方向与后续接力
+
+- 2026-08-04 用户明确提出：如果每个数据库仍只是打开新页面并由用户重复检索，Sidera 会退化为学校图书馆套壳。项目据此锁定“原生科研工作流拥有产品价值、供应商网页只是连接器”的方向，见 D-144。
+- 最终表现为 Agent 首页、文献工作台、全文阅读台、证据/空间视图、运行中心和连接器设置六个协同表面；同一 PaperEntity、SourceRecord、DocumentVersion 和 EvidenceAnchor贯穿所有表面。
+- 后续统一顺序为：`L1b 受控题录导入与论文身份 → F1 文档身份与单篇全文获取 → F2 解析和页码索引 → F3 原生阅读与批注 → F4/M2.1 证据型科研 Agent → F5/M3 多库连接器扩展 → M4/M5 成果与发布闭环`。
+- 下一开发包先做 L1b 的导入队列、字段映射、身份合并、来源记录和失败恢复；同时为 F1 预留文档版本接口。R4 剩余原生回归没有补齐前，只进行数据契约和迁移设计，不执行不可逆 Schema 写入。
+
+### 6. 提交
+
+- 当前无 L1a-R4 提交；不提交、不推送、不创建 PR、不发布。
+
+## 前序工作包：M2.0c-L1a-R3-R1 武大真实检索适配器与双会话闭环
+
+### 1. 工作包
+
+- 日期：2026-08-04
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0–L1a-R3-R1 为 `dirty worktree`；保留全部现有修改、并行任务成果和未跟踪证据，不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`INSTITUTION AUTH PASS / CATALOG EXTRACTION FAIL / PRIMARY ROUTE MISALIGNED / SUPERSEDED`
+- 目标：在已经通过的数据库 SSO 主链上证明查询真实提交、结果来自正式馆藏行，并完成来源桶、原始记录、跨页、个人图书馆与重启复用闭环；任一步失败均继续保持 `FAIL/IN PROGRESS`，不开始 L1b。
+
+### 2. 实际实现
+
+1. 适配器从 `whu-catalog-multidb-v1` 升级到 `whu-catalog-multidb-v2`。检索入口只允许 `search-form`；来源桶、结果或零结果不能在提交前直接被当成当前查询完成。
+2. 页面载荷增加短期 `pageSignature`、可选 `queryEcho` 与 `explicitZeroResults`。提交脚本返回提交前签名和查询值；运行时等待新签名、匹配回显或正式结果结构，未观察到真实变化时返回 `SIDERA_INSTITUTION_QUERY_NOT_SUBMITTED`。
+3. 结果脚本只接受 `func=direct + doc_number` 或 `func=full-set-set + set_number + set_entry` 等真实详情定位，并明确拒绝“简单检索、多字段检索、高级检索、多库检索、检索历史”等导航标题。质量门区分 `SIDERA_INSTITUTION_RESULT_FALSE_POSITIVE` 与 `SIDERA_INSTITUTION_ADAPTER_DRIFT`，没有显式零结果证据时不得返回空成功。
+4. 来源桶继续顺序提取，每桶最多 20 条、总计最多 40 条；单桶失败保留其他结果并标记 `partial`。结果按 DOI、规范详情地址、标题与年份去重；“查看原始记录”仍只接受当前 Rust 快照的不透明结果 ID。
+5. 个人图书馆不再依据已知 URL 直接 `ready`。主 WebView/认证模态在完成导航后执行版本化 DOM 检查；账号密码表单返回 `login-required`，已认证页面才进入就绪。数据库和个人认证状态保持独立。
+6. R3 的 CAS/MetaAuth/MetaERS 导航链、开放网络行为、脱敏轨迹、generation/epoch 隔离、同 UDF 馆藏交接和跨页面后台任务保持不变；本包不修改论文库、Agent、Pi、Provider、RAG或缓存协议。
+
+### 3. 自动验证与证据
+
+- TypeScript `PASS`；Vite 6.4.3 `PASS`（1918 modules）；Rust core `institution_search::tests` 14/14 `PASS`；`cargo check --manifest-path src-tauri/Cargo.toml -j 2` `PASS`。
+- L1a-R3-R1 专项锁定适配器 v2、提交证明、伪结果拒绝、个人会话 DOM 门、零任意 URL/Cookie/Provider/论文写入；L1a-R3/L1a/L0-R2/R4-R3 回归、项目文档审计与 `git diff --check`一并执行。
+- 自动测试不访问机构外网，不调用付费 Provider，不修改论文库或下载文件。
+- 证据：[sidera-m2.0c-l1a-r3-r1-real-search-adapter-2026-08-04.json](./evidence/sidera-m2.0c-l1a-r3-r1-real-search-adapter-2026-08-04.json)
+
+### 4. 原生闭环门槛
+
+- 最新唯一可见 Tauri 桌面必须完成：“人工智能”与“machine learning”真实文献、来源桶、首条原始记录、检索中跨页返回、关闭重启后的会话复用与再次检索。
+- 个人图书馆若复用现有 SSO 自动完成，记录 DOM 就绪；若出现账号密码表单，只记录 `PERSONAL LIBRARY BLOCKED`，不自动填写，也不阻断数据库部分继续验收。
+- 验收前后论文库 revision、下载数和 Provider 请求数必须保持不变。数据库全部通过后才可记录 `NATIVE IN-APP SEARCH PASS`；两类会话均闭环前工作包仍不得标记 COMPLETE。
+- 2026-08-04 原生候选已确认为唯一最新可见 Tauri 窗口，适配器标签为 `whu-catalog-multidb-v2`。点击“登录机构资源”后，数据库状态正确变为“需要登录”，内嵌页面显示武大统一身份认证账号密码表单；现有隔离 UDF 未直接恢复会话。自动化未填写凭据，后续检索门因此记录为 `BLOCKED`而非 PASS。
+- 随后用户完成数据库认证，真实检索暴露 `v2`按详情链接候选而非完整书目容器提取：同一书目被拆成数字序号、`doclist[...]`脚本片段和真实题名等多条伪记录；同时该路径只返回 OPAC 图书馆藏，不符合论文主检索目标。因此认证结论保留为 PASS，目录提取和主路线结论改为 FAIL，并由 L1a-R4 取代。
+
+### 5. 提交
+
+- 当前无 L1a-R3-R1 提交；不提交、不推送、不创建 PR、不发布。
+
+## 已实现认证候选：M2.0c-L1a-R3 应用内机构认证与检索真实闭环
+
+### 1. 工作包
+
+- 日期：2026-08-03
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0/L0-R1/L0-R2/L1a/L1a-R1/L1a-R2/L1a-R3 为 `dirty worktree`；保留全部现有修改和未跟踪证据，不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`IN PROGRESS / AUTOMATED TECHNICAL PASS / NATIVE CLOSED-LOOP UNVERIFIED`
+- 目标：用真实导航证据确定并修复失败节点；数据库登录、检索、原始记录与重启复用闭环全部通过前不宣布完成，不开始 L1b。
+
+### 2. 实际实现
+
+1. core 新增最多 32 条的 `SideraInstitutionNavigationEvent` 内存轨迹；只保存认证类型、阶段、网络主机、路径、重定向、安全错误、navigation ID、generation、epoch 和时间，不保存 query、fragment、ticket、Cookie、表单、账号、密码或正文。
+2. 官方探针返回数据库网络入口后，会话导航允许所有 HTTP/HTTPS 主机、端口、路径、userinfo、重定向和不透明认证参数。数据库网络弹窗使用 WebView2 原生 `Allow`，个人图书馆及嵌套网络弹窗不再按站点拒绝。
+3. Windows WebView2 接入 `NavigationStarting / NavigationCompleted`并映射安全错误。策略拦截与失败会立即清除 pending 首航；20 秒计时器只在 generation、epoch 与 pending 全部仍匹配且从未收到终态时生效。
+4. `session_from_url` 不再依据 MetaERS/OPAC 主机返回 `ready`。页面传输完成后由版本化适配器重复检查 DOM；只有检索表单、来源桶或结果可进入就绪，未知结构返回 `SIDERA_INSTITUTION_ADAPTER_DRIFT`。
+5. 机构页增加只读“脱敏导航轨迹”技术详情，最多显示最近事件的阶段、主机/路径、重定向和安全错误；不暴露完整 URL 或认证材料。
+6. 个人图书馆继续使用 R2 的共享 WebView2 environment/UDF 模态；数据库和个人认证状态继续独立，只有 DOM 确认的数据库 `ready` 可以启动检索。
+7. 首次原生 R3 轨迹定位到 MetaAuth 后续顶层重定向被策略拦截；第二轮最新候选明确返回 `POLICY_UNREGISTERED_TARGET`。据用户决定，纯导航决策器改为所有 HTTP/HTTPS 直接 `Allow`；精确目标表、HTTP 强制升级、端口/userinfo 判断与取消导航忽略集合全部删除。机构 WebView 的自动填充/密码保存禁用、开发工具禁用和下载拒绝钩子也一并移除，避免非必要设置成为初始化失败源。
+8. 第三轮原生轨迹已成功完成 CAS、MetaAuth 与 MetaERS SSO 并落到`whu.metaersp.com/personalIndex`。该页面被重新定义为“已认证落地页”而非检索页：同一 WebView/UDF 会幂等跳转到`WHU_CATALOG_ENTRY_URL`，只有 OPAC 检索 DOM 被版本化适配器识别后才进入`ready`。
+
+### 3. 自动验证与证据
+
+- TypeScript 与 Vite 6.4.3（1918 modules）`PASS`；Rust core `institution_search::tests` 12/12 `PASS`；`cargo check -j 2` `PASS`。
+- L1a-R3 专项锁定导航轨迹上限与脱敏、开放 HTTP/HTTPS 会话策略、原生网络弹窗、WebView2 起止事件、具体终态优先、DOM 就绪门、`ADAPTER_DRIFT`和 0 次自动外网/Provider 调用；相关回归、文档审计及差异检查一并执行。
+- 证据：[sidera-m2.0c-l1a-r3-native-closed-loop-candidate-2026-08-03.json](./evidence/sidera-m2.0c-l1a-r3-native-closed-loop-candidate-2026-08-03.json)
+
+### 4. 原生闭环门槛
+
+- 必须在最新可见 Tauri 桌面完成：数据库 SSO 无灰屏且 DOM 确认 `ready`；个人图书馆登录成功/取消/关闭；“人工智能”和“machine learning”均返回结构化来源桶；原始记录可打开；跨页面不中止；重启复用会话并再次检索；全程不得再出现 Sidera 对 HTTP/HTTPS 目标的策略拦截。
+- 原生闭环前继续保持 `IN PROGRESS / NATIVE CLOSED-LOOP UNVERIFIED`。任何一步失败均保留失败证据并继续修复，不能进入 L1b。
+- 论文库 revision、下载数和 Provider 调用数必须保持不变；本自动阶段机构外网请求与 Provider 调用均为 0。
+
+### 5. 提交
+
+- 当前无 L1a-R3 提交；不提交、不推送、不创建 PR、不发布。
+
+## 已完成但原生失败：M2.0c-L1a-R2 真实认证弹窗与首航恢复修复
+
+### 1. 工作包
+
+- 日期：2026-08-03
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0/L0-R1/L0-R2/L1a/L1a-R1/L1a-R2 为 `dirty worktree`；保留全部现有修改和未跟踪证据，不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE IN-APP INSTITUTION AUTH FAIL / SUPERSEDED`
+- 目标：恢复真实认证导航语义，解决灰屏；超时只作为故障兜底，不替代弹窗、POST、opener 或 WebView2 成功状态。
+
+### 2. 实际实现
+
+1. 主 `institution-whu` 先以隐藏 `about:blank` 创建，完成 UDF、白名单、下载/开发工具限制、密码保存禁用和 `NavigationCompleted.IsSuccess` 监听后才进入正式数据库 SSO；路由未解析时明确失败，不回退官网。
+2. 首航使用 20 秒期限和显式重试；重试重建子 WebView但复用 `institution-webview-v1/whu`。`webviewGeneration + navigationEpoch + pendingInitialNavigationEpoch` 隔离迟到完成事件，被拦截或超时页面不能覆盖新状态。
+3. 个人图书馆从官方页面发起合法 `window.open` 时，Rust 使用 `WebviewWindowBuilder.window_features(features)` 复用 opener WebView2 environment，并返回 `NewWindowResponse::Create` 创建 `institution-whu-auth` 模态；不再把代理 URL交给主 WebView GET 重放。
+4. 模态窗口以 960×720 为上限、工作区 90% 为约束，最小尺寸不超过 720×560；绑定主窗口、可缩放、原生标题栏。模态期间禁用主窗口；成功、取消、关闭、创建/导航/配置失败均恢复主窗口，重复弹窗聚焦现有窗口。
+5. 白名单保持精确武大图书馆、MetaAuth、MetaERS、OPAC，并增加精确 `cas.whu.edu.cn/authserver/`；未知域名、HTTP、用户信息、异常端口和额外窗口继续拦截，不自动打开系统浏览器。
+6. `SideraInstitutionSessionState` 新增独立 `databaseAuth / libraryAccountAuth`、活动认证类型、模态状态和导航 epoch；`session_ensure` 接受可选 `authKind`，新增统一取消命令。只有 `databaseAuth=ready` 可以检索。
+7. 机构页提供“登录机构资源”和“登录我的图书馆”两个入口，首航失败显示明确代码和重建重试；设置页分别展示数据库 SSO 与个人图书馆状态。React 在 WebView2 成功前只显示加载层，不暴露灰色原生表面。
+
+### 3. 验证与证据
+
+- Rust core `institution_search::tests` 8/8 `PASS`，覆盖精确 CAS/恶意 URL、官方代理/MetaAuth 模态分类和双认证独立状态；外网请求数为 0。
+- TypeScript、Vite 6.4.3（1918 modules）、`cargo check -j 2`、L1a-R2 专项、L1a-R1/L1a/L0-R2/R4-R3/R4-R2 回归、项目文档审计与 `git diff --check`均为`PASS`；不调用真实机构网络或 Provider。
+- 证据：[sidera-m2.0c-l1a-r2-real-auth-popup-first-navigation-2026-08-03.json](./evidence/sidera-m2.0c-l1a-r2-real-auth-popup-first-navigation-2026-08-03.json)
+
+### 4. 原生验收与遗留
+
+- 数据库按钮必须在主内嵌区域进入 MetaAuth/MetaERS，不能灰屏、不能打开系统浏览器；失败与 20 秒超时必须显示重试，并保留 UDF。
+- 个人图书馆按钮必须先显示官方页面，再由共享 environment 模态承接真实弹窗；成功、取消、关闭和未知目标拦截后主窗口都必须恢复。
+- 重启后复用两类官方会话；“人工智能”和“machine learning”返回结构化结果并可开详情，跨页面检索不中止。
+- 原生复验已经失败：主数据库 SSO 在 20 秒后进入 `SIDERA_INSTITUTION_NAVIGATION_TIMEOUT`，未达到 `ready`。由 L1a-R3 继续诊断与闭环；论文库 revision、下载数、Provider 调用数必须保持 0。
+
+### 5. 提交
+
+- 当前无 L1a-R2 提交；不提交、不推送、不创建 PR、不发布。
+
+## 已完成但原生失败：M2.0c-L1a-R1 应用内认证跳转与机构状态修复
+
+### 1. 工作包
+
+- 日期：2026-08-03
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0/L0-R1/L0-R2/L1a/L1a-R1 为 `dirty worktree`；不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE IN-APP INSTITUTION AUTH FAIL / SUPERSEDED`
+- 目标：修复官方认证通过 `window.open` 发起时被无条件拒绝的问题，并明确区分无 Cookie 入口探测与应用内机构会话；不改变检索、入库、全文和 Provider 边界。
+
+### 2. 计划步骤与完成条件
+
+| 步骤 | 内容 | 完成条件 | 状态 |
+| --- | --- | --- | --- |
+| 1 | 纯弹窗 URL 决策 | 合法官方目标为 `same-webview`；非法目标为不透明外部回退 | PASS |
+| 2 | 同一 WebView 认证跳转 | 复用 `institution-whu` 与原 UDF，调用 `navigate()` 并拒绝创建第二窗口 | PASS |
+| 3 | 会话恢复与检索门 | 页面成功后清除旧横幅；只有 `ready` 能启动检索 | PASS |
+| 4 | 设置状态语义 | L0 探针明确不检测登录；独立展示应用内会话并可直接前往 | PASS |
+| 5 | 自动验证 | TypeScript、Vite、Rust core、cargo check、专项与回归 | PASS |
+| 6 | 原生应用内认证 | 同一 WebView 登录、重启复用、中英文结果与非法目标拦截 | UNVERIFIED |
+
+### 3. 实际开发日志
+
+- 2026-08-03：用户原生确认登录按钮发起 `https://www.lib.whu.edu.cn/engine2/general-rest/outer-proxy-detail-url` 新窗口请求，旧 `on_new_window` 对所有 URL 都登记回退并返回 `Deny`；原 L1a 产品结果更正为 `NATIVE IN-APP SEARCH FAIL / SUPERSEDED`。
+- 2026-08-03：core 新增 `classify_whu_popup_navigation`，直接复用机构主导航白名单。官方认证代理与合法 MetaAuth 路由返回 `same-webview`；未知域名、HTTP、用户信息和非法 service 返回 `external-fallback`。
+- 2026-08-03：桌面层对 `same-webview` 请求清除旧回退、标记 `AUTH_REDIRECTING`，在现有 `institution-whu` 上调用 `navigate()`，随后仍返回 `NewWindowResponse::Deny`。失败使用独立 `AUTH_NAVIGATION_FAILED`，不会误报为白名单不支持。
+- 2026-08-03：批准页面成功加载后先清除残留回退；`session_ensure` 只为未初始化或失败态重新解析正式入口，正在填写的登录页和就绪会话不重载。检索严格要求 `ready`，来源桶部分失败只改变搜索快照。
+- 2026-08-03：设置页把公开入口探针明确为无 Cookie、无登录判断；外部按钮改为系统浏览器备用路线，增加实时“应用内机构会话”和“前往机构资源”。
+
+### 4. 测试与证据
+
+- Rust core：`institution_search::tests` 7/7 `PASS`，新增官方代理路径、合法 MetaAuth 与恶意 URL 分类夹具；外网请求数为 0。
+- TypeScript：`PASS`；Vite、`cargo check -j 2`、L1a-R1/L1a/L0-R2/R4-R3 回归与文档审计为 `PASS`。
+- 自动测试机构外网请求数为 0，Provider 调用数为 0；未读取 Cookie/凭据，未进行论文入库或全文下载。
+- 证据：[sidera-m2.0c-l1a-r1-in-app-auth-navigation-2026-08-03.json](./evidence/sidera-m2.0c-l1a-r1-in-app-auth-navigation-2026-08-03.json)
+
+### 5. 当前进度与偏差
+
+- L0-R2 的系统浏览器入口验收继续保持 `NATIVE ACCESS PROBE PASS`；L1a 的失败只发生在应用内官方弹窗接管，不归因于 aTrust、学校账号或 MetaAuth 路由。
+- `NewWindowResponse::Deny` 现在只表示不创建第二窗口；合法目标已经在返回前交给当前机构 WebView 导航。系统浏览器仍只处理被安全决策器拒绝且由用户显式确认的目标。
+- 设置“重新检测”不读取任意浏览器 Cookie，因此不会因用户在系统浏览器完成登录而变为“应用内已就绪”；该状态只能在隔离机构 WebView 中建立。
+
+### 6. 原生验收与遗留
+
+- 在 Sidera 内点击官方登录，认证代理与 MetaAuth 全程必须停留在同一内嵌区域，不再出现“不支持”横幅或额外系统浏览器。
+- 登录后会话应显示 `ready`；重启后复用同一 UDF，设置页应用内会话行与机构页状态一致。
+- 分别检索“人工智能”和“machine learning”，验证结构化结果、详情和跨页面连续性；未知外部目标仍必须被拦截。
+- 核对论文库 revision、下载数与 Provider 调用数均为 0。通过前保持 `IN-APP INSTITUTION AUTH UNVERIFIED`。
+
+### 7. 提交
+
+- 当前无 L1a-R1 提交；不提交、不推送、不创建 PR、不发布。
+
+## 已完成但原生失败：M2.0c-L1a 应用内机构会话与武大多库检索预览
+
+### 1. 工作包
+
+- 日期：2026-08-03
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0/L0-R1/L0-R2/L1a 为 `dirty worktree`；不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE IN-APP SEARCH FAIL / SUPERSEDED`
+- 目标：把已通过的系统浏览器验证路线升级为 Sidera 内的隔离持久机构会话、后台自动检索、来源识别和结构化结果预览；不入库、不下载、不调用 AI Provider。
+
+### 2. 计划步骤与完成条件
+
+| 步骤 | 内容 | 完成条件 | 状态 |
+| --- | --- | --- | --- |
+| 1 | Rust 所有的机构子 WebView | 固定标签与 UDF；关闭自动填充/密码保存/下载/新窗口；无远程 capability | PASS |
+| 2 | 应用内机构页签与几何 | 原生结果为默认表面；`ResizeObserver` 同步边界；弹层/切页前隐藏 | PASS |
+| 3 | 多库检索状态机 | 任务/epoch/sequence 隔离；200 字符、90 秒、256 KiB | PASS |
+| 4 | 归一化与结果预览 | 每桶 20、总计 40；去重、来源 provenance、不透明详情 ID | PASS |
+| 5 | 自动验证 | TypeScript、Vite、Rust core、cargo check、专项与回归 | PASS |
+| 6 | 原生应用内检索 | 官方登录持久化、中英文结果、跨页面连续性和多尺寸几何 | UNVERIFIED |
+
+### 3. 实际开发日志
+
+- 2026-08-03：Tauri 固定 `2.11.5` 并启用 `unstable`；Rust 新增 `SideraInstitutionRuntimeState`，只在主窗口创建 `institution-whu` 子 WebView，数据目录固定为应用本地 `institution-webview-v1/whu/`。
+- 2026-08-03：子 WebView 限制到登记的武大、MetaAuth、MetaERS和馆藏主机，关闭通用自动填充、密码保存、下载、新窗口和开发工具。未知导航只生成内存态回退 ID；前端不能传任意 URL。重登录通过 WebView2 浏览数据 API 清空本机构会话，不删除论文或项目数据。
+- 2026-08-03：新增 Tauri-free `institution_search` core，定义会话/检索状态、来源桶、结构化记录、provenance、查询与载荷限制、URL 规范化和三层去重。缺失字段为空，不推断页面未提供的数据。
+- 2026-08-03：固定适配器 `whu-catalog-multidb-v1` 通过 Rust 内置脚本识别登录、服务异常、检索表单、来源桶和记录；每桶顺序读取，单桶失败保留其他结果并标记 `partial`。
+- 2026-08-03：“文献工作台”新增机构资源页签、原生检索框、会话状态、来源分组和结果列表。内嵌页只用于登录、原始记录与故障回退；React 用 `ResizeObserver` 提交逻辑像素边界。
+- 2026-08-03：根级监听器持有搜索快照，普通页面切换不取消检索；非机构页面标题栏显示检索中、完成或失败，提供返回结果与独立停止按钮。全局导航、弹层和非浏览器态会先隐藏原生子表面。
+
+### 4. 测试与证据
+
+- Rust core：`institution_search::tests` 6/6 `PASS`；覆盖中英文来源、缺失字段、去重、限制、URL 白名单、规范化与不透明结果身份。
+- TypeScript：`PASS`；Vite 6.4.3：`PASS`（1917 modules，仅既有 Tauri event 分块提示）。
+- Rust 桌面：`cargo check --manifest-path src-tauri/Cargo.toml -j 2`为 `PASS`。
+- L1a 专项：`PASS`；审计固定 Tauri/WebView 所有权、独立 UDF、导航/下载/脚本边界、任务隔离、前端几何与零论文写入/零 Provider 路径。
+- 自动测试机构外网请求数为 0，Provider 调用数为 0；未进行论文入库或全文下载。
+- 证据：[sidera-m2.0c-l1a-in-app-institution-search-2026-08-03.json](./evidence/sidera-m2.0c-l1a-in-app-institution-search-2026-08-03.json)
+
+### 5. 当前进度与偏差
+
+- L0-R2 已证明正式 SSO 与馆藏检索入口可用；L1a 选择“原生结果＋受控内嵌官方页面＋系统浏览器备用”的混合路线，不再把可见系统浏览器作为正常流程。
+- 当前适配器以已验收的武大馆藏书刊多库检索为首个连接器，不宣称已经覆盖 CNKI、WoS、万方、维普、Springer、Scopus 或全部机构订阅资源。
+- WebView2 UDF 会持久保存官方站点会话，但 Sidera 不读取其 Cookie 或凭据。原生验收在进入认证阶段即发现官方 `window.open` 被无条件拒绝，尚未到达跨重启复用或固定脚本检索验收。
+- 搜索结果仍是运行内存中的临时题录；L1b 才允许经过用户确认的受控入库，F1 之后才允许单篇全文获取与文档治理。
+
+### 6. 原生验收与遗留
+
+- 在 Sidera 内完成一次官方登录并重启，确认独立机构会话可复用；失效时应显示 `login-required/expired`，不得伪装成零结果。
+- 分别检索“人工智能”和“machine learning”，确认来源桶、首屏字段、去重、详情打开和部分失败状态；正常流程不打开系统浏览器。
+- 检索中切换本地文献库、星图、设置和 Agent，任务不得中止；1100/1360/1920px 与 100%/125%/150% 缩放下子 WebView不得遮挡标题栏、导航或弹窗。
+- 核对检索前后论文数量、库 revision 和下载文件数不变，Provider 调用数为 0。官方认证弹窗失败由 L1a-R1 修复后重新验收。
+
+### 7. 提交
+
+- 当前无 L1a 提交；不提交、不推送、不创建 PR、不发布。
+
+## 已完成工作包：M2.0c-L0-R2 武大动态 SSO 配置解析修复
+
+### 1. 工作包
+
+- 日期：2026-08-03
+- 分支：`codex/sidera-m2-rag`
+- 基线提交：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+- 工作树：当前 L0/L0-R1/L0-R2 为 `dirty worktree`；不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE ACCESS PROBE PASS`
+- 目标：保留 L0/L0-R1 的诊断、安全 SSO 校验和浏览器导航契约，修复真实官网为 JavaScript 壳、正式 SSO 位于同域公开动态配置中的结构假设。
+
+### 2. 计划步骤与完成条件
+
+| 步骤 | 内容 | 完成条件 | 状态 |
+| --- | --- | --- | --- |
+| 1 | 同域脚本发现 | 只接受官网主机、精确 `/whuWebsite.js` 和单一受限 `v` 参数 | PASS |
+| 2 | 顺序受限读取 | 原两项并发结束后读取；8 秒、5 次重定向、256 KiB、JS 类型 | PASS |
+| 3 | 静态配置解析 | 不执行脚本；绑定与函数体匹配；合法 SSO 候选恰好一个 | PASS |
+| 4 | 安全状态与导航 | 配置失败码明确；完整 SSO 只用于内存态系统浏览器导航 | PASS |
+| 5 | 自动验证 | TypeScript、Vite、Rust core 15/15、cargo check、专项与回归 | PASS |
+| 6 | 原生机构访问 | MetaAuth →馆藏多库检索及两条低负载查询 | PASS |
+
+### 3. 实际开发日志
+
+- 2026-08-03：新增 Tauri-free `institution_probe` core，固定 `whu`、`aTrustTray.exe`、官网和 MetaERS 导航。纯函数覆盖进程快照、端点分类、动态统一发现、目录摘要、能力矩阵和总状态。
+- 2026-08-03：Windows 桌面层用 ToolHelp 枚举目标进程，并检查两个常见 Program Files 安装路径。aTrust 路径不可读、进程快照失败、已安装未运行和仅运行未知路径均有独立安全码。
+- 2026-08-03：新增独立 reqwest blocking 客户端；只请求登记域名，重定向前再次校验，响应限定 256 KiB。正文只在一次命令内用于解析，不进入返回对象、日志、数据库或会话。
+- 2026-08-03：设置页新增“武汉大学机构资源”，结果仅保存在 React 运行内存；用户可打开官网和数据库导航，但 Sidera 不启动 aTrust、不接收学号密码或浏览器 Cookie。
+- 2026-08-03：若公开响应为结构化 JSON，有限提取名称、类别和去查询参数入口；否则能力报告明确使用可见浏览器题录导入路线，不以 DOM 爬虫声称完成全馆接入。
+- 2026-08-03：首轮原生探测确认武大图书馆官网登录有效，但旧按钮直达 `.cn/databaseList` 后仍出现登录、暂无数据和服务异常；原 L0 产品结果改记为 `NATIVE ACCESS PROBE FAIL`。
+- 2026-08-03：L0-R1 用锚点级解析替代“关键词附近第一个 HTTPS”，新增 MetaAuth/MetaERS 严格校验和运行内存导航目标；MetaAuth 不进入后台请求白名单。
+- 2026-08-03：设置页删除错误直达入口；解析到 SSO 时显示专用状态，缺失时打开官网并提示从“常用数据库”进入。完整 SSO 查询不会进入技术详情、日志或持久化设置。
+- 2026-08-03：L0-R1 原生复验仍只得到通用 `browser-required` 并回退官网。只读诊断确认首页约 2.4 KiB，是仅加载 `/whuWebsite.js?v=20240929` 的 JavaScript 壳；数据库导航绑定和合法 `personalIndex` MetaAuth 字符串位于该脚本中。
+- 2026-08-03：L0-R2 新增严格的同域脚本 URL 与 Content-Type 校验。HTML 直接锚点继续作为兼容路径；缺失时才在原两项并发请求完成后顺序读取脚本。
+- 2026-08-03：core 只静态解析数据库导航绑定对应的 `jumpDatabases` 函数体，候选去重后必须恰好一个。脚本不执行，超星跳转接口、MetaAuth 和 SSO 地址均不由后台请求，用户名不传递。
+- 2026-08-03：设置页新增配置未解析与配置读取失败的专用摘要；aTrust 与官网已经正常时不再错误提示检查 aTrust。
+- 2026-08-03：用户原生验收确认正式 SSO 可进入馆藏多库检索，“人工智能”和“machine learning”均可正常查询；L0-R2 记录为 `NATIVE ACCESS PROBE PASS`。
+
+### 4. 测试与证据
+
+- Rust core：固定夹具 15/15 `PASS`；覆盖真实 HTML 壳＋相对脚本＋动态配置，以及恶意主机、路径、参数、类型、重复候选、无关关键词和 `databaseDetail` 拒绝。
+- TypeScript：`PASS`；Vite 6.4.3：`PASS`（1917 modules，仅既有 Tauri event 分块提示）。
+- Rust 桌面：`cargo check --manifest-path src-tauri/Cargo.toml -j 2`为 `PASS`。
+- L0-R2、L0-R1、L0、R4-R3 与 R4-R2 专项：`PASS`；自动测试外网请求数为 0，Provider 调用数为 0，论文/会话/凭据写入数为 0。
+- 证据：[sidera-m2.0c-l0-whu-institution-probe-2026-08-03.json](./evidence/sidera-m2.0c-l0-whu-institution-probe-2026-08-03.json)
+- L0-R1 失败证据：[sidera-m2.0c-l0-r1-whu-sso-route-2026-08-03.json](./evidence/sidera-m2.0c-l0-r1-whu-sso-route-2026-08-03.json)
+- L0-R2 修复证据：[sidera-m2.0c-l0-r2-whu-dynamic-sso-config-2026-08-03.json](./evidence/sidera-m2.0c-l0-r2-whu-dynamic-sso-config-2026-08-03.json)
+
+### 5. 当前进度与偏差
+
+- L0 没有把少数供应商列表硬编码为接入范围；探针优先识别全馆统一发现和资源目录，再决定 L1 是否需要专用适配器。
+- 动态解析到未登记的外部发现域名时，后台不会继续请求，只返回去查询参数后的入口并标记 `browser-required`。因此自动 PASS 不代表 aTrust 会话或供应商页面可用。
+- MetaERS 直达地址继续参与无 Cookie 后台诊断，但不能作为用户导航。数据库正式入口必须来自官网直接锚点或严格限定的同域配置脚本，并通过相同 MetaAuth 校验。
+- 官网脚本中的超星接口依赖 Cookie 与用户名，L0-R2 不执行该逻辑；本阶段只使用同一函数体内静态公开的通用 `personalIndex` SSO 字符串。
+- 旧 CNKI Selenium/ChromeDriver 未修改且不参与 L0 验收；全文 Schema、PDF 解析和 Agent 图书馆工具仍属于后续阶段。
+
+### 6. 原生验收与遗留
+
+- 用户先在 aTrust 中完成登录，再在最新 Tauri 设置页运行检测；数据库行必须显示正式 SSO 已解析，导航应先进入 MetaAuth，随后落到 MetaERS `personalIndex`，不得直接进入 `.cn/databaseList`。
+- 在系统浏览器分别查询“人工智能”和“machine learning”，只记录首屏多来源覆盖、题录导出和全文跳转，不下载或入库。
+- 根据原生结果锁定 L1：结构化接口可用时直连统一搜索；仅浏览器可用时可见浏览器题录导入；元数据直连而全文需浏览器时采用混合模式。
+- L0-R2 已记录 `NATIVE ACCESS PROBE PASS`；该结论不等于全馆接入、题录导入或全文能力完成。
+
+### 7. 提交
+
+- 当前无 L0 提交；不提交、不推送、不创建 PR、不发布。
+
+## 已完成工作包：M2.0b-R4-R3 Agent 长缓存默认与真实首段流式修复
 
 ### 1. 工作包
 
 - 日期：2026-08-03
 - 分支：`codex/sidera-m2-rag`
 - 基线提交：`d6e044af8d15fe04039bb1184a71ee5a0b159665`
-- 工作树：`dirty worktree`；保留全部既有修改、未跟踪证据和旧 build artifact，不重置、不清理、不提交、不推送、不创建 PR、不发布。
+- 工作树：该工作包后来已收口到 `ede6e0b4ddc3980816ec4e4d694f59c33461b159`。
 - 状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / PRODUCT UNVERIFIED`
 - 目标：将缓存默认策略升级为 `long`并对旧设置执行一次性迁移，同时取消首段 512 字节缓冲，让普通回答从第一个文本增量真实流式显示而不泄漏工具过程旁白。
 
@@ -108,7 +1005,7 @@
 
 ### 7. 提交
 
-- 当前无 R4-R3 提交；不提交、不推送、不创建 PR、不发布。
+- M2.0b 至 R4-R3 已提交并推送：`ede6e0b feat(agent): complete M2.0b through R4-R3`。
 
 ## M2.0b-R4-R2 Agent 后台连续性与清透光学玻璃修复
 
@@ -941,12 +1838,12 @@
 - 自动模拟可证明运动连续性和主线程任务边界，不能替代真实 WebView2 帧节奏与肉眼平顺性判断。
 - 下一步在现有桌面开发链空闲、设备稳定时执行 Rust 增量检查；随后只使用 balanced 窗口连续观察 60 秒并执行五轮 Explore 往返。用户确认前，工作包继续为 `IN_PROGRESS / PRODUCT UNVERIFIED`。
 
-## 后续规划工作包：全文阅读与校园图书馆连接
+## 历史规划工作包：全文阅读与校园图书馆连接（由 P1、F1a、开发 014/015 分阶段取代）
 
 ### 1. 登记信息
 
 - 登记日期：2026-07-30。
-- 状态：`PLANNED / NOT IMPLEMENTED`。
+- 状态：历史登记；当前以 P1=`PARTIAL / ADAPTER DEFERRED`、F1a=`IMPLEMENTED / PRODUCT UNVERIFIED`、开发 015=`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE READER PASS (CODEX VISIBLE DESKTOP) / USER EXPERIENCE UNVERIFIED`、开发 016=`IMPLEMENTED / AUTOMATED TECHNICAL PASS / WINDOWS STANDALONE TEST HOST PASS / NATIVE EVIDENCE UX PASS / ROTATED TEXTLAYER FIX NATIVE RETEST PASS / NATIVE INDEX PASS / USER EXPERIENCE UNVERIFIED` 为准。
 - 目标：在本地证据 Agent 之后建立可追溯全文文档基座、沉浸式论文/期刊阅读台、AI 阅读辅助，以及用户授权的校园图书馆/机构来源连接器。
 - 当前分支与代码：不变；本次只更新产品和开发文档，不新增数据库表、命令、依赖、凭据或网络访问。
 - 与当前工作的关系：不替换 M1.3g-R9，不进入当前星图修复范围。
@@ -970,9 +1867,9 @@
 | 步骤 | 内容 | 完成条件 | 状态 |
 | --- | --- | --- | --- |
 | 1 | 目标学校与来源能力调研 | 确认首个学校、首批数据库、认证方式、正式接口和许可边界 | PLANNED |
-| 2 | 文档身份与 provenance 设计 | 论文、逻辑文档、文件版本、来源、许可和哈希边界通过评审 | PLANNED |
-| 3 | PDF 原文件导入与阅读器 | 本地 PDF 可去重、打开、搜索、缩放并恢复阅读位置 | PLANNED |
-| 4 | 页码锚点、解析、OCR 与索引 | 原生/OCR文本可区分，片段能回到页面和坐标 | PLANNED |
+| 2 | 文档身份与 provenance 设计 | 论文、逻辑文档、文件版本、来源、许可和哈希边界通过评审 | F1a IMPLEMENTED / PRODUCT UNVERIFIED |
+| 3 | PDF 原文件导入与阅读器 | 本地 PDF 可去重、打开、搜索、缩放并恢复阅读位置 | 开发 015 R1 IMPLEMENTED / NATIVE READER PASS |
+| 4 | 页码锚点、解析、OCR 与索引 | 原生/OCR文本可区分，片段能回到页面和坐标 | R1 PARTIAL：原生文本/UTF-16/FTS 已实现；OCR/E5 待后续 |
 | 5 | AI 阅读辅助最小闭环 | 选段翻译、章节总结、解释和带页码问答可用且可审计 | PLANNED |
 | 6 | 发现与跳转连接器 | OPAC/OpenURL/DOI 或正式元数据接口完成真实环境验收 | PLANNED |
 | 7 | 用户授权单篇全文获取 | 不接管密码，完成授权获取、来源记录和阅读台打开 | PLANNED |

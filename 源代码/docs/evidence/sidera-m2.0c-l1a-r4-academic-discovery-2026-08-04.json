@@ -1,0 +1,64 @@
+{
+  "package": "M2.0c-L1a-R4",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeAcademicDiscovery": "PARTIAL_PASS_USER_REPORTED",
+  "nativeCoreFlow": "PASS_USER_REPORTED",
+  "completeNativeGate": "UNVERIFIED",
+  "productPipeline": "INCOMPLETE",
+  "institutionAuth": "PASS_USER_REPORTED",
+  "catalogExtraction": "AUTOMATED_PASS_NATIVE_UNVERIFIED",
+  "supersedes": {
+    "package": "M2.0c-L1a-R3-R1",
+    "conclusion": "INSTITUTION AUTH PASS / CATALOG EXTRACTION FAIL / PRIMARY ROUTE MISALIGNED"
+  },
+  "implemented": {
+    "defaultSource": "academic-discovery",
+    "academicAdapter": "whu-academic-discovery-v1",
+    "catalogAdapter": "whu-opac-catalog-v3",
+    "sourceSnapshots": "independent runtime memory",
+    "academicRoute": "official probe target or exact official-page activation",
+    "academicKinds": [
+      "journal-article",
+      "conference-paper",
+      "thesis"
+    ],
+    "catalogGate": [
+      "whole-record-container",
+      "script-and-hidden-node-cleanup",
+      "logical-record-deduplication",
+      "noise-title-rejection"
+    ],
+    "openTargets": [
+      "opaque-record-locator",
+      "opaque-full-text-locator"
+    ]
+  },
+  "automatedChecks": {
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "rustInstitutionSearchTests": "PASS (18/18)",
+    "specializedAudit": "PASS",
+    "institutionRegressions": "PASS (L1a, L1a-R1, L1a-R2, L1a-R3, L1a-R3-R1, L0-R2)",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS"
+  },
+  "nativeAcceptance": {
+    "catalogNoiseAndDuplicates": "UNVERIFIED",
+    "academicQueryChinese": "UNVERIFIED",
+    "academicQueryEnglish": "UNVERIFIED",
+    "multipleSourceProviders": "UNVERIFIED",
+    "institutionLoginAndSearch": "PASS_USER_REPORTED",
+    "recordOpen": "PASS_USER_REPORTED",
+    "fullTextLinkOpenWithoutDownload": "PASS_USER_REPORTED",
+    "crossPageContinuity": "UNVERIFIED",
+    "restartReuse": "UNVERIFIED"
+  },
+  "nativeAcceptanceNote": "User confirmed institution login and search work and that non-book resources can be followed step by step to visible full text. This does not prove controlled metadata import, file acquisition, document parsing, Agent evidence use, catalog cleanup, dual-language coverage, cross-page continuity, or restart reuse.",
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "downloads": 0
+}

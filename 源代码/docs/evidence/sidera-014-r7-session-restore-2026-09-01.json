@@ -1,0 +1,138 @@
+{
+  "package": "Sidera-014-R7",
+  "title": "机构会话静默恢复",
+  "capturedAt": "2026-09-05",
+  "branch": "codex/sidera-m2-rag",
+  "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeSilentLifecycle": "PASS",
+    "nativeCapabilityTruth": "PASS_BOUNDED",
+    "nativeProcessExit": "PASS; the verified latest executable exited PID 26540 after the main-window close action, followed by zero Sidera processes and zero Sidera windows",
+    "effectiveSavedSessionRestore": "UNVERIFIED; earlier window-reopen observation did not establish a process boundary or restoration of authenticated capability",
+    "userExperience": "UNVERIFIED; awaiting one fresh official login and process-restart retest",
+    "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE SILENT LIFECYCLE PASS / NATIVE LOGIN-REQUIRED CLASSIFICATION PASS / NATIVE CAPABILITY TRUTH PASS_BOUNDED / NATIVE PROCESS EXIT PASS / EFFECTIVE SAVED SESSION RESTORE UNVERIFIED / USER EXPERIENCE UNVERIFIED"
+  },
+  "implementation": {
+    "commands": [
+      "sidera_institution_session_restore",
+      "sidera_institution_session_restore_cancel"
+    ],
+    "trigger": "first entry into institution workspace only",
+    "fixedProfile": "institution-webview-v1/whu",
+    "perCapabilityBudgetSeconds": 10,
+    "totalBudgetSeconds": 30,
+    "visibleAuthenticationWindowDuringRestore": false,
+    "cookieExportOrCopy": false,
+    "independentCapabilityValidation": true,
+    "lateEpochOrGenerationCallbacksRejected": true
+  },
+  "automatedTechnical": {
+    "r7Audit": "PASS; 23/23 on 2026-09-03, including main-window close exit hook",
+    "coreRestoreTests": "PASS; 2/2",
+    "cargoCheckTestsJ2": "PASS; 15 existing dead_code warnings",
+    "cargoBuildJ2": "PASS; 15 existing dead_code warnings",
+    "pnpmBuild": "PASS",
+    "r6Regression": "PASS; 16/16",
+    "rootTauriLibTestHost": "TEST-HOST UNAVAILABLE; TaskDialogIndirect entry-point failure. The incompatible host was excluded and not rerun; this does not affect the core test or built desktop executable."
+  },
+  "nativeProcessRestart": {
+    "evidenceScope": "Historical visible restore observation only; previous process-restart interpretation invalidated on 2026-09-05",
+    "processBoundaryVerified": false,
+    "latestExecutable": "src-tauri/target/debug/research-hotspots-desktop.exe",
+    "singleTopLevelSideraWindow": true,
+    "restoreStartingStateVisible": true,
+    "authenticationPopupOpened": false,
+    "mainWindowClickable": true,
+    "fixedProfileObservedOnDisk": true,
+    "profileCookieStoreLastWriteObserved": "2026-09-01T16:27:36+08:00",
+    "finalCapabilityTruth": {
+      "databaseSso": "login-required",
+      "academicDiscovery": "ready",
+      "personalLibrary": "login-required"
+    },
+    "aggregate": "partial",
+    "personalLibraryStableReason": "OFFICIAL_LIBRARY_LOGIN_LANDING",
+    "singleTopLevelSideraWindowAfterRestore": true,
+    "unexpectedAuthenticationWindowAfterRestore": false,
+    "interpretation": "The UI independently reported discovery ready and database/personal-library login-required without an authentication popup. Discovery availability alone does not prove saved authentication was restored. The old process remained alive when its window was closed, so this observation cannot validate process-restart persistence or diagnose the official Cookie lifetime."
+  },
+  "processExitCorrection": {
+    "recordedAt": "2026-09-05",
+    "historicalConclusion": "EFFECTIVE SAVED SESSION RESTORE PARTIAL PASS; retained as a superseded interpretation, not a current pass",
+    "observedOldProcess": {
+      "pid": 15124,
+      "startedAt": "2026-09-03T13:28:07+08:00",
+      "stillPresentAfterWindowClose": true
+    },
+    "implementation": "main WindowEvent::CloseRequested now calls AppHandle::exit(0), so hidden institution windows cannot keep the application event loop alive after closing main",
+    "validationOn20260903": {
+      "cargoCheckJ2": "PASS; 9.92 seconds; 15 existing warnings",
+      "cargoBuildJ2": "PASS; 46.67 seconds; 15 existing warnings",
+      "newProcessLaunch": "PASS; pid 41268; started 2026-09-03T18:19:29+08:00; one Sidera window and normal main UI observed",
+      "normalCloseThenProcessAbsent": "SUPERSEDED_BY_20260905_NATIVE_PASS"
+    },
+    "verifiedArtifactsOn20260905": {
+      "libRsSha256": "88C3E4EEEE9428AEDD08504FD32884B5ECC6EFD22852D9A417CB240CBA44E792",
+      "r7AuditSha256": "05E16629E4AC568714F1C2DB25C27CA6385C651A3B5792B2A479683E63361847",
+      "executableSha256": "CCC0B7EB88AD81026396A2DB221BFD56CF6166E21FAC171B12E68788A087D1BE",
+      "executableLastWrite": "2026-09-03T18:17:50+08:00"
+    },
+    "resumeObservation": {
+      "timestamp": "2026-09-05T06:22:04+08:00",
+      "dirtyWorktreeItems": 181,
+      "sideraProcessRunning": false,
+      "port5174Listening": false,
+      "availableMemoryGiB": 1.22,
+      "nativeRetest": "INITIAL_DEFERRED_LOW_MEMORY; later resumed after memory returned above the 2 GiB safety threshold"
+    },
+    "nativeExitValidationOn20260905": {
+      "executable": "src-tauri/target/debug/research-hotspots-desktop.exe",
+      "executableSha256": "CCC0B7EB88AD81026396A2DB221BFD56CF6166E21FAC171B12E68788A087D1BE",
+      "pid": 26540,
+      "startedAt": "2026-09-05T06:34:13+08:00",
+      "preCloseCapabilityTruth": {
+        "databaseSso": "login-required",
+        "academicDiscovery": "ready",
+        "personalLibrary": "login-required"
+      },
+      "unexpectedAuthenticationWindow": false,
+      "closeMethod": "main-window Close button",
+      "processAbsentAt": "2026-09-05T06:39:08+08:00",
+      "allSideraProcessesAbsentAt": "2026-09-05T06:39:28+08:00",
+      "allSideraWindowsAbsentAt": "2026-09-05T06:39:28+08:00",
+      "result": "PASS"
+    },
+    "postExitRestartAttempt": {
+      "newPid": 22688,
+      "startedAt": "2026-09-05T06:39:46+08:00",
+      "sameExecutableHash": true,
+      "restoreResult": "UNVERIFIED; the lightweight frontend host exited before a post-restart UI observation, and available memory then fell to 1.22 GiB, so the application was not relaunched below the safety threshold"
+    }
+  },
+  "correctedFinding": {
+    "before": "After the earlier independent-capability fix, the personal-library inspector referenced host before defining it. Every inspection threw before route evaluation, so the capability exhausted its 10-second budget and appeared failed.",
+    "after": "The library inspector now defines sanitized pageTitle and host locally, recognizes the official /page/902099/show login landing, and returns login-required with OFFICIAL_LIBRARY_LOGIN_LANDING. The official /login route is retried within the bounded capability window.",
+    "unrelatedChanges": 0
+  },
+  "remainingNativeGate": {
+    "requiresUserCredentialEntry": true,
+    "steps": [
+      "Confirm sufficient memory, start the built executable, and establish database SSO and personal-library ready states through official manual login when required.",
+      "After authenticated capabilities are ready, close main normally and restart the same executable; the generic main-close process-exit behavior is already PASS, but the authenticated restore pair still requires a fresh before/after observation.",
+      "Record the new PID/start time and enter institution resources once.",
+      "Confirm restoration of authenticated capabilities without an authentication popup; record partial or login-required outcomes honestly."
+    ]
+  },
+  "safety": {
+    "cookiesOrCredentialsLogged": false,
+    "sessionCleared": false,
+    "realPaperLibraryWrites": 0,
+    "providerCalls": 0,
+    "staged": false,
+    "committed": false,
+    "pushed": false,
+    "published": false
+  }
+}

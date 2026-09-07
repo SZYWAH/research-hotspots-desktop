@@ -1,0 +1,88 @@
+{
+  "package": "Sidera-P1c-R2",
+  "task": "开发 006",
+  "date": "2026-08-05",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeSplitWorkspace": "UNVERIFIED",
+  "p1Status": "IN PROGRESS",
+  "preImplementationNativeBaseline": {
+    "embeddedBrowserScrolling": "PASS",
+    "productComposition": "FAIL",
+    "nativeFunctionContinuity": "FAIL",
+    "note": "用户确认固定网页视口已消除明显滚动延迟，但网页独占窗口令原生研究功能不可同时使用。"
+  },
+  "implementation": {
+    "presentation": [
+      "closed",
+      "split",
+      "immersive"
+    ],
+    "wideDefaultRatio": 0.5,
+    "ratioLimits": [
+      0.3,
+      0.7
+    ],
+    "nativeMinimumWidth": 420,
+    "browserMinimumWidth": 640,
+    "narrowBreakpoint": 1180,
+    "preferenceKey": "research-agent:sidera-institution-browser-layout:v1",
+    "narrowSurfaces": [
+      "native",
+      "browser"
+    ],
+    "geometrySources": [
+      "initial visibility",
+      "active tab",
+      "window resize",
+      "ResizeObserver layout change",
+      "requestAnimationFrame-coalesced divider drag"
+    ],
+    "geometryExclusions": [
+      "ordinary wheel",
+      "native result scroll",
+      "web page internal scroll"
+    ]
+  },
+  "preservedBoundaries": [
+    "shared institution UDF",
+    "managed authentication popup",
+    "compatibility popup and MetaERSP bridge",
+    "download staging protocol",
+    "in-memory native search snapshots",
+    "no automatic import or full-text parsing"
+  ],
+  "automatedChecks": {
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJ2": "PASS",
+    "institutionBrowserCore": "PASS",
+    "p1cR2Audit": "PASS",
+    "p1cR1Regression": "PASS",
+    "p1cRegression": "PASS",
+    "p1bR2Regression": "PASS",
+    "l1aR4Regression": "PASS",
+    "projectDocumentation": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "nativeAcceptanceGate": [
+    "1360px and 1920px default split with native controls still usable",
+    "divider drag and persisted ratio without black bands or focus theft",
+    "CNKI WOS and one additional provider remain responsive",
+    "native source switching and structured result interaction preserve browser tabs",
+    "1100px uses state-preserving native/browser single-surface switch",
+    "immersive mode is explicit and returns to the exact split state",
+    "cross-page navigation preserves tabs snapshots and tasks",
+    "authentication popup download staging and shared UDF restart reuse regressions pass"
+  ],
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "automatedDownloads": 0,
+  "publication": {
+    "commit": false,
+    "push": false,
+    "pullRequest": false,
+    "release": false
+  }
+}

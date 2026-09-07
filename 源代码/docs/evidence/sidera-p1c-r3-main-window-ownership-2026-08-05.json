@@ -1,0 +1,26 @@
+{
+  "package": "Sidera-P1c-R3",
+  "task": "开发 007",
+  "date": "2026-08-05",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeMainWindowOwnership": "UNVERIFIED",
+  "p1Status": "PARTIAL / ADAPTER DEFERRED",
+  "scope": [
+    "resolve the actual Tauri top-level main Window",
+    "bind application-owned WebviewWindow instances with owner_raw on Windows",
+    "preserve shared UDF, opener, POST and NewWindowResponse.Create semantics",
+    "separate main-window, HWND, ownership and WebViewWindow creation errors"
+  ],
+  "preImplementationNativeBaseline": {
+    "manualInstitutionAccess": "PASS",
+    "databaseDirect": "PASS",
+    "progressiveFullTextNavigation": "PASS",
+    "nativeBlueSearchButton": "FAIL",
+    "providerWindowOpen": "FAIL"
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "automatedDownloads": 0
+}

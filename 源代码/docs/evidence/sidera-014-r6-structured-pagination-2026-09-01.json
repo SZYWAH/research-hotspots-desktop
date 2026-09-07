@@ -1,0 +1,101 @@
+{
+  "package": "Sidera-014-R6",
+  "title": "武大统一发现结构化适配器与分页真值收口",
+  "capturedAt": "2026-09-01",
+  "branch": "codex/sidera-m2-rag",
+  "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "baseline": {
+    "dirtyWorktreeAtClosure": 179,
+    "preserved": true
+  },
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeStructuredTransport": "PASS",
+    "nativeStructuredPagination": "PASS",
+    "nativeSearchTruth": "PASS",
+    "nativeCancellation": "PASS",
+    "nativeUx": "PASS",
+    "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STRUCTURED TRANSPORT PASS / NATIVE STRUCTURED PAGINATION PASS / NATIVE SEARCH TRUTH PASS / NATIVE CANCELLATION PASS / NATIVE UX PASS"
+  },
+  "implementation": {
+    "connector": "whu-academic-discovery-v2-structured",
+    "transport": "structured-api",
+    "rawResponsePersistence": false,
+    "rawResponseMemoryLimitBytes": 524288,
+    "domFallbackBeforeFirstStructuredPageOnly": true,
+    "domMixingAfterStructuredAcceptance": false,
+    "expectedNextPageFromAcceptedResponse": true,
+    "pageIdentityAndForwardProgressValidated": true,
+    "lateEpochOrGenerationResponsesRejected": true
+  },
+  "automatedTechnical": {
+    "structuredAndPaginationCore": "PASS",
+    "institutionWorkspaceR6Audit": "PASS; 16/16",
+    "institutionWorkspaceR4Regression": "PASS; 52/52",
+    "pnpmBuild": "PASS",
+    "cargoCheckTestsJ2": "PASS",
+    "cargoCheckJ2": "PASS",
+    "cargoBuildJ2": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "nativeClosure": {
+    "singleLatestTauriInstance": true,
+    "chineseMatrix": {
+      "query": "人工智能",
+      "target": 40,
+      "recordTypes": ["journal", "conference", "thesis"],
+      "yearRange": null,
+      "results": 40,
+      "totalHits": 280113,
+      "structuredPagesAccepted": 9,
+      "supplierCoverage": 15,
+      "targetReached": true,
+      "completionReason": "target-reached"
+    },
+    "englishMatrix": {
+      "query": "machine learning",
+      "target": 100,
+      "recordTypes": ["journal", "conference"],
+      "yearRange": {"from": 2020, "to": 2025},
+      "results": 76,
+      "totalHits": 530969,
+      "structuredPagesAccepted": 20,
+      "supplierCoverage": 32,
+      "targetReached": false,
+      "completionReason": "page-limit",
+      "truthBoundary": "The official page budget was reached after twenty accepted structured pages; the result target was not manufactured."
+    },
+    "crossPageSelection": "PASS",
+    "pageSize": 10,
+    "localSortWithoutSearchIpc": "PASS",
+    "cancellation": {
+      "status": "PASS",
+      "oldSnapshotResults": 40,
+      "oldSelectionRetained": 1,
+      "lateReplacementObserved": false
+    },
+    "visibleDesktop": {
+      "normalAndMaximized": "PASS",
+      "institutionBrowserHiddenByDefault": true,
+      "mainWindowClickable": true,
+      "cmdOrOrphanAuthWindows": 0
+    }
+  },
+  "safety": {
+    "rawResponseOrCookiePersistedByAdapter": false,
+    "realPaperLibraryWrites": 0,
+    "v20Rebuilds": 0,
+    "providerCalls": 0,
+    "fullTextDownloads": 0,
+    "staged": false,
+    "committed": false,
+    "pushed": false,
+    "published": false
+  },
+  "boundaries": {
+    "wosConnector": "NOT IMPLEMENTED; P6",
+    "cnkiConnector": "NOT IMPLEMENTED; P6",
+    "scopusConnector": "NOT IMPLEMENTED; P6"
+  }
+}

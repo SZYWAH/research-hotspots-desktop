@@ -1,0 +1,106 @@
+{
+  "package": "M2.0c-L1a-R3",
+  "date": "2026-08-03",
+  "status": "IN PROGRESS",
+  "automatedTechnical": "PASS",
+  "nativeClosedLoop": "UNVERIFIED",
+  "supersedes": {
+    "package": "M2.0c-L1a-R2",
+    "nativeResult": "NATIVE IN-APP INSTITUTION AUTH FAIL / SUPERSEDED",
+    "observedCode": "SIDERA_INSTITUTION_NAVIGATION_TIMEOUT"
+  },
+  "implemented": {
+    "navigationTrace": {
+      "storage": "runtime-memory-only",
+      "maxEvents": 32,
+      "fields": [
+        "authKind",
+        "phase",
+        "httpsHost",
+        "path",
+        "redirected",
+        "webErrorStatus",
+        "navigationId",
+        "generation",
+        "epoch",
+        "timestampMs"
+      ],
+      "forbidden": [
+        "query",
+        "fragment",
+        "ticket",
+        "cookie",
+        "form",
+        "account",
+        "password",
+        "responseBody"
+      ]
+    },
+    "entryPolicy": "use the database-directory network target returned by the official probe",
+    "sessionNavigationPolicy": "allow every HTTP and HTTPS navigation, redirect, port, path and opaque authentication parameter",
+    "popupPolicy": "allow native HTTP and HTTPS new-window handling so POST and opener semantics are preserved",
+    "terminalPriority": "WebView failures invalidate timeout; Sidera no longer blocks network destinations",
+    "webviewRestrictions": "autofill/password-save disabling and download denial removed from the institution WebViews",
+    "databaseReadyGate": "versioned DOM inspection",
+    "authenticatedLandingHandoff": "whu.metaersp.com/personalIndex is treated as an authenticated landing page and navigates the same WebView/UDF to the catalog entry before readiness inspection",
+    "adapterDriftCode": "SIDERA_INSTITUTION_ADAPTER_DRIFT"
+  },
+  "automatedChecks": {
+    "typescriptAndVite": "PASS (Vite 6.4.3, 1918 modules)",
+    "cargoCheckJobs2": "PASS",
+    "institutionCoreTests": "PASS (12/12 open-network policy and authenticated landing handoff)",
+    "r3Audit": "PASS",
+    "regressions": "PASS",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS"
+  },
+  "nativeObservations": [
+    {
+      "stage": "first R3 diagnostic candidate",
+      "trace": [
+        "starting www.metaauth.com/242010/login.html",
+        "blocked [rejected]",
+        "redirect [rejected]"
+      ],
+      "conclusion": "MetaAuth loaded; its next top-level redirect was rejected before DOM readiness. The exact-host policy was too strict."
+    },
+    {
+      "stage": "second R3 native trace",
+      "trace": [
+        "starting www.metaauth.com/242010/login.html",
+        "blocked [rejected] POLICY_UNREGISTERED_TARGET",
+        "redirect [rejected] redirect"
+      ],
+      "conclusion": "The newest diagnostic candidate was running, but the registered-target restriction still blocked the real authentication chain. The session policy is now open for all HTTP/HTTPS targets and native network popups; a new native retest is required."
+    },
+    {
+      "stage": "third R3 native trace",
+      "trace": [
+        "completed cas.whu.edu.cn/authserver/login",
+        "redirect uas.metaauth.com/casservice/whu/serviceValidate",
+        "redirect uas.metaauth.com/casservice/authorize/existIp",
+        "completed www.metaauth.com/auth/thirdparty",
+        "starting www.metaauth.com/auth/simulate",
+        "redirect whu.metaersp.com/personalIndex",
+        "completed whu.metaersp.com/personalIndex"
+      ],
+      "conclusion": "The real CAS and MetaAuth SSO chain completed successfully. personalIndex is an authenticated landing page rather than the catalog DOM; the candidate now performs an idempotent same-WebView handoff to the catalog entry before the versioned DOM ready gate. Native catalog and query verification is still required."
+    }
+  ],
+  "nativeCompletionGate": [
+    "database SSO reaches DOM-confirmed ready without gray screen or false timeout",
+    "library account modal succeeds, cancels and closes safely",
+    "Chinese and English queries return structured results and source buckets",
+    "raw record opens in controlled embedded view",
+    "cross-page navigation does not stop search",
+    "restart reuses the institution session and searches again",
+    "all HTTP/HTTPS redirects and popups continue without a Sidera policy rejection",
+    "non-network protocols do not enter the institution WebView",
+    "paper revision, downloads and Provider calls remain unchanged"
+  ],
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "downloads": 0,
+  "note": "Automated validation creates only a native acceptance candidate. This evidence does not claim the real institution closed loop is complete."
+}

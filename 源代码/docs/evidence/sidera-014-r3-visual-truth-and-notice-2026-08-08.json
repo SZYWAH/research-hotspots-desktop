@@ -1,0 +1,718 @@
+{
+  "package": "Sidera-014-R3",
+  "development": "开发 014-R3｜纯黑浮层、星图状态与题录通知修复",
+  "date": "2026-08-08",
+  "lastUpdated": "2026-08-09",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeVisual": "WITHDRAWN; APPEARANCE PASS (BOUNDED)",
+  "nativeAppearance": "PASS (BOUNDED)",
+  "nativeInputOwnership": "HISTORICAL FAIL",
+  "inputFix": "IMPLEMENTED",
+  "nativeInputRetest": "PASS",
+  "nativeLibraryAuthFirstTransactionRetest": "PASS",
+  "nativeImportRead": "PASS",
+  "userExperience": "USER INPUT+AUTH EXPERIENCE PASS_BOUNDED",
+  "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE APPEARANCE PASS (BOUNDED) / NATIVE INPUT OWNERSHIP HISTORICAL FAIL / INPUT FIX IMPLEMENTED / INPUT FIX NATIVE RETEST PASS / NATIVE LIBRARY AUTH FIRST-TRANSACTION RETEST PASS / NATIVE IMPORT READ PASS / USER INPUT+AUTH EXPERIENCE PASS_BOUNDED",
+  "repository": {
+    "branch": "codex/sidera-m2-rag",
+    "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+    "branchAndHeadUnchanged": true,
+    "dirtyWorktreePreserved": true,
+    "baselineBeforeDocumentation": {
+      "stagedFiles": 0,
+      "unstagedTrackedFiles": 42,
+      "untrackedFiles": 81
+    },
+    "documentationClosureCapture": {
+      "stagedFiles": 0,
+      "unstagedTrackedFiles": 42,
+      "untrackedFiles": 96,
+      "note": "This is the capture after the documentation edit; other development 014-R3 product and test artifacts remain preserved in the same dirty worktree."
+    },
+    "finalNativeClosureCapture": {
+      "stagedFiles": 0,
+      "unstagedTrackedFiles": 42,
+      "untrackedFiles": 105,
+      "note": "Final capture after native screenshots and final documentation updates; the large dirty worktree remains preserved."
+    },
+    "inputFailureAndRepairDocumentationCapture": {
+      "stagedFiles": 0,
+      "unstagedTrackedFiles": 42,
+      "untrackedFiles": 105,
+      "note": "Read-only status capture after recording the current input failure and the implemented-but-unverified repair; no GUI or database operation was run by the documentation task."
+    },
+    "commitCreated": false,
+    "stagedByThisPackage": false,
+    "pushOrPullRequest": false,
+    "published": false
+  },
+  "problemTruth": {
+    "sideSheet": "The connection-and-sources SideSheet used blue-black and cyan gradients that did not match the local pure-black workbench surface.",
+    "theoryFailure": "The ten committed papers advanced the library from r0/25463 to r1/25473 and intentionally invalidated active V20 without rebuilding it. The old interaction switched to theory before checking current V20, so a not-ready data state could look like a black screen or WebGL render failure.",
+    "immersiveStillWorks": "Development 012-R3 explicitly permits a structurally complete historical V20 source for the coordinate-free immersive visualization when active state is absent. It does not permit that historical source to impersonate current theory analysis.",
+    "sourceHint": "The historical r0/current r1 visual-source notice was diagnostic truth but should be available on demand rather than permanently occupy the upper-left canvas.",
+    "importNotice": "Commit status and history reads still entered migration, schema-ensure, or review-reconciliation paths and their global error notice had no bounded lifecycle.",
+    "nativeInputObservation": "The pointer still moved, but Sidera did not accept clicks. Input recovered only after the user force-ended Sidera through Task Manager.",
+    "nativeInputSystemEvidence": {
+      "applicationHangObserved": false,
+      "processCrashObserved": false,
+      "gpuResetObserved": false,
+      "frozenMomentMainHwndEnabledCaptured": false,
+      "frozenMomentOwnerChainCaptured": false,
+      "preciseRootCause": "UNVERIFIED"
+    }
+  },
+  "implementationContract": {
+    "sideSheetSurface": {
+      "token": "--workbench-side-sheet-surface",
+      "value": "#000",
+      "scope": "WorkbenchSideSheet only",
+      "consumers": [
+        "panel",
+        "header",
+        "close button",
+        "institution capability group"
+      ],
+      "body": "transparent inheritance",
+      "preserved": [
+        "16 percent black overlay",
+        "border",
+        "shadow",
+        "rounding",
+        "status colors",
+        "hover and focus",
+        "desktop and narrow geometry",
+        "exit animation"
+      ],
+      "globalColorPanelChanged": false
+    },
+    "theoryAvailability": {
+      "states": [
+        "idle",
+        "checking",
+        "not-ready",
+        "failed"
+      ],
+      "preflightCommand": "get_v20_galaxy_payload",
+      "preflightConnection": "prepared READ_ONLY plus query_only",
+      "entryPoints": [
+        "theory mode button",
+        "view semantic position"
+      ],
+      "readyBehavior": "Only a ready current active V20 commits theory mode, focus, localStorage preference, and one-renderer handoff.",
+      "notReadyBehavior": "Retain the current immersive Canvas, animation time, checkpoint, and immersive preference; show the non-modal 理论星图待更新 panel.",
+      "continueImmersive": {
+        "ipcCount": 0,
+        "rendererRebuilds": 0
+      },
+      "openPipeline": "Navigation only; no job creation and no automatic modeling.",
+      "failureSeparation": {
+        "payloadIpcOrTimeout": "理论载荷读取失败",
+        "notReady": "理论星图待更新",
+        "realCanvasOrWebglFailure": "理论背景渲染失败"
+      },
+      "coldStartupContract": "The 012-R3 current-theory-to-real-dynamic-immersive fallback and synchronous first-frame ready gate remain unchanged."
+    },
+    "visualSourcePresentation": {
+      "permanentUpperLeftNode": false,
+      "source": "mountedImmersivePayload",
+      "menu": "existing More menu",
+      "menuWidthApproxPx": 260,
+      "menuOpenIpcCount": 0,
+      "displayedTruth": {
+        "sourceKind": "historical-v20",
+        "sourceRevision": 0,
+        "sourcePaperCount": 25463,
+        "currentRevision": 1,
+        "currentPaperCount": 25473,
+        "currentAnalysis": false
+      }
+    },
+    "importReadOnly": {
+      "tauriCommandNamesChanged": false,
+      "jsonInterfacesChanged": false,
+      "preparedRegistryReused": true,
+      "mainLibraryOpen": "READ_ONLY plus query_only",
+      "validation": [
+        "Schema v14",
+        "import ledger contract"
+      ],
+      "forbiddenOnRead": [
+        "migrate_library_file",
+        "DDL or schema ensure",
+        "mutation permit",
+        "Immediate transaction",
+        "review receipt repair"
+      ],
+      "authority": "paper_import_commits",
+      "ledgerWithoutReceipt": "Return authoritative main-ledger status.",
+      "bothMissing": "SIDERA_IMPORT_COMMIT_STATUS_NOT_FOUND",
+      "reviewStore": "READ_ONLY; no directory creation, WAL mode switch, CREATE TABLE, or transaction",
+      "writableReconciliation": "Explicit commit and rollback flows only"
+    },
+    "noticeLifecycle": {
+      "scope": "import-review",
+      "backgroundReadDismissAfterMs": 8000,
+      "immediateClearTriggers": [
+        "successful reread",
+        "leave 检索与导入",
+        "explicit X"
+      ],
+      "blockingCommitOrRollbackErrors": "sticky",
+      "statusAndHistoryReportedSeparately": true,
+      "stableErrorCodeLocation": "import-review diagnostics only",
+      "tauriRejectionNormalization": "String and object rejections become Error while preserving a stable code.",
+      "lateResponseFence": "database path plus project plus revision plus generation; covers A-B-A"
+    },
+    "inputOwnershipRepair": {
+      "status": "IMPLEMENTED",
+      "nativeRetest": "PASS",
+      "p0Candidates": [
+        {
+          "candidate": "The production authentication and shared-browser modal paths explicitly disabled the main window and depended on later callbacks to restore it.",
+          "confirmedUniqueRootCause": false,
+          "repair": "Production set_enabled(false) call count is zero; owner_raw remains for ownership, and main-window enable restoration is idempotent and records its claim only after SetEnabled(TRUE) succeeds."
+        },
+        {
+          "candidate": "Logical browser visibility could diverge from the native WebView or a late show could overtake a newer hide.",
+          "confirmedUniqueRootCause": false,
+          "repair": "Native hide/show must physically succeed before logical visibility is committed; a monotonic clientRequestId fences order, show uses bounds then visibility with hide rollback, and close uses only three bounded hide attempts at 0/45/120ms."
+        }
+      ],
+      "forbiddenClaims": [
+        "The exact root cause is proven.",
+        "The historical input-ownership failure never happened.",
+        "The prior appearance screenshots prove physical clickability or HWND enabled state."
+      ]
+    },
+    "libraryFirstTransactionCloseRepair": {
+      "budgetMs": 4000,
+      "libraryCurrentInspectionAttempts": 1,
+      "libraryParentRoute": "navigate and directly poll the fixed library landing in the same visible WebView/environment",
+      "otherGoals": "database-access and discovery-fulltext retain three current inspections plus hidden bound-parent reload",
+      "unknownMeaning": "No readiness proof within the deadline; finalize cancelled and preserve any previously proven ready state.",
+      "loginRequiredMeaning": "Only stable explicit login-page evidence may invalidate a previously proven ready state.",
+      "staleIsolation": "transaction token, generation, and terminal checks reject late observations",
+      "serializedSensitiveData": false
+    }
+  },
+  "automatedTechnicalGate": {
+    "overall": "PASS",
+    "frontendAndStatic": [
+      {
+        "name": "pnpm build",
+        "status": "PASS",
+        "viteVersion": "6.4.3",
+        "modules": 1922,
+        "durationSeconds": 8.12,
+        "warningBoundary": "Existing Tauri event dynamic/static import warning only."
+      },
+      {
+        "name": "audit:sidera-import-read-notice-r3",
+        "status": "PASS",
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "name": "audit:sidera-agent-theory-availability-r1",
+        "status": "PASS",
+        "passed": 10,
+        "total": 10
+      },
+      {
+        "name": "audit:sidera-workbench-visual-r2",
+        "status": "PASS",
+        "passed": 92,
+        "total": 92
+      },
+      {
+        "name": "audit:sidera-dynamic-startup-r3",
+        "status": "PASS",
+        "passed": 15,
+        "total": 15
+      },
+      {
+        "name": "sidera_workbench_read_path_audit",
+        "status": "PASS"
+      },
+      {
+        "name": "sidera_workbench_performance_r1_audit",
+        "status": "PASS",
+        "passed": 105
+      },
+      {
+        "name": "audit:sidera-import-commit-p2b",
+        "status": "PASS"
+      },
+      {
+        "name": "audit:sidera-p2b-r2",
+        "status": "PASS",
+        "passed": 17
+      },
+      {
+        "name": "audit:sidera-institution-workspace-r1",
+        "status": "PASS",
+        "passed": 117,
+        "total": 117
+      },
+      {
+        "name": "sidera_institution_auth_l1a_r2_audit",
+        "status": "PASS",
+        "inputOwnershipCoverage": [
+          "production set_enabled(false) absent",
+          "idempotent main-window enable restore",
+          "logical result visibility commits after physical hide"
+        ]
+      },
+      {
+        "name": "sidera_institution_browser_p1c_r1_audit",
+        "status": "PASS",
+        "inputOwnershipCoverage": [
+          "monotonic clientRequestId ordering fence",
+          "physical visibility before logical commit",
+          "two-stage show rollback",
+          "three bounded hide retries"
+        ]
+      },
+      {
+        "name": "audit:sidera-desktop-shell",
+        "status": "PASS",
+        "passed": 16
+      },
+      {
+        "name": "audit:sidera-import-review-p2a",
+        "status": "PASS"
+      },
+      {
+        "name": "audit:sidera-p2b-v14-compatibility-r1",
+        "status": "PASS",
+        "passed": 20
+      },
+      {
+        "name": "audit:sidera-document-f1a",
+        "status": "PASS",
+        "passed": 20
+      }
+    ],
+    "rust": {
+      "cargoCheck": {
+        "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+        "status": "PASS",
+        "existingDeadCodeWarnings": 13
+      },
+      "cargoBuild": {
+        "command": "cargo build --manifest-path src-tauri/Cargo.toml -j 2",
+        "status": "PASS",
+        "durationSeconds": 48.01
+      },
+      "desktopLibTestBinaryNoRun": {
+        "status": "PASS",
+        "executionClaimed": false
+      },
+      "cargoCheckTests": {
+        "status": "FAIL",
+        "scope": "ADDITIONAL NON-GATING TEST-TARGET CHECK",
+        "cause": "The existing tests/sidera_pi_runtime_protocol.rs path-module wrapper has crate-module reference drift in the integration-test target.",
+        "introducedByThisRepair": false,
+        "effectOnFormalCargoCheck": "none",
+        "fullTestPassClaimed": false
+      },
+      "targetedTests": [
+        {
+          "name": "import_review::tests::prepared_review_batches_support_query_only_reads",
+          "status": "PASS",
+          "passed": 1,
+          "total": 1
+        },
+        {
+          "name": "import_commit::tests::all_skip_keeps_revision_and_status_history_are_read_only",
+          "status": "PASS",
+          "passed": 1,
+          "total": 1,
+          "initialRun": "EXPECTED FIXTURE FAILURE: synthetic setup had user_version 0 and was correctly rejected by the v14 read-only contract.",
+          "fixtureCorrection": "Set user_version to the existing v14 schema version after fixture schema creation; product code and contract were not relaxed."
+        },
+        {
+          "name": "import_commit::tests::missing_status_is_normalized_and_empty_history_does_not_create_review_store",
+          "status": "PASS",
+          "passed": 1,
+          "total": 1
+        },
+        {
+          "name": "import_read_real_copy",
+          "status": "PASS",
+          "passed": 1,
+          "total": 1
+        }
+      ]
+    },
+    "independentReview": {
+      "theoryAndSideSheet": {
+        "p0": 0,
+        "p1": 0
+      },
+      "importAndNotice": {
+        "p0": 0,
+        "p1": 0
+      },
+      "firstTransactionCloseRepair": {
+        "status": "PASS",
+        "p0": 0,
+        "p1": 0,
+        "p2": 0
+      },
+      "remainingNativeGates": "The import fault-notice fixture, discovery-fulltext, native search truth, and complete institution-workspace UX remain UNVERIFIED."
+    },
+    "documentationClosure": {
+      "jsonParse": "PASS",
+      "projectDocumentationAudit": {
+        "status": "PASS",
+        "passed": 687,
+        "total": 687,
+        "failed": 0,
+        "currentStage": "Sidera-014-R3+014+013+012-R3+P2b-R2+F1a"
+      },
+      "targetedDiffCheck": "PASS",
+      "lineEndingWarnings": "Git reported the existing Windows LF-to-CRLF working-copy warning; no whitespace error was reported."
+    }
+  },
+  "exactRealLibraryCopy": {
+    "test": "import_read_real_copy",
+    "status": "PASS",
+    "historyCount": 1,
+    "authoritativeBatchStatus": "committed",
+    "reviewStorePresent": false,
+    "before": {
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0
+    },
+    "after": {
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0
+    },
+    "contentChanged": false,
+    "sidecars": {
+      "walBytes": 0,
+      "shmBytes": 32768,
+      "meaning": "SQLite bookkeeping on the disposable copy, not main-file content mutation."
+    }
+  },
+  "authoritativeLibrary": {
+    "path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\target\\v022-desktop-acceptance-2\\library\\research-hotspots-v7.sqlite",
+    "baseline": {
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0
+    },
+    "historicalVisualSource": {
+      "sourceKind": "historical-v20",
+      "sourceRevision": 0,
+      "paperCount": 25463,
+      "currentAnalysis": false
+    },
+    "finalReadOnlyFingerprintAfterNative": {
+      "status": "PASS",
+      "openMode": "immutable plus query_only",
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0,
+      "readySnapshots": 4,
+      "commitLedgerRows": 1,
+      "mainFileMtimeUtc": "2026-08-06T04:55:16Z",
+      "mainContentChanged": false,
+      "sidecars": {
+        "walBytes": 0,
+        "walMtimeUtc": "2026-08-08T14:12:09Z",
+        "shmBytes": 32768,
+        "shmMtimeUtc": "2026-08-08T14:27:17Z",
+        "meaning": "Read-only SQLite connection bookkeeping timestamps changed; the main-file hash, size, mtime, and database facts did not."
+      }
+    },
+    "latestInputAndAuthRetestFingerprint": {
+      "capturedAt": "2026-08-09",
+      "status": "PASS",
+      "openMode": "immutable plus query_only",
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0,
+      "readySnapshots": 4,
+      "mainWalShmSizeAndMtimeBeforeAfterUnchanged": true,
+      "contentChanged": false
+    },
+    "latestImportReadNoticeRetestFingerprint": {
+      "capturedAt": "2026-08-09",
+      "status": "PASS",
+      "openMode": "immutable plus query_only",
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0,
+      "readySnapshots": 4,
+      "mainWalShmMetadataBeforeAfterUnchanged": true,
+      "walBytes": 0,
+      "shmBytes": 32768,
+      "contentChanged": false
+    },
+    "writesAuthorized": 0,
+    "writesObserved": 0,
+    "v20Rebuilds": 0
+  },
+  "nativeGates": {
+    "launch": {
+      "status": "PASS",
+      "guiPid": 61844,
+      "visibleCmdWindow": false,
+      "researchHotspotsDesktopProcessCount": 1,
+      "vite": {
+        "url": "http://127.0.0.1:5174",
+        "reusedExistingInstance": true,
+        "currentProjectConfirmedByHttp200": true
+      }
+    },
+    "appearance": {
+      "status": "PASS (BOUNDED)",
+      "boundary": "The screenshots and UIA records prove the SideSheet, theory not-ready surface, dynamic immersive frame, More source truth, and navigation appearance. They do not prove HWND enabled state, physical pointer delivery, or native WebView ownership.",
+      "maximized": {
+        "sideSheetSurface": "#000",
+        "institutionWebviewLayering": "UNVERIFIED",
+        "escapeFocusReturn": "连接与来源",
+        "escapeFocusIsPhysicalInputProof": false
+      },
+      "normal": {
+        "uiaRect": {
+          "left": 260,
+          "top": 119,
+          "right": 2062,
+          "bottom": 1303
+        },
+        "sideSheetSurface": "#000",
+        "institutionWebviewLayering": "UNVERIFIED",
+        "escapeFocusReturn": "连接与来源",
+        "escapeFocusIsPhysicalInputProof": false
+      },
+      "theoryNotReady": {
+        "trigger": "UIA theory button",
+        "immersiveCanvasUnmounted": false,
+        "consecutiveScreenshotsShowStarPositionChange": true,
+        "blackScreen": false,
+        "panel": "理论星图待更新",
+        "escapeFocusReturn": "理论"
+      },
+      "pipelineAction": {
+        "navigationOnly": true,
+        "pageState": "current task not started; 开始热点建模 remained available",
+        "jobAutoCreated": false
+      },
+      "moreVisualSource": {
+        "additionalIpcObserved": 0,
+        "sourceRevision": 0,
+        "sourcePaperCount": 25463,
+        "currentRevision": 1,
+        "currentPaperCount": 25473,
+        "nonCurrentAnalysisLabel": true,
+        "permanentUpperLeftSourceHint": false
+      },
+      "screenshots": [
+        ".codex-runtime/sidera-014-r3-native-20260808/max-theory-uia.png",
+        ".codex-runtime/sidera-014-r3-native-20260808/max-more-visual-source.png",
+        ".codex-runtime/sidera-014-r3-native-20260808/max-side-sheet-black.png",
+        ".codex-runtime/sidera-014-r3-native-20260808/normal-side-sheet-black.png",
+        ".codex-runtime/sidera-014-r3-native-20260808/normal-pipeline-navigation.png"
+      ]
+    },
+    "inputOwnership": {
+      "status": "HISTORICAL FAIL / FIX NATIVE RETEST PASS",
+      "historicalFailure": {
+        "pointerMoved": true,
+        "sideraAcceptedClicks": false,
+        "recovery": "Task Manager force-ended Sidera; input then recovered."
+      },
+      "systemEvidence": {
+        "applicationHang": "NOT OBSERVED",
+        "crash": "NOT OBSERVED",
+        "gpuReset": "NOT OBSERVED"
+      },
+      "frozenMomentCapture": {
+        "mainHwndEnabled": "NOT CAPTURED",
+        "ownerChain": "NOT CAPTURED",
+        "preciseRootCause": "UNVERIFIED"
+      },
+      "repair": {
+        "status": "IMPLEMENTED",
+        "productionSetEnabledFalseCalls": 0,
+        "mainEnableRestore": "idempotent; claim recorded only after a successful enable",
+        "browserVisibility": "physical native hide/show succeeds before logical commit",
+        "orderingFence": "monotonic clientRequestId; stale show cannot overtake newer hide",
+        "showRollback": "apply bounds, then show; hide all on failure",
+        "hideRetry": {
+          "attempts": 3,
+          "delaysMs": [
+            0,
+            45,
+            120
+          ],
+          "bounded": true
+        }
+      },
+      "nativeRetest": {
+        "status": "PASS",
+        "userConfirmed": [
+          "normal window clickable",
+          "maximized window clickable",
+          "main window clickable after institution WebView physical hide",
+          "main window clickable after authentication-window close",
+          "no abnormal window"
+        ],
+        "finalSnapshot": {
+          "capturedAt": "2026-08-09T16:40:32+08:00",
+          "guiPid": 62020,
+          "mainHwnd": "0x33049E",
+          "mainRect": [-11, -11, 2571, 1539],
+          "maximized": true,
+          "visible": true,
+          "enabled": true,
+          "cloaked": false,
+          "owner": 0,
+          "rootOwner": "self",
+          "nonMainVisibleTopLevelWindows": 0,
+          "libraryAuthWryHwnd": "0x1F10988",
+          "libraryAuthRendererPid": 46180,
+          "libraryAuthSurfaceVisible": false,
+          "onlyVisibleInteractiveWebView": "main",
+          "orphanInputBlockerObserved": false
+        }
+      },
+      "nativePassClaimed": true,
+      "historicalFailureErased": false
+    },
+    "libraryAuthentication": {
+      "status": "FIRST-TRANSACTION RETEST PASS",
+      "attempts": [
+        {
+          "build": "pre-direct-poll candidate",
+          "attempt": 1,
+          "loginCompleted": true,
+          "closeTerminal": "cancelled",
+          "status": "FIRST-TRANSACTION HISTORICAL FAIL"
+        },
+        {
+          "build": "pre-direct-poll candidate",
+          "attempt": 2,
+          "preauthenticated": true,
+          "closeTerminal": "ready",
+          "status": "SECOND-ENTRY PASS_BOUNDED"
+        },
+        {
+          "build": "same-visible-WebView landing direct-poll repair",
+          "guiPid": 62020,
+          "attempt": 1,
+          "sessionClearedBeforeAttempt": true,
+          "loginCompleted": true,
+          "authenticationWindowClose": "manual",
+          "closeTerminal": "ready",
+          "mainWindowClickable": true,
+          "abnormalWindowObserved": false,
+          "userReply": "1.已就绪 2.手动关闭 3.可点击 4.无",
+          "status": "FIRST-TRANSACTION RETEST PASS"
+        }
+      ],
+      "historicalFailureErased": false,
+      "discoveryFulltext": "UNVERIFIED",
+      "nativeSearchTruth": "UNVERIFIED"
+    },
+    "importRead": {
+      "status": "PASS",
+      "normalStatusAndHistory": {
+        "status": "PASS",
+        "visibleDiagnostics": [
+          "审查批次正常",
+          "提交状态正常",
+          "提交历史正常"
+        ],
+        "longLivedToastObserved": false,
+        "screenshot": ".codex-runtime/sidera-014-r3-native-20260808/normal-import-read-ok.png"
+      },
+      "faultNoticeFixture": {
+        "status": "PASS",
+        "isolatedDevelopmentFixture": true,
+        "stableErrorCodes": {
+          "batchList": "SIDERA_IMPORT_READ_FIXTURE_BATCH_LIST_FAILED",
+          "commitStatus": "SIDERA_IMPORT_READ_FIXTURE_COMMIT_STATUS_FAILED",
+          "commitHistory": "SIDERA_IMPORT_READ_FIXTURE_COMMIT_HISTORY_FAILED"
+        },
+        "historyToastLifecycle": {
+          "appearedAtMs": 59,
+          "stillVisibleAtMs": 4003,
+          "absentAtMs": 8304
+        },
+        "explicitClose": {
+          "absentAfterClickMs": 100
+        },
+        "leaveImportReview": {
+          "absentAfterNavigationMs": 150
+        },
+        "successfulReread": {
+          "recoveredInMs": 50.8,
+          "toastVisibleAfterRecovery": false
+        },
+        "blockingCommitRollbackStickyNotice": {
+          "status": "UNVERIFIED",
+          "reason": "A blocking commit or rollback failure was not separately injected in the native fixture; this independent sticky-notice boundary is not included in the import-read PASS."
+        }
+      },
+      "boundary": "Normal native reads and the isolated batch/status/history fault-notice lifecycle passed. Sticky blocking commit/rollback errors were not separately injected and remain an independent UNVERIFIED notice boundary, not a reason to downgrade the import-read gate."
+    },
+    "userExperience": {
+      "status": "USER INPUT+AUTH EXPERIENCE PASS_BOUNDED",
+      "passedScope": "Current normal/maximized input ownership, institution-WebView hide recovery, and the latest session-cleared first personal-library authentication transaction.",
+      "historicalFailure": "The earlier input lock and the pre-direct-poll first-transaction cancellation remain recorded.",
+      "remaining": "Sticky blocking commit/rollback notice behavior, discovery-fulltext, native search truth, and complete institution-workspace UX remain UNVERIFIED."
+    }
+  },
+  "preservedBoundaries": {
+    "development014R1": "NATIVE AUTH PARTIAL PASS / NATIVE SEARCH TRUTH UNVERIFIED / NATIVE UX UNVERIFIED / USER EXPERIENCE PARTIAL PASS; library-account first-transaction retest passed, but discovery-fulltext and end-to-end search/UX gates remain open",
+    "p1": "PARTIAL / ADAPTER DEFERRED",
+    "development013": "NATIVE PERFORMANCE UNVERIFIED / USER PERFORMANCE ACCEPTANCE PASS (BOUNDED)",
+    "development012R3": "NATIVE STARTUP PASS / USER VISUAL ACCEPTANCE UNVERIFIED",
+    "wosConnectorClaimed": false,
+    "cnkiConnectorClaimed": false,
+    "scopusConnectorClaimed": false
+  },
+  "executionBoundaries": {
+    "providerCalls": 0,
+    "automatedOrDocumentationInstitutionNetworkRequests": 0,
+    "userDrivenNativeInstitutionAuthenticationObserved": true,
+    "fullTextDownloads": 0,
+    "paperLibraryWrites": 0,
+    "hotspotOrV20Rebuilds": 0,
+    "heavyFullSuiteRuns": 0,
+    "guiRunsByDocumentationTask": 0,
+    "nativeGuiAcceptancePerformedByParentTask": true,
+    "nativeGuiInputRetestAfterRepair": true,
+    "commitCreated": false,
+    "staged": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "published": false
+  }
+}

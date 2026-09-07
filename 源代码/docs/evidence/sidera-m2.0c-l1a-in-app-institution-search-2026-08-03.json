@@ -1,0 +1,132 @@
+{
+  "package": "M2.0c-L1a",
+  "title": "应用内机构会话与武大多库检索预览",
+  "date": "2026-08-03",
+  "baseline": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "branch": "codex/sidera-m2-rag",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeInAppSearch": "FAIL"
+  },
+  "precondition": {
+    "package": "M2.0c-L0-R2",
+    "nativeResult": "NATIVE_ACCESS_PROBE_PASS",
+    "scope": "official SSO and browser-side WHU catalog queries only"
+  },
+  "nativeFailure": {
+    "observedAt": "2026-08-03",
+    "safeTarget": "https://www.lib.whu.edu.cn/engine2/general-rest/outer-proxy-detail-url",
+    "symptom": "official authentication popup was shown as unsupported and could not continue in the embedded institution surface",
+    "rootCause": "the L1a on_new_window handler registered every popup as a fallback and returned Deny before classifying allowlisted official authentication targets",
+    "result": "NATIVE_IN_APP_SEARCH_FAIL",
+    "supersededBy": "M2.0c-L1a-R1",
+    "credentialContentRecorded": false
+  },
+  "institutionSession": {
+    "webviewLabel": "institution-whu",
+    "owner": "rust-main-window",
+    "tauriVersion": "2.11.5",
+    "tauriUnstableFeature": true,
+    "userDataDirectory": "app-local/institution-webview-v1/whu",
+    "persistentAcrossRestart": true,
+    "generalAutofillEnabled": false,
+    "passwordAutosaveEnabled": false,
+    "downloadsAllowed": false,
+    "newWindowsAllowed": false,
+    "devtoolsEnabled": false,
+    "remoteTauriCapability": false,
+    "cookieReadsBySidera": 0,
+    "credentialReadsBySidera": 0
+  },
+  "adapter": {
+    "id": "whu-catalog-multidb-v1",
+    "scriptOwner": "rust-fixed-versioned-source",
+    "queryLimitCharacters": 200,
+    "totalTimeoutSeconds": 90,
+    "payloadLimitBytes": 262144,
+    "itemsPerSourceLimit": 20,
+    "itemsTotalLimit": 40,
+    "dedupeOrder": [
+      "doi",
+      "canonical-url",
+      "normalized-title-plus-year"
+    ],
+    "staleIsolation": [
+      "taskId",
+      "epoch",
+      "sequence"
+    ]
+  },
+  "productSurface": {
+    "location": "Literature Workspace / Institution Resources tab",
+    "defaultSurface": "native-search-and-results",
+    "embeddedSurface": [
+      "official-login",
+      "raw-record",
+      "adapter-fallback"
+    ],
+    "boundsSource": "ResizeObserver logical CSS pixels",
+    "backgroundSearchAcrossNavigation": true,
+    "systemBrowserRole": "explicit-fallback-only",
+    "searchSnapshotPersistence": "rust-runtime-memory-only"
+  },
+  "validation": {
+    "rustCoreTests": {
+      "status": "PASS",
+      "passed": 6,
+      "failed": 0,
+      "externalNetworkRequests": 0
+    },
+    "typescript": "PASS",
+    "vite": {
+      "status": "PASS",
+      "version": "6.4.3",
+      "modules": 1917
+    },
+    "cargoCheckJobs2": "PASS",
+    "l1aAudit": "PASS",
+    "l0R2Regression": "PASS",
+    "r4R3Regression": "PASS",
+    "r4R2Regression": "PASS",
+    "projectDocumentation": "PASS",
+    "gitDiffCheck": "PASS",
+    "automatedExternalInstitutionRequests": 0,
+    "providerCalls": 0,
+    "paperDatabaseWrites": 0,
+    "fullTextDownloads": 0
+  },
+  "nativeAcceptance": {
+    "status": "FAIL",
+    "requiresInAppOfficialLogin": true,
+    "requiresRestartSessionReuse": true,
+    "queries": [
+      "人工智能",
+      "machine learning"
+    ],
+    "requiresCrossPageContinuity": true,
+    "viewports": [
+      1100,
+      1360,
+      1920
+    ],
+    "displayScalesPercent": [
+      100,
+      125,
+      150
+    ],
+    "requiredPaperRevisionDelta": 0,
+    "requiredDownloadCount": 0,
+    "requiredProviderCalls": 0
+  },
+  "boundaries": {
+    "paperSchemaChanged": false,
+    "sourceKindExtended": false,
+    "conversationStoreChanged": false,
+    "piJsonlChanged": false,
+    "fullTextSchemaAdded": false,
+    "metadataImportAdded": false,
+    "committed": false,
+    "pushed": false
+  }
+}

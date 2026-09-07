@@ -1,0 +1,97 @@
+{
+  "package": "Sidera-F1a",
+  "development": "开发 012 / F1a",
+  "date": "2026-08-06",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "product": "UNVERIFIED",
+  "nativeSingleDocumentAcquisition": "UNVERIFIED",
+  "nativeCompletionGate": "NATIVE SINGLE-DOCUMENT ACQUISITION PASS",
+  "store": {
+    "database": "Sidera/documents-v1.sqlite",
+    "blobRoot": "Sidera/documents-v1/blobs",
+    "schemaVersion": 2,
+    "chain": "PaperEntity -> SourceRecord -> AcquisitionRecord -> DocumentVersion -> immutable PDF blob",
+    "identity": "SHA-256",
+    "dedupe": "document_id + sha256",
+    "multipleVersions": true,
+    "versionKinds": [
+      "publisher-version",
+      "author-manuscript",
+      "scan",
+      "user-import",
+      "unknown"
+    ],
+    "v1Migration": "local-import becomes user-import; institution-download remains unknown until explicitly classified"
+  },
+  "routes": {
+    "local": "file-first user-selected PDF followed by explicit PaperEntity association",
+    "institution": "opaque SourceRecord ID opens its Rust-resolved official route in the shared institution session; a user-triggered completed PDF is then attached by opaque download ID with exact SourceRecord evidence match",
+    "institutionSourceNavigation": "frontend submits no URL; Rust resolves the exact SourceRecord, retains only non-sensitive navigation parameters, and exposes only origin plus path",
+    "institutionFailureLedger": "source-route, source-navigation, download-selection, and source-match failures create retryable per-paper AcquisitionRecords before immutable ingest",
+    "batch": false,
+    "automatic": false,
+    "fileNameIdentityInference": false
+  },
+  "provenance": {
+    "sourceRecordValidation": true,
+    "localImportsBindInstitutionSource": false,
+    "institutionSourceMatch": "search candidate ID -> provider record ID -> sanitized canonical locator -> unique source database; unresolved is rejected",
+    "authorizationState": true,
+    "safeLocatorStripsUserInfoQueryAndFragment": true,
+    "credentialsOrCookiesPersisted": false
+  },
+  "automatedValidation": [
+    "node_modules/.bin/tsc.CMD -b",
+    "node_modules/.bin/vite.CMD build",
+    "cargo test --manifest-path src-tauri/core/Cargo.toml document_store::tests -j 2",
+    "cargo check --manifest-path src-tauri/Cargo.toml -j 2"
+  ],
+  "automatedResults": {
+    "documentStoreTests": "6/6 PASS",
+    "immutableBlob": "PASS",
+    "sameBytesDeduplicate": "PASS",
+    "differentBytesCreateSecondVersion": "PASS",
+    "restartRestoresVersions": "PASS",
+    "invalidPdfRejected": "PASS",
+    "unknownPaperRejected": "PASS",
+    "versionKindPersisted": "PASS",
+    "schemaV1MigratesWithoutVersionLoss": "PASS",
+    "preIngestFailureLedgerPersistsAcrossRestart": "PASS",
+    "opaqueSourceRouteResolution": "PASS",
+    "sensitiveSourceParametersStripped": "PASS"
+  },
+  "readOnlyAcceptanceDatabaseProbe": {
+    "schemaVersion": 14,
+    "paperCount": 25473,
+    "sourceRecordCount": 10,
+    "identityAliasCount": 20,
+    "importCommitCount": 1,
+    "sampleSources": [
+      "万方",
+      "国家哲学社会科学文献中心"
+    ],
+    "recordType": "journal-article",
+    "fullTextStatus": "link-only",
+    "sanitizedRoute": "https://whu-primo.hosted.exlibrisgroup.com.cn/primo-explore/fulldisplay",
+    "scope": "Read-only local database evidence only; it does not prove native source navigation, authenticated full-text access, download, or document attachment."
+  },
+  "automatedSafety": {
+    "institutionNetworkRequests": 0,
+    "providerCalls": 0,
+    "mainLibraryWrites": 0,
+    "hotspotRebuilds": 0,
+    "syntheticTemporaryLibrariesAndPdfsOnly": true
+  },
+  "nativeUnverified": [
+    "Choose one local PDF before selecting a paper, then explicitly associate it with the intended PaperEntity and verify SHA-256, immutable storage, native detail, and restart recovery.",
+    "Verify the local PDF AcquisitionRecord has no institution SourceRecord and that filename, directory, or PDF text never selects the PaperEntity.",
+    "Import the same PDF again and verify no duplicate blob or DocumentVersion.",
+    "Import different bytes for the same paper and verify a second version.",
+    "Open one imported paper source by opaque SourceRecord ID and verify the shared institution session reaches the exact official record or resolver without exposing a raw URL to React.",
+    "Explicitly download and attach one institution PDF through its opaque completed download ID, and verify it binds the exact imported SourceRecord or is rejected when no exact evidence match exists.",
+    "Force one unresolved or failed source navigation and verify a retryable source-route or source-navigation AcquisitionRecord survives restart without creating a DocumentVersion.",
+    "Verify source provenance contains no ticket, token, Cookie, username, or password.",
+    "Verify no Provider call, batch acquisition, hotspot rebuild, or unintended main-library mutation occurs."
+  ]
+}

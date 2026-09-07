@@ -1,0 +1,57 @@
+{
+  "package": "Sidera-P1c-R1",
+  "task": "开发 005",
+  "title": "真实弹窗语义与固定浏览器视口修复",
+  "date": "2026-08-05",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativePopupAndPerformance": "UNVERIFIED",
+  "p1Status": "IN PROGRESS",
+  "preImplementationNativeBaseline": {
+    "providerAccess": "PASS",
+    "popupRouting": "FAIL",
+    "embeddedBrowserPerformance": "FAIL",
+    "observedPopup": "MetaERSP access bridge created a /loading ghost tab while the opener reached the provider"
+  },
+  "implementation": {
+    "popupPolicy": "compatibility-first app-owned WebviewWindow with NewWindowResponse::Create",
+    "sharedProfile": "institution-shared-v1",
+    "sharedUdf": "institution-webview-v1/whu",
+    "bridgeConnector": "whu.metaersp.com/loading transient bridge",
+    "safeState": ["popupId", "openerTabId", "generation", "createdAtMs", "origin", "path", "phase", "resolution", "code"],
+    "safeGetMigration": "modelled and permitted only with explicit safe GET proof; Tauri 2.11.5 high-level popup callback does not provide that proof, so runtime retains the popup",
+    "focusViewport": "titlebar plus browser chrome and a fixed remaining WebView host",
+    "boundsPolicy": "initial show, visibility, active-tab switch, ResizeObserver and window resize only",
+    "focusPolicy": "first show and explicit tab/user actions only; geometry never focuses"
+  },
+  "automated": {
+    "browserCoreTests": "PASS",
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "p1cR1Audit": "PASS",
+    "p1cRegression": "PASS",
+    "p1bR2Regression": "PASS",
+    "l1aR4Regression": "PASS",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS"
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "automatedDownloads": 0,
+  "nativeGate": [
+    "CNKI, WOS and one additional provider have no /loading ghost and retain one usable page",
+    "authentication popup completes and returns to its parent",
+    "rapid wheel scrolling shows no black stripe or visible WebView catch-up",
+    "three to five tabs remain aligned at normal and maximized sizes and 100, 125 and 150 percent scaling",
+    "manual download staging and manifest behavior do not regress",
+    "restart reuses the shared institution UDF login state"
+  ],
+  "notes": [
+    "No old native evidence was rewritten; the POPUP ROUTING FAIL and EMBEDDED BROWSER PERFORMANCE FAIL observations remain the pre-implementation baseline.",
+    "The automated process made no real institution request, no Provider call, no paper-library write and no download.",
+    "Native popup routing and scrolling performance must be rechecked in a visible Tauri window before either can be marked PASS."
+  ]
+}

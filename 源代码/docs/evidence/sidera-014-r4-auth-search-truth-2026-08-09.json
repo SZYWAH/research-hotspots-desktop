@@ -1,0 +1,194 @@
+{
+  "package": "Sidera-014-R4",
+  "title": "任务绑定发现认证与检索真值加固",
+  "capturedAt": "2026-08-09",
+  "updatedAt": "2026-08-27",
+  "branch": "codex/sidera-m2-rag",
+  "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeDiscoveryAuth": "PASS",
+    "nativeSearchTruth": "PARTIAL PASS",
+    "nativeUx": "PASS_BOUNDED",
+    "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE DISCOVERY AUTH PASS / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PASS_BOUNDED"
+  },
+  "implementation": {
+    "taskBoundDiscoveryAuth": {
+      "sameTaskIdAndSearchId": true,
+      "sameSnapshotOwnership": true,
+      "authenticationWaitExcludedFromActiveSearchBudget": true,
+      "activeSearchBudgetSeconds": 90,
+      "cancelStopsAuthenticationAndSearch": true,
+      "secondSearchStartAfterAuthentication": false
+    },
+    "retrievalPosition": {
+      "basisValues": [
+        "observed",
+        "synthesized"
+      ],
+      "observedMeaning": "supplier page or DOM position was directly observed",
+      "synthesizedMeaning": "compatibility extraction order without proof of supplier ranking",
+      "deduplicationKeepsEarliestPosition": true
+    },
+    "researchSearchTruth": {
+      "targetReached": "local filtered, normalized, deduplicated 40-or-100 target reached",
+      "hasMore": "nullable remote continuation fact",
+      "limitReached": "compatibility mirror of targetReached only",
+      "totalHitsRemainsNullable": true,
+      "unknownHasMoreIsNotFalse": true
+    },
+    "workspace": {
+      "contentFirst": true,
+      "activeSourceDetailsCollapsedByDefault": true,
+      "localPageSize": 10,
+      "localPagingAndSortingInvokeCount": 0
+    }
+  },
+  "automatedTechnical": {
+    "institutionWorkspaceR4Audit": "PASS; 45/45",
+    "researchCore": "PASS; 24/24",
+    "cargoCheckJ2": "PASS",
+    "cargoBuildJ2": "PASS",
+    "regressions": {
+      "importRead": "PASS; 18/18",
+      "institutionVisual": "PASS; 92/92",
+      "dynamicStartupR3": "PASS; 15/15",
+      "p2bR2": "PASS",
+      "f1a": "PASS",
+      "desktopShell": "PASS",
+      "workbenchRead": "PASS"
+    }
+  },
+  "nativeAttempt": {
+    "status": "UNVERIFIED",
+    "attemptedReuseOfExistingLoginState": true,
+    "databaseSsoInitialized": false,
+    "officialPageRequiredUserAuthentication": true,
+    "institutionCredentialsEntered": false,
+    "userCancelled": true,
+    "realSearchMatrixExecuted": false,
+    "queriesNotExecuted": [
+      "Chinese 40",
+      "English 40",
+      "Chinese 100",
+      "English 100",
+      "record-type and year filters"
+    ],
+    "productFailure": false,
+    "reason": "The official discovery page required user authentication. No credentials were entered, so the attempt was cancelled without running the real-search matrix."
+  },
+  "nativeClosure2026_08_27": {
+    "status": "PARTIAL PASS",
+    "singleLatestTauriInstance": true,
+    "officialEntryCompatibility": {
+      "legacyBinding": "jumpDatabases(uname, '')",
+      "currentBinding": "jumpDatabases(enc, uname, '')",
+      "currentBindingAccepted": true,
+      "target": "formal MetaAuth 242010 SSO",
+      "credentialsOrSessionMaterialCaptured": false
+    },
+    "discoveryAuthentication": {
+      "status": "PASS",
+      "userCompletedOfficialLogin": true,
+      "sameSearchTransactionResumed": true
+    },
+    "chineseMatrix": {
+      "query": "人工智能",
+      "target": 40,
+      "recordTypes": [
+        "journal",
+        "conference",
+        "dissertation"
+      ],
+      "yearRange": null,
+      "results": 10,
+      "pagesScanned": 2,
+      "supplierCoverage": 3,
+      "targetReached": false,
+      "hasMore": false,
+      "totalHits": null,
+      "completionReason": "source-exhausted"
+    },
+    "englishMatrix": {
+      "query": "machine learning",
+      "target": 100,
+      "recordTypes": [
+        "journal",
+        "conference"
+      ],
+      "yearRange": {
+        "from": 2020,
+        "to": 2025
+      },
+      "results": 3,
+      "pagesScanned": 20,
+      "supplierCoverage": 4,
+      "targetReached": false,
+      "hasMore": null,
+      "totalHits": null,
+      "completionReason": "page-limit"
+    },
+    "cancellationIsolation": {
+      "oldResultsRetained": 3,
+      "oldSelectionRetained": 1,
+      "lateCallbackObservationSeconds": 5,
+      "lateCallbackRevivedCancelledSearch": false,
+      "newRequestCompletedAfterCancellation": true
+    },
+    "localInteraction": {
+      "displayOrderChangedTo": "newest",
+      "newSearchStartedBySort": false,
+      "pageSize": 10,
+      "crossPageSelection": "UNVERIFIED; both real result sets contained at most one local page"
+    },
+    "visibleDesktop": {
+      "normalWindowFirstResultVisible": true,
+      "maximizedWindowFirstResultVisible": true,
+      "institutionBrowserHidden": true,
+      "mainWindowClickable": true,
+      "visibleSideraTopLevelWindows": 1,
+      "cmdOrOrphanAuthWindows": 0
+    },
+    "positionBasisMatrix": "PARTIAL; provider tags and coverage were visible, but every observed/synthesized combination was not independently verified",
+    "boundedReason": "The real sources returned 10 and 3 candidates, so 40/100 target attainment and cross-page selection could not be manufactured as passing evidence.",
+    "postClosureTechnical": {
+      "databaseSsoCoreTests": "PASS; 5/5",
+      "institutionProbeL0R2Audit": "PASS",
+      "institutionWorkspaceR4Audit": "PASS; 52 checks",
+      "projectDocumentationAudit": "PASS",
+      "pnpmBuild": "PASS; 1929 modules",
+      "cargoCheckTestsJ2": "PASS; 13 existing dead_code warnings",
+      "cargoCheckJ2": "PASS; 13 existing dead_code warnings",
+      "gitDiffCheck": "PASS"
+    }
+  },
+  "databaseSafety": {
+    "mode": "immutable + query_only",
+    "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+    "bytes": 214532096,
+    "schemaVersion": 14,
+    "paperCount": 25473,
+    "libraryRevision": 1,
+    "activeV20Rows": 0,
+    "readySnapshots": 4,
+    "mainWalShmMetadataBeforeAfterUnchanged": true,
+    "walBytes": 0,
+    "shmBytes": 32768,
+    "mainDatabaseWrites": 0,
+    "v20Rebuilds": 0
+  },
+  "boundaries": {
+    "p1": "PARTIAL / ADAPTER DEFERRED",
+    "wosConnector": "NOT IMPLEMENTED; P6",
+    "cnkiConnector": "NOT IMPLEMENTED; P6",
+    "scopusConnector": "NOT IMPLEMENTED; P6",
+    "providerCalls": 0,
+    "fullTextDownloads": 0,
+    "institutionCredentialsPersisted": 0,
+    "staged": false,
+    "committed": false,
+    "pushed": false,
+    "published": false
+  }
+}

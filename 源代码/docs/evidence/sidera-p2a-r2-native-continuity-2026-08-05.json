@@ -1,0 +1,56 @@
+{
+  "package": "Sidera-P2a-R2",
+  "task": "开发 010",
+  "date": "2026-08-05",
+  "evidenceKind": "USER_NATIVE_ACCEPTANCE_BASELINE",
+  "development009Status": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PARTIAL PASS / CROSS-VIEW CONTINUITY FAIL",
+  "development010Status": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE CONTINUITY UNVERIFIED",
+  "p1Status": "PARTIAL / ADAPTER DEFERRED",
+  "p2Stage": "P2a",
+  "verified": {
+    "normalSearchDoesNotOpenBrowser": "PASS",
+    "chineseQuery": {
+      "query": "人工智能",
+      "candidateCount": 10,
+      "sourceCount": 2,
+      "sources": [
+        "万方",
+        "国家哲学社会科学文献中心"
+      ],
+      "status": "PASS"
+    },
+    "englishQuery": {
+      "query": "machine learning",
+      "candidateCount": 9,
+      "sourceCount": 4,
+      "sources": [
+        "Crossref",
+        "PubMed",
+        "ScienceDirect",
+        "SwePub"
+      ],
+      "status": "PASS",
+      "note": "40 is an upper bound, not a minimum result count"
+    },
+    "importReviewBatchCreation": "PASS"
+  },
+  "failed": {
+    "crossViewSnapshotContinuity": "FAIL",
+    "lateEvalTimeoutIsolation": "FAIL",
+    "staleDatabaseSsoFailureNotice": "FAIL"
+  },
+  "unverified": [
+    "active search continues while navigating across ordinary Sidera pages",
+    "failed or cancelled retry preserves the previous successful snapshot and selection",
+    "import review batch survives an application restart",
+    "main paper library revision and paper count remain unchanged",
+    "download file count remains unchanged",
+    "Provider request count remains unchanged"
+  ],
+  "automatedValidationNetworkRequests": 0,
+  "providerCallsDuringAutomatedValidation": 0,
+  "mainPaperLibraryWritesDuringAutomatedValidation": 0,
+  "fullTextDownloadsDuringAutomatedValidation": 0,
+  "supersedesAutomatedEvidence": false,
+  "supersededEvidence": null
+}

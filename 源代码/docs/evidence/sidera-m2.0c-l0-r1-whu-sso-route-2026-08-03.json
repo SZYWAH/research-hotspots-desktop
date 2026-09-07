@@ -1,0 +1,103 @@
+{
+  "package": "M2.0c-L0-R1",
+  "title": "武汉大学正式 SSO 路由与机构状态判定修复",
+  "date": "2026-08-03",
+  "baseline": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "branch": "codex/sidera-m2-rag",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "institutionAccess": "FAIL"
+  },
+  "supersedes": {
+    "package": "M2.0c-L0",
+    "nativeResult": "FAIL",
+    "cause": "database-navigation-used-direct-metaersp-url-instead-of-official-sso"
+  },
+  "supersededBy": {
+    "package": "M2.0c-L0-R2",
+    "cause": "official-homepage-is-a-javascript-shell-and-the-sso-target-is-in-a-same-origin-public-configuration-script"
+  },
+  "officialSso": {
+    "source": "whu-library-official-response",
+    "anchorScoped": true,
+    "scheme": "https",
+    "hosts": [
+      "metaauth.com",
+      "www.metaauth.com"
+    ],
+    "tenantPath": "/242010/login.html",
+    "allowedQueryKeys": [
+      "service"
+    ],
+    "serviceHosts": [
+      "whu.metaersp.com",
+      "whu.metaersp.cn"
+    ],
+    "servicePaths": [
+      "/personalIndex",
+      "/databaseList"
+    ],
+    "backendRequests": 0,
+    "cookies": false,
+    "persisted": false,
+    "fullUrlRendered": false
+  },
+  "navigationTargets": {
+    "lifetime": "current-runtime-memory-only",
+    "kinds": [
+      "direct",
+      "official-sso",
+      "official-external"
+    ],
+    "databaseFallback": "https://www.lib.whu.edu.cn/",
+    "hardcodedDirectUserEntryRemoved": true
+  },
+  "validation": {
+    "rustCoreFixtures": {
+      "status": "PASS",
+      "passed": 11,
+      "failed": 0,
+      "externalNetworkRequests": 0
+    },
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJobs2": "PASS",
+    "l0R1Audit": "PASS",
+    "l0Regression": "PASS",
+    "r4R3Regression": "PASS",
+    "r4R2Regression": "PASS",
+    "projectDocumentation": "PASS",
+    "gitDiffCheck": "PASS",
+    "providerCalls": 0,
+    "paperDatabaseWrites": 0,
+    "conversationWrites": 0,
+    "credentialWrites": 0
+  },
+  "nativeAcceptance": {
+    "status": "FAIL",
+    "requiresUserAtrustLogin": true,
+    "observed": {
+      "atrust": "PASS",
+      "libraryHome": "PASS",
+      "databaseSsoTarget": "UNRESOLVED",
+      "databaseNavigation": "FALLBACK_TO_LIBRARY_HOME"
+    },
+    "cause": "homepage-javascript-shell-not-covered-by-direct-anchor-fixtures",
+    "expectedRoute": "MetaAuth 242010 -> WHU MetaERS personalIndex",
+    "queries": [
+      "人工智能",
+      "machine learning"
+    ],
+    "fullTextDownloads": 0,
+    "paperImports": 0
+  },
+  "boundaries": {
+    "legacyCnkiSeleniumChanged": false,
+    "embeddedBrowserAdded": false,
+    "documentSchemaChanged": false,
+    "agentLibraryToolsAdded": false,
+    "committed": false,
+    "pushed": false
+  }
+}

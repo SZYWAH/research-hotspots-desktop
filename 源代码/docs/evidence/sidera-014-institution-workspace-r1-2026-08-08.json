@@ -1,0 +1,567 @@
+{
+  "package": "Sidera-014",
+  "development": "开发 014｜机构资源工作台 R1",
+  "date": "2026-08-08",
+  "lastUpdated": "2026-08-09",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeAuth": "PARTIAL PASS",
+  "nativeSearchTruth": "UNVERIFIED",
+  "nativeUx": "UNVERIFIED",
+  "userExperience": "PARTIAL PASS",
+  "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE AUTH PARTIAL PASS / NATIVE SEARCH TRUTH UNVERIFIED / NATIVE UX UNVERIFIED / USER EXPERIENCE PARTIAL PASS",
+  "repository": {
+    "branch": "codex/sidera-m2-rag",
+    "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+    "branchAndHeadUnchanged": true,
+    "dirtyWorktreePreserved": true,
+    "stagedFiles": 0,
+    "unstagedFiles": 41,
+    "untrackedFiles": 85,
+    "commitCreated": false,
+    "stagedByThisPackage": false,
+    "pushOrPullRequest": false,
+    "published": false
+  },
+  "baseline": {
+    "source": "2026-08-08 user visible-desktop screenshots and feedback, followed by read-only code-path audit",
+    "observations": [
+      {
+        "id": "redundant-connection-surfaces",
+        "finding": "打开数据库会话 and 登录我的图书馆 represented different intended identities, but both invoked the same legacy session-plus-shared-browser chain; 打开机构浏览器 or 机构网页已在侧栏 controlled only the same presentation surface.",
+        "productImpact": "Users saw multiple controls without a clear distinction between an authentication goal and a browser surface."
+      },
+      {
+        "id": "close-time-auth-not-converged",
+        "finding": "Closing the login browser did not have one transaction authority that inspected the closing page, refreshed the bound parent, and committed a goal-specific terminal state.",
+        "productImpact": "A successful-looking browser login could leave Sidera reporting not signed in."
+      },
+      {
+        "id": "ten-results-without-truth",
+        "finding": "The visible ten candidates did not distinguish retrieval limit from local page size and did not expose total-hit availability, coverage, provider order, deduplication, or completion reason.",
+        "productImpact": "Users could not tell why these ten records were shown or what portion of the source had been searched."
+      },
+      {
+        "id": "source-coverage-limited",
+        "finding": "The automated structured route remained the existing WHU academic-discovery capability. WOS, CNKI, and Scopus were not connected as automated providers.",
+        "productImpact": "Manual database access could not be described as Sidera multi-source automated discovery."
+      },
+      {
+        "id": "database-direct-is-fallback",
+        "finding": "Opening a supplier website alone does not automate discovery, review, controlled import, clustering, visualization, or Agent evidence use.",
+        "productImpact": "Database direct access is a manual access and failure-recovery surface, not the product's primary value."
+      },
+      {
+        "id": "first-screen-height",
+        "finding": "Page title, institution description, authentication status, source cards, search controls, and persistent browser buttons stacked vertically before results.",
+        "productImpact": "The first actionable evidence records were pushed below the initial viewport."
+      }
+    ]
+  },
+  "implementationContract": {
+    "authentication": {
+      "authority": "InstitutionAuthCoordinator",
+      "goals": [
+        "database-access",
+        "discovery-fulltext",
+        "library-account"
+      ],
+      "oneActiveTransaction": true,
+      "sameGoalBehavior": "focus-existing",
+      "differentGoalBehavior": "stable-busy",
+      "staleCallbackIsolation": "transaction ID plus generation",
+      "phases": [
+        "opening",
+        "awaiting-user",
+        "verifying",
+        "refreshing-parent",
+        "ready",
+        "cancelled",
+        "failed"
+      ],
+      "closeVerification": "The close request enters verifying and uses one four-second deadline. Library-account performs one current-page inspection and, when proof is still unknown, navigates and directly polls the same visible WebView/environment at the fixed library landing. Database-access and discovery-fulltext retain three current-page checks plus the hidden bound-parent reload route.",
+      "terminalStability": "Ready cannot be downgraded by a late close; failed or cancelled transactions preserve previously proven readiness.",
+      "mainWindowRestore": "claimed at most once by the current transaction",
+      "managedLibraryPopup": {
+        "creation": "NewWindowResponse::Create plus window_features",
+        "preserves": [
+          "POST",
+          "window.opener",
+          "shared WebView2 environment and UDF"
+        ],
+        "transactionBinding": "current transaction ID plus generation token",
+        "stalePopupBehavior": "closed or ignored; cannot change authentication truth",
+        "secondaryPopupBehavior": "denied",
+        "supersededBehavior": "navigate(target) plus NewWindowResponse::Deny URL replay"
+      },
+      "publicPayloadExcludes": [
+        "query",
+        "fragment",
+        "ticket",
+        "cookie",
+        "password"
+      ],
+      "browserRole": "login, manual access, original-record inspection, and diagnostic fallback; never the authentication authority"
+    },
+    "searchTruth": {
+      "requestFields": [
+        "query",
+        "recordKinds",
+        "yearFrom",
+        "yearTo",
+        "resultTarget"
+      ],
+      "acceptedResultTargets": [
+        40,
+        100
+      ],
+      "frontendChoosesConnector": false,
+      "processingOrder": [
+        "receive connector pages",
+        "filter record kind and year",
+        "normalize",
+        "deduplicate",
+        "apply result target"
+      ],
+      "truthFields": [
+        "resultLimit",
+        "limitReached",
+        "pagesScanned",
+        "recordsReceived",
+        "recordsAccepted",
+        "duplicatesMerged",
+        "totalHits",
+        "coverage",
+        "completionReason",
+        "orderBasis",
+        "providerBreakdown",
+        "retrievalPosition"
+      ],
+      "unknownTotalContract": "totalHits remains absent when the provider did not prove a total; the returned candidate count is not substituted.",
+      "orderBasis": "source-return-order",
+      "retrievalPositionFields": [
+        "connectorId",
+        "rank",
+        "page",
+        "position",
+        "facet"
+      ]
+    },
+    "workspace": {
+      "firstScreen": [
+        "compact primary search",
+        "one-line connection strip"
+      ],
+      "defaultClosedDrawer": "连接与来源",
+      "drawerContents": [
+        "three connection goals",
+        "manual source entries",
+        "browser show or hide",
+        "connection diagnostics"
+      ],
+      "legacyHeroOnProductPath": false,
+      "legacyPersistentToolbarOnProductPath": false,
+      "localPageSize": 10,
+      "crossPageSelectionPreserved": true,
+      "localDisplaySorts": [
+        "source-return",
+        "newest",
+        "oldest",
+        "title"
+      ],
+      "localPagingOrSortingStartsNewInvoke": false
+    },
+    "sourceBoundary": {
+      "p1": "PARTIAL / ADAPTER DEFERRED",
+      "existingAutomatedRoute": "WHU academic-discovery structural route with an experimental DOM fallback",
+      "manualOnlyNoConnector": [
+        "WOS",
+        "CNKI",
+        "Scopus"
+      ],
+      "futureStage": "P6 multi-source connectors and coverage",
+      "wosConnectorPassClaimed": false,
+      "cnkiConnectorPassClaimed": false,
+      "scopusConnectorPassClaimed": false
+    }
+  },
+  "automatedTechnicalGate": {
+    "overall": "PASS",
+    "checks": [
+      {
+        "name": "pnpm build",
+        "status": "PASS",
+        "modules": 1920,
+        "coverage": "TypeScript and Vite production build"
+      },
+      {
+        "name": "cargo check -j 2",
+        "status": "PASS"
+      },
+      {
+        "name": "incremental cargo build -j 2 after Windows subsystem entry change",
+        "status": "PASS"
+      },
+      {
+        "name": "core institution authentication coordinator",
+        "status": "PASS",
+        "passed": 7,
+        "total": 7
+      },
+      {
+        "name": "core research search truth",
+        "status": "PASS",
+        "passed": 22,
+        "total": 22
+      },
+      {
+        "name": "core institution runtime",
+        "status": "PASS",
+        "passed": 21,
+        "total": 21
+      },
+      {
+        "name": "institution workspace R1 static audit",
+        "status": "PASS",
+        "passed": 117,
+        "total": 117
+      },
+      {
+        "name": "independent managed-popup and first-transaction close repair review",
+        "status": "PASS",
+        "findings": {
+          "p0": 0,
+          "p1": 0,
+          "p2": 0
+        }
+      },
+      {
+        "name": "regression matrix",
+        "status": "PASS",
+        "suites": [
+          {
+            "name": "P1b-R2",
+            "status": "PASS"
+          },
+          {
+            "name": "P1c-R3",
+            "status": "PASS"
+          },
+          {
+            "name": "P2a-R1",
+            "status": "PASS",
+            "passed": 99,
+            "total": 99
+          },
+          {
+            "name": "P2a-R2",
+            "status": "PASS",
+            "passed": 84,
+            "total": 84
+          },
+          {
+            "name": "development 013 library-read regression",
+            "status": "PASS"
+          },
+          {
+            "name": "development 013 workbench-performance regression",
+            "status": "PASS"
+          },
+          {
+            "name": "desktop shell",
+            "status": "PASS"
+          },
+          {
+            "name": "dynamic startup R3",
+            "status": "PASS"
+          },
+          {
+            "name": "P2b-R2",
+            "status": "PASS"
+          },
+          {
+            "name": "F1a",
+            "status": "PASS"
+          },
+          {
+            "name": "project documentation",
+            "status": "PASS",
+            "passed": 611,
+            "total": 611
+          }
+        ]
+      },
+      {
+        "name": "git diff --check",
+        "status": "PASS"
+      }
+    ],
+    "desktopLibTest": {
+      "compile": "PASS",
+      "execution": "TEST-HOST UNAVAILABLE",
+      "exitCode": "0xc0000139",
+      "productFailure": false,
+      "effectOnCargoCheck": "none"
+    },
+    "latestFirstTransactionRepairGate": {
+      "workspaceAudit": "PASS 117/117",
+      "cargoCheck": "PASS",
+      "desktopLibTestBinaryNoRun": "PASS",
+      "cargoBuild": "PASS",
+      "independentReview": {
+        "status": "PASS",
+        "p0": 0,
+        "p1": 0,
+        "p2": 0
+      },
+      "cargoCheckTests": {
+        "status": "FAIL",
+        "scope": "ADDITIONAL NON-GATING TEST-TARGET CHECK",
+        "cause": "The existing tests/sidera_pi_runtime_protocol.rs path-module wrapper has crate-module reference drift in the integration-test target.",
+        "introducedByThisRepair": false,
+        "effectOnFormalCargoCheck": "none",
+        "fullTestPassClaimed": false
+      }
+    },
+    "localhostUiInspection": {
+      "status": "PASS",
+      "viewport": {
+        "width": 1360,
+        "height": 864
+      },
+      "checks": [
+        "first screen",
+        "filters",
+        "default-closed connection drawer"
+      ],
+      "nativeTauriEvidence": false,
+      "boundary": "This local UI inspection does not upgrade native authentication, native search truth, native UX, or user experience."
+    },
+    "documentationClosure": {
+      "jsonParse": "PASS",
+      "projectDocumentationAudit": {
+        "status": "PASS",
+        "passed": 629,
+        "total": 629
+      }
+    }
+  },
+  "windowsDebugLaunchBoundary": {
+    "entrypoint": "src-tauri/src/main.rs",
+    "windowsSubsystem": "windows",
+    "appliesToDebugAndRelease": true,
+    "visibleCmdWindowExpected": false,
+    "incrementalCargoBuild": {
+      "command": "cargo build -j 2",
+      "status": "PASS"
+    },
+    "launchObservation": {
+      "status": "LAUNCH CANDIDATE OBSERVED",
+      "method": "ordinary Start-Process",
+      "pid": 4428,
+      "mainWindowTitleObserved": "Sidera",
+      "nonZeroWindowHandleObserved": true,
+      "handleLaterIntermittent": true,
+      "userFeedbackReceived": false,
+      "nativeUx": "UNVERIFIED",
+      "nativeAuth": "UNVERIFIED",
+      "nativeSearchTruth": "UNVERIFIED",
+      "productPass": false,
+      "productFail": false
+    },
+    "safeStop": {
+      "status": "REFUSED BY SAFETY GATE",
+      "reason": "A non-zero window handle was detected at the safety check instant.",
+      "pid": 4428,
+      "terminated": false
+    }
+  },
+  "nativeAuthenticationAcceptance": {
+    "aggregate": "PARTIAL PASS",
+    "databaseAccess": {
+      "status": "PASS (BOUNDED)",
+      "userObserved": [
+        "connected",
+        "main window clickable",
+        "no abnormal window"
+      ],
+      "boundary": "This bounded observation does not cover every failure, cancellation, busy, or restart case."
+    },
+    "libraryAccount": {
+      "status": "FIRST-TRANSACTION RETEST PASS",
+      "timeline": [
+        {
+          "stage": "pre-direct-poll build, first transaction",
+          "loginCompleted": true,
+          "closeTerminal": "cancelled",
+          "status": "FIRST-TRANSACTION HISTORICAL FAIL",
+          "meaning": "The official login persisted, but the first close did not prove readiness in the same transaction."
+        },
+        {
+          "stage": "pre-direct-poll build, second entry",
+          "preauthenticated": true,
+          "closeTerminal": "ready",
+          "status": "SECOND-ENTRY PASS_BOUNDED",
+          "meaning": "The existing official session was recognized on re-entry; this does not overwrite the first-transaction failure."
+        },
+        {
+          "stage": "same-visible-WebView direct-poll repair, first transaction",
+          "guiPid": 62020,
+          "sessionClearedBeforeAttempt": true,
+          "loginCompleted": true,
+          "authenticationWindowClose": "manual",
+          "closeTerminal": "ready",
+          "mainWindowClickable": true,
+          "abnormalWindowObserved": false,
+          "userReply": "1.已就绪 2.手动关闭 3.可点击 4.无",
+          "status": "FIRST-TRANSACTION RETEST PASS"
+        }
+      ],
+      "securityBoundary": "Credentials, Cookie, ticket, form values, query parameters, and fragments were not captured in Sidera state or evidence."
+    },
+    "discoveryFulltext": {
+      "status": "UNVERIFIED"
+    },
+    "supersededNativeTimeline": [
+      {
+        "observation": "First login persisted the official session, but the page became blank and closing the window left Sidera at authentication required; a second open was already signed in and then became ready.",
+        "diagnosis": "Authentication succeeded, but the first popup/opener handoff was lost by URL replay."
+      },
+      {
+        "observation": "An intermediate candidate could remain in authenticating after the user closed the window.",
+        "diagnosis": "Close-time convergence was incomplete."
+      }
+    ],
+    "finalRepair": "A coordinator-bound managed child WebView preserves official popup, POST, opener, and shared WebView2 environment semantics. Close verification now reserves the four-second deadline for one current inspection followed by direct polling of the fixed library landing in that same visible WebView/environment; stale token, generation, and terminal callbacks remain unable to commit.",
+    "overallDevelopment014Complete": false
+  },
+  "nativeGates": {
+    "inputOwnershipRetest": {
+      "status": "PASS",
+      "historicalFailureRetained": true,
+      "userConfirmed": [
+        "normal window clickable",
+        "maximized window clickable",
+        "main window clickable after institution WebView physical hide",
+        "main window clickable after authentication-window close",
+        "no abnormal window"
+      ],
+      "finalSnapshot": {
+        "capturedAt": "2026-08-09T16:40:32+08:00",
+        "guiPid": 62020,
+        "mainHwnd": "0x33049E",
+        "mainRect": [-11, -11, 2571, 1539],
+        "maximized": true,
+        "visible": true,
+        "enabled": true,
+        "cloaked": false,
+        "owner": 0,
+        "rootOwner": "self",
+        "nonMainVisibleTopLevelWindows": 0,
+        "libraryAuthWryHwnd": "0x1F10988",
+        "libraryAuthRendererPid": 46180,
+        "libraryAuthSurfaceVisible": false,
+        "onlyVisibleInteractiveWebView": "main",
+        "orphanInputBlockerObserved": false
+      }
+    },
+    "authentication": {
+      "status": "PARTIAL PASS",
+      "capabilities": {
+        "database-access": "PASS (BOUNDED)",
+        "library-account": "FIRST-TRANSACTION RETEST PASS",
+        "discovery-fulltext": "UNVERIFIED"
+      },
+      "remaining": "Discovery fulltext plus the complete cross-goal, restart, and invalidation matrix remain unverified. The historical first-transaction failure and bounded second-entry recovery remain retained even though the latest first-transaction retest passed."
+    },
+    "searchTruth": {
+      "status": "UNVERIFIED",
+      "required": "Visible Chinese and English searches must verify 40 and 100 targets, filters, deduplication, known or unknown total, provider breakdown, retrievalPosition.connectorId, local ten-record pages, display sorting, and cross-page selection without claiming unavailable providers."
+    },
+    "ux": {
+      "status": "UNVERIFIED",
+      "observedAuthFlow": "After the latest session-cleared first transaction reached ready, the user manually closed the authentication window; the main window remained clickable and no abnormal window remained.",
+      "required": "Normal and maximized windows must still separately verify first-screen hierarchy, the default-closed drawer, browser split presentation, search-result presentation, and failure recovery."
+    }
+  },
+  "userExperienceGate": {
+    "status": "PARTIAL PASS",
+    "passedScope": "USER INPUT+AUTH EXPERIENCE PASS_BOUNDED: normal and maximized input ownership, institution-WebView hide recovery, and the latest session-cleared personal-library first transaction.",
+    "required": "User acceptance of discovery authentication, connection language, first-screen simplicity, result truth, and end-to-end research-flow usefulness remains unverified."
+  },
+  "development013BoundedFeedback": {
+    "date": "2026-08-08",
+    "userFeedback": "正常",
+    "scenarios": [
+      "normal window",
+      "maximized window",
+      "explicit paper selection"
+    ],
+    "subjectiveGate": "USER PERFORMANCE ACCEPTANCE PASS (BOUNDED)",
+    "priorEvidenceSnapshot": "USER PERFORMANCE ACCEPTANCE UNVERIFIED",
+    "nativePerformance": "UNVERIFIED",
+    "quantitativeTraceCompletedAfterSecondNarrowRepair": false,
+    "notCovered": [
+      "final cold-start resource chain",
+      "final first-batch and detail timing",
+      "final IPC counts",
+      "final draws, renderer CPU, GPU CPU, and Task measurements",
+      "final dynamic-frame comparison"
+    ]
+  },
+  "databaseSafety": {
+    "authoritativeBaseline": {
+      "path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\target\\v022-desktop-acceptance-2\\library\\research-hotspots-v7.sqlite",
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "fileSizeBytes": 214532096,
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA"
+    },
+    "readOnlyVerification": {
+      "status": "PASS",
+      "sqliteOpenMode": "immutable + query_only",
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "metadataUnchanged": true
+    },
+    "latestNativeRetestReadOnlyVerification": {
+      "capturedAt": "2026-08-09",
+      "openMode": "immutable + query_only",
+      "sha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+      "fileSizeBytes": 214532096,
+      "schemaVersion": 14,
+      "paperCount": 25473,
+      "libraryRevision": 1,
+      "activeV20Rows": 0,
+      "readySnapshots": 4,
+      "mainWalShmSizeAndMtimeBeforeAfterUnchanged": true,
+      "paperLibraryWrites": 0
+    },
+    "unchangedContract": "Development 014 adds no paper-library schema or content mutation. Immutable and query_only verification confirmed the authoritative main-file hash, size, schema, paper count, revision, and metadata remained unchanged.",
+    "development014DatabaseWritePathAdded": false,
+    "documentationClosureTaskOpenedDatabase": false,
+    "documentationClosureTaskDatabaseWrites": 0,
+    "freshReadOnlyFingerprintRecheck": true,
+    "mainDatabaseContentMutationsAuthorized": 0,
+    "mainDatabaseContentMutationsObserved": 0,
+    "boundaryNote": "The automated gate performed the immutable and query_only verification. The documentation-closure edit did not reopen or write the selected database."
+  },
+  "executionBoundaries": {
+    "providerCalls": 0,
+    "automatedOrDocumentationInstitutionNetworkRequests": 0,
+    "userDrivenNativeInstitutionAuthenticationObserved": true,
+    "fullTextDownloads": 0,
+    "paperLibraryWrites": 0,
+    "hotspotRebuilds": 0,
+    "heavyFullSuiteRuns": 0,
+    "processesStartedOrStoppedByDocumentationTask": 0,
+    "commitCreated": false,
+    "pushed": false,
+    "pullRequestCreated": false,
+    "published": false
+  }
+}

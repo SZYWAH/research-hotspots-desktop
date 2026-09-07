@@ -1,0 +1,34 @@
+{
+  "package": "Sidera-P2a",
+  "task": "开发 008",
+  "date": "2026-08-05",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "product": "UNVERIFIED",
+  "formats": {
+    "csv": "PASS",
+    "json": "PASS",
+    "jsonl": "PASS",
+    "ndjson": "PASS",
+    "bibtex": "PASS",
+    "ris": "PASS"
+  },
+  "identityPrecedence": [
+    "normalized DOI",
+    "source database plus provider record ID",
+    "canonical detail URL",
+    "normalized title plus first author plus year"
+  ],
+  "classifications": [
+    "new",
+    "merge",
+    "conflict",
+    "invalid"
+  ],
+  "reviewStore": "Sidera/import-review-v1.sqlite",
+  "mainLibrarySchemaChanged": false,
+  "mainPaperLibraryWrites": 0,
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "automatedDownloads": 0
+}

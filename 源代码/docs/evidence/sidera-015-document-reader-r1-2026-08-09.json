@@ -1,0 +1,235 @@
+{
+  "package": "Sidera-015",
+  "title": "文档原生阅读台 R1",
+  "capturedAt": "2026-08-09",
+  "branch": "codex/sidera-m2-rag",
+  "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeReader": "PASS (CODEX VISIBLE DESKTOP)",
+    "userExperience": "UNVERIFIED",
+    "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE READER PASS (CODEX VISIBLE DESKTOP) / USER EXPERIENCE UNVERIFIED"
+  },
+  "fixture": {
+    "fileName": "Simple_AI_20260430_111347.pdf",
+    "bytes": 74996,
+    "pages": 2,
+    "documentVersionId": "version-b433cace57bf4bd5bbe5e5a1",
+    "sha256": "cdac21fe62ac20328e983a930c80dad66b0eb9b19f99abfa96977fe5d5074f9c"
+  },
+  "implementation": {
+    "originalStore": "Sidera/documents-v1.sqlite",
+    "originalDocumentImmutable": true,
+    "derivedStore": "Sidera/document-derived-v1.sqlite",
+    "derivedStoreUserVersion": 2,
+    "v1ToV2Migration": "explicit UTF-16 length backfill",
+    "pdfJsVersion": "5.4.149",
+    "workerBundledLocally": true,
+    "singlePdfRenderer": true,
+    "preflight": {
+      "maximumBytes": 52428800,
+      "maximumPages": 300
+    },
+    "readerLayout": {
+      "pdfMinimumSharePercent": 70,
+      "compactToolbar": true,
+      "searchAndDetailsOnDemand": true,
+      "starfieldCanvasWhileReaderActive": 0,
+      "singleOuterScrollContainer": "document-reader-viewport",
+      "shellOverflow": "hidden",
+      "pageOverflow": "hidden for clipping only"
+    },
+    "finalHardening": {
+      "readerReopenDuringActiveParse": {
+        "presentOnDisk": true,
+        "restoresManifestParseSnapshot": true,
+        "resumesBoundedSnapshotPolling": true,
+        "doesNotCreateASecondParseRun": true
+      },
+      "singleOuterScrollOwner": {
+        "presentOnDisk": true,
+        "owner": "document-reader-viewport",
+        "applicationShellScrollRemainsFixed": true
+      },
+      "researchRequestTaskHistory": {
+        "presentOnDisk": true,
+        "scope": "cross-package research-search idempotency hardening",
+        "policy": "bounded least-recently-used history",
+        "maximumEntries": 32,
+        "activeRequestProtectedFromEviction": true
+      }
+    }
+  },
+  "protocol": {
+    "scheme": "sidera-document://localhost/version/{opaque-token}",
+    "mainWebviewOnly": true,
+    "filesystemPathExposed": false,
+    "methods": [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "singleRange": true,
+    "native": {
+      "rangeRequest": "bytes=0-7",
+      "rangeStatus": 206,
+      "contentRange": "bytes 0-7/74996",
+      "bodyPrefix": "%PDF-1.3",
+      "headStatus": 200,
+      "optionsStatus": 204,
+      "range416": "UNVERIFIED; WebView fetch did not provide an independent native status"
+    },
+    "automated": {
+      "range416": "PASS; core range test"
+    },
+    "errorResponseCors": {
+      "presentOnDisk": true,
+      "allowOrigin": "*",
+      "allowMethods": "GET, HEAD, OPTIONS",
+      "allowHeaders": "Range",
+      "exposeHeaders": "Accept-Ranges, Content-Length, Content-Range, ETag",
+      "stableProtocolErrorCodesRemainReadableByMainWebview": true
+    }
+  },
+  "automatedTechnical": {
+    "readerAudit": "PASS; 105/105",
+    "derivedCore": "PASS; 14/14",
+    "documentStore": "PASS; 9/9",
+    "pnpmBuild": "PASS; Vite 1,928 modules; local pdf.worker bundle",
+    "cargoCheckJ2": "PASS; 2026-08-09 latest Rust hardening rerun; 13 pre-existing dead_code warnings",
+    "cargoBuildJ2": "PASS; prior package evidence only; not rerun after the latest Rust hardening",
+    "latestRustHardeningCargoRerun": "RERUN; core request-task LRU targeted test 1/1 PASS; desktop cargo check -j 2 PASS; document-protocol assertions TEST-HOST UNAVAILABLE after successful lib-test compilation",
+    "previousCargoEvidenceReusedAsNewCompilation": false,
+    "latestRustHardeningValidation": {
+      "coreLruTargetedTest": {
+        "status": "PASS",
+        "passed": 1,
+        "total": 1
+      },
+      "firstDesktopCargoTest": {
+        "status": "BLOCKED",
+        "scope": "unrelated integration target",
+        "target": "sidera_pi_runtime_protocol",
+        "missingModules": [
+          "sidera_rag",
+          "sidera_stream_gate"
+        ],
+        "productOrAssertionFailure": false
+      },
+      "documentProtocolLibTest": {
+        "scope": "desktop lib filtered to sidera_document_protocol::tests",
+        "compilation": "PASS",
+        "assertions": "TEST-HOST UNAVAILABLE",
+        "windowsExitCode": "0xc0000139",
+        "windowsStatus": "STATUS_ENTRYPOINT_NOT_FOUND",
+        "missingEntryPoint": "TaskDialogIndirect",
+        "productFailure": false,
+        "assertionFailure": false
+      },
+      "cargoCheckJ2": {
+        "command": "cargo check --manifest-path src-tauri/Cargo.toml -j 2",
+        "status": "PASS",
+        "warningCount": 13,
+        "warningsPreExisting": true,
+        "warningClass": "dead_code"
+      }
+    },
+    "desktopTestHost": "TEST-HOST UNAVAILABLE; 0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND at TaskDialogIndirect before document-protocol assertions; not a product or assertion failure",
+    "independentStaticReview": {
+      "p0": 0,
+      "p1": 0,
+      "p2": 0
+    },
+    "regressions": {
+      "importRead": "PASS; 18/18",
+      "institutionVisual": "PASS; 92/92",
+      "dynamicStartupR3": "PASS; 15/15",
+      "p2bR2": "PASS",
+      "f1a": "PASS",
+      "desktopShell": "PASS",
+      "workbenchRead": "PASS"
+    }
+  },
+  "nativeReader": {
+    "status": "PASS (CODEX VISIBLE DESKTOP)",
+    "renderer": "PDF.js single renderer",
+    "canvasCount": 2,
+    "iframeFallback": false,
+    "renderError": false,
+    "parseToReadySecondsApprox": 0.75,
+    "search": {
+      "query": "人工智能",
+      "hitPage": 1,
+      "totalPages": 2,
+      "jumpedToHit": true
+    },
+    "pageNavigation": "PASS; page 1/2",
+    "zoom": "PASS; 110% and 120%",
+    "leaveAndReopenRestore": "PASS",
+    "windows": [
+      {
+        "width": 1360,
+        "height": 860,
+        "status": "PASS"
+      },
+      {
+        "width": 1707,
+        "height": 1019,
+        "status": "PASS"
+      }
+    ],
+    "postSearchJump": {
+      "windowScrollY": 0,
+      "shellY": 70,
+      "toolbarY": 70,
+      "physicalZoomButtonClickable": true
+    },
+    "starfieldCanvasWhileReaderActive": 0
+  },
+  "derivedStore": {
+    "readyRuns": 1,
+    "pages": 2,
+    "spans": 505,
+    "anchors": 505,
+    "ftsRows": 2,
+    "readerStatePersisted": true
+  },
+  "databaseSafety": {
+    "paperLibraryMode": "immutable + query_only",
+    "paperLibrarySha256": "B546C505F6FAD89C9D4C6429DBBA8FACC7838D5F66CC9367E24A2824EFDCA8FA",
+    "paperLibraryBytes": 214532096,
+    "schemaVersion": 14,
+    "paperCount": 25473,
+    "libraryRevision": 1,
+    "activeV20Rows": 0,
+    "readySnapshots": 4,
+    "mainWalShmMetadataBeforeAfterUnchanged": true,
+    "walBytes": 0,
+    "shmBytes": 32768,
+    "mainDatabaseWrites": 0,
+    "v20Rebuilds": 0,
+    "authorizedWritableStores": [
+      "Sidera/documents-v1.sqlite",
+      "Sidera/document-derived-v1.sqlite"
+    ]
+  },
+  "deferred": [
+    "OCR",
+    "E5 embeddings",
+    "annotations",
+    "AI reading tools",
+    "cross-document evidence workflows",
+    "user experience acceptance"
+  ],
+  "boundaries": {
+    "providerCalls": 0,
+    "institutionNetworkCalls": 0,
+    "fullTextDownloads": 0,
+    "paperLibraryWrites": 0,
+    "staged": false,
+    "committed": false,
+    "pushed": false,
+    "published": false
+  }
+}

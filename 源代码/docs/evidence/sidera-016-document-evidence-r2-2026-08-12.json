@@ -1,0 +1,237 @@
+{
+  "schemaVersion": 1,
+  "package": "Sidera-016",
+  "title": "全文证据台 R2",
+  "generatedAt": "2026-08-12T20:30:00+08:00",
+  "repository": {
+    "branch": "codex/sidera-m2-rag",
+    "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+    "dirtyWorktreePreserved": true,
+    "stagedOrCommittedByThisPackage": false
+  },
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PARTIAL_PASS",
+    "windowsDesktopLibTestHost": "TEST-HOST UNAVAILABLE",
+    "nativeEvidenceUx": "UNVERIFIED",
+    "nativeIndex": "UNVERIFIED",
+    "userExperience": "UNVERIFIED",
+    "development017": "NOT_STARTED"
+  },
+  "implementation": {
+    "reader": {
+      "visualRenderer": "one PDF.js Canvas",
+      "textLayer": "transparent selectable PDF.js v5 TextLayer",
+      "pageLoading": "near-viewport lazy page text",
+      "rotation": "viewport transform plus data-main-rotation CSS",
+      "toolbarHeightPx": 52,
+      "contentPriority": "PDF body >= 70%; no Hero or persistent rail",
+      "evidenceEntry": "single compact text button",
+      "sideSheet": "default closed, pure black, overlay on desktop, bottom sheet when narrow"
+    },
+    "anchor": {
+      "publicType": "SideraDocumentEvidenceAnchor",
+      "identityExcludesParseRunId": true,
+      "identityFields": [
+        "documentVersionSha256",
+        "pageIndex",
+        "sourceKind",
+        "UTF-16 range",
+        "quoteSha256",
+        "prefix",
+        "suffix",
+        "normalized rects"
+      ],
+      "savedCanonicalBaseline": true,
+      "resolutionStates": [
+        "exact",
+        "reanchored",
+        "ambiguous",
+        "missing"
+      ],
+      "silentMoveOrDelete": false
+    },
+    "evidenceStore": {
+      "pathClass": "Sidera/document-evidence-v1.sqlite",
+      "rebuildable": false,
+      "tables": [
+        "annotations",
+        "saved_evidence",
+        "page_source_preferences"
+      ],
+      "derivedStoreDeletionMustPreserveEvidence": true,
+      "absolutePathsExposed": false
+    },
+    "derivedIndex": {
+      "pathClass": "Sidera/document-derived-v1.sqlite",
+      "userVersion": 4,
+      "jobScopedTables": [
+        "document_index_jobs",
+        "document_segments",
+        "document_segment_fts",
+        "document_segment_embeddings"
+      ],
+      "maximumSegmentUtf16": 800,
+      "segmentOverlapUtf16": 120,
+      "embeddingModel": "multilingual-e5-small",
+      "dimensions": 384,
+      "storage": "float16",
+      "cpuThreads": 2,
+      "batchSize": 16,
+      "directMl": false,
+      "explicitStart": true,
+      "controls": [
+        "start",
+        "current",
+        "snapshot",
+        "pause",
+        "resume",
+        "cancel"
+      ],
+      "searchModes": [
+        "auto",
+        "lexical",
+        "hybrid"
+      ],
+      "weightedRrf": {
+        "lexical": 0.45,
+        "semantic": 0.55,
+        "k": 60
+      },
+      "autoFallbackTruthful": true,
+      "explicitHybridDoesNotPretendFallbackSuccess": true,
+      "latePromotionFenced": true,
+      "terminalArtifactRetention": 3
+    },
+    "runCenter": {
+      "documentIndexActivityRow": true,
+      "compactPureBlack": true,
+      "countedAsAgentRun": false,
+      "survivesReaderCloseInCurrentAppSession": true
+    }
+  },
+  "fixture": {
+    "path": "scripts/fixtures/document-reader-r2-four-page.pdf",
+    "bytes": 76563,
+    "sha256": "2EB19E71946F84D2620ACD6FB9D381835CF15812AF2A19CAEC416C000DC5B065",
+    "pages": 4,
+    "coverage": [
+      "Chinese",
+      "English",
+      "two-column",
+      "90-degree rotation"
+    ],
+    "nativeUseInThisRetest": false
+  },
+  "automatedTechnical": {
+    "overallStatus": "PARTIAL_PASS",
+    "coreTests": {
+      "documentDerived": {
+        "passed": 23,
+        "total": 23
+      },
+      "documentEvidence": {
+        "passed": 8,
+        "total": 8
+      },
+      "documentIndex": {
+        "passed": 11,
+        "total": 11
+      },
+      "documentProtocol": {
+        "passed": 7,
+        "total": 7
+      },
+      "piProtocol": {
+        "passed": 8,
+        "total": 8
+      },
+      "researchSearch": {
+        "passed": 25,
+        "total": 25
+      }
+    },
+    "frontend": {
+      "typescript": "PASS",
+      "documentReaderR1": {
+        "status": "PASS",
+        "checks": 105
+      },
+      "documentReaderR2": {
+        "status": "STATIC PASS",
+        "nativeAcceptance": "UNVERIFIED"
+      },
+      "agentRunCenter": "PASS",
+      "documentF1a": "PASS",
+      "workbenchVisualR2": {
+        "status": "PASS",
+        "checks": 92
+      },
+      "dynamicStartupR3": {
+        "status": "PASS",
+        "checks": 15
+      },
+      "productionBuild": {
+        "status": "PASS",
+        "viteModules": 1928,
+        "bundledPdfWorker": true,
+        "initialCssFailure": "text-ink/38 did not exist",
+        "initialCssFailureFixedAndRerun": true
+      }
+    },
+    "rustCompilation": {
+      "cargoCheckTestsJ2": "PASS",
+      "cargoCheckJ2": "PASS",
+      "warningCount": 13,
+      "warningClass": "pre-existing dead_code"
+    },
+    "windowsDesktopLibTestHost": {
+      "status": "TEST-HOST UNAVAILABLE",
+      "executable": "research_hotspots_desktop_lib-d0cee4ce784a11a3.exe",
+      "compilation": "PASS",
+      "assertionsStarted": false,
+      "windowsExitCode": "0xc0000139",
+      "windowsStatus": "STATUS_ENTRYPOINT_NOT_FOUND",
+      "missingEntryPoint": "TaskDialogIndirect",
+      "compileForTestsConfigured": true,
+      "repeatedExecutionStopped": true,
+      "productFailure": false,
+      "dev016AssertionFailure": false
+    }
+  },
+  "nativeStopGates": {
+    "parseCloseReopenContinueSameRunThenStop": "UNVERIFIED",
+    "fourPageSelectionAndHighlightAt100And125Percent": "UNVERIFIED",
+    "rotatedPageSelectionAccuracy": "UNVERIFIED",
+    "derivedRebuildPreservesAndRelocatesEvidence": "UNVERIFIED",
+    "e5CrossLanguageRecall": "UNVERIFIED",
+    "lexicalFallbackAndModelMissing": "UNVERIFIED",
+    "indexPauseCancelRestartAndLateResultIsolation": "UNVERIFIED",
+    "normalAndMaximizedContentPriority": "UNVERIFIED",
+    "readerActiveStarfieldRendererZero": "UNVERIFIED",
+    "userExperience": "UNVERIFIED"
+  },
+  "development017Boundary": {
+    "status": "NOT_STARTED",
+    "blockedUntilAllDevelopment016StopGatesPass": true,
+    "notImplemented": [
+      "PP-OCRv5 mobile det and rec packaging",
+      "OCR opaque binary job protocol",
+      "SideraReadingContextScope",
+      "document segment Agent tools",
+      "document-anchor answer references",
+      "real Provider page-citation question"
+    ]
+  },
+  "safety": {
+    "realPaperLibraryOpened": false,
+    "realPaperLibraryWritten": false,
+    "v20Rebuilt": false,
+    "networkUsed": false,
+    "providerUsed": false,
+    "fullTextDownloaded": false,
+    "otherProcessesInspectedOrModified": false,
+    "guiStarted": false,
+    "gitStagedCommittedPushedOrPublished": false
+  }
+}

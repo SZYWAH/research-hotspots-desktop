@@ -1,0 +1,48 @@
+{
+  "package": "M2.0c-L1a-R3-R1",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeClosedLoop": "FAIL_SUPERSEDED",
+  "correctedConclusion": "INSTITUTION AUTH PASS / CATALOG EXTRACTION FAIL / PRIMARY ROUTE MISALIGNED",
+  "implemented": {
+    "adapter": "whu-catalog-multidb-v2",
+    "entryGate": "search-form-only",
+    "submissionGate": [
+      "page-signature",
+      "query-echo"
+    ],
+    "resultGate": [
+      "real catalog record locator",
+      "navigation title rejection",
+      "explicit zero-result marker"
+    ],
+    "personalLibraryReadyGate": "versioned DOM inspection"
+  },
+  "automatedChecks": {
+    "typescript": "PASS",
+    "vite": "PASS (1918 modules)",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "rustInstitutionSearchTests": "PASS (14/14)",
+    "specializedAudit": "PASS",
+    "regressions": "PASS (L1a, L1a-R1, L1a-R2, L1a-R3, L0-R2, R4-R3)",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS"
+  },
+  "nativeAcceptance": {
+    "databaseSso": "PASS (user completed the in-app WHU authentication chain)",
+    "personalLibrary": "UNVERIFIED",
+    "queryChinese": "UNVERIFIED",
+    "queryEnglish": "UNVERIFIED",
+    "rawRecord": "UNVERIFIED",
+    "crossPageContinuity": "UNVERIFIED",
+    "restartReuse": "UNVERIFIED",
+    "catalogExtraction": "FAIL (numeric titles, JavaScript fragments and duplicate candidates were emitted for the same catalog record)",
+    "primaryRoute": "FAIL (the OPAC book catalog does not satisfy the paper-first institutional search goal)",
+    "blocker": "Superseded by M2.0c-L1a-R4, which makes academic discovery the default and retains the cleaned OPAC only as an auxiliary catalog."
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "downloads": 0
+}

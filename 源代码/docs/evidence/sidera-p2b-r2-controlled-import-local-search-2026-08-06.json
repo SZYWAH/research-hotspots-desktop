@@ -1,0 +1,133 @@
+{
+  "package": "Sidera-P2b-R2",
+  "development": "开发 011-R2",
+  "date": "2026-08-06",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeControlledImport": "PARTIAL_PASS",
+  "nativeLocalSearch": "UNVERIFIED",
+  "nativeCompletionGate": "NATIVE CONTROLLED IMPORT AND LOCAL SEARCH PASS",
+  "p1": "PARTIAL / ADAPTER DEFERRED",
+  "p2": "P2b-R2",
+  "nativeObserved": {
+    "compatibilitySetup": "PASS",
+    "preview": "PASS",
+    "committedRecords": 10,
+    "inserted": 10,
+    "beforePaperCount": 25463,
+    "afterPaperCount": 25473,
+    "beforeRevision": 0,
+    "afterRevision": 1,
+    "batchFrozenAfterCommit": true,
+    "note": "The user visibly completed the forward transaction. Disk persistence and production rollback behavior on exact SQLite copies are verified; restarted desktop rendering and live-library rollback UI remain unverified."
+  },
+  "readOnlyPersistenceVerification": {
+    "checkedAt": "2026-08-06T14:34:22+08:00",
+    "visibleTauriProcesses": 0,
+    "mainLibraryUserVersion": 14,
+    "paperCount": 25473,
+    "libraryRevision": 1,
+    "commitId": "commit-ffadd38d024591653ae4484f",
+    "commitStatus": "committed",
+    "sourceRecordCount": 10,
+    "commitItemCount": 10,
+    "foreignKeyViolations": 0,
+    "reviewStoreUserVersion": 3,
+    "reviewBatchStatus": "committed",
+    "reviewCommitIdMatchesMainLedger": true,
+    "result": "PERSISTED_LEDGER_AND_REVIEW_RECEIPT_PASS",
+    "boundary": "Read-only disk verification proves durable records after process exit, but does not prove that the restarted desktop UI renders the restored history."
+  },
+  "realCopyRollbackVerification": {
+    "checkedAt": "2026-08-06T14:46:32+08:00",
+    "sourceCommitId": "commit-ffadd38d024591653ae4484f",
+    "sourceBatchId": "review-1785991301858-077ef8a26648",
+    "sourcePaperCount": 25473,
+    "sourceRevision": 1,
+    "rollbackCopy": {
+      "result": "PASS",
+      "deleted": 10,
+      "restored": 0,
+      "paperCountAfter": 25463,
+      "revisionAfter": 2,
+      "sourceRecordsAfter": 0,
+      "ledgerStatus": "rolled-back",
+      "reviewBatchStatus": "rolled-back",
+      "foreignKeyViolations": 0
+    },
+    "laterEditCopy": {
+      "result": "PASS_BLOCKED",
+      "editedPaperId": "paper-e5602e3c7190a933353d4dfa",
+      "conflictCodes": [
+        "SIDERA_IMPORT_ROLLBACK_REVISION_DRIFT",
+        "SIDERA_IMPORT_ROLLBACK_PAPER_DRIFT"
+      ],
+      "paperCountAfter": 25473,
+      "ledgerStatus": "committed",
+      "reviewBatchStatus": "committed"
+    },
+    "command": "cargo test --manifest-path src-tauri/core/Cargo.toml --target-dir src-tauri/target/hotspot-second-core -j 2 --test import_rollback_real_copy -- --ignored --nocapture --test-threads=1",
+    "testResult": "2 passed; 0 failed",
+    "boundary": "Both checks ran against SQLite backup copies made from the accepted real commit. The selected live library was never modified; visible rollback UI remains a separate native acceptance gate."
+  },
+  "readOnlyLocalSearchBenchmark": {
+    "checkedAt": "2026-08-06T14:53:00+08:00",
+    "paperCount": 25473,
+    "iterationsPerQuery": 5,
+    "operation": "COUNT plus newest first page limited to 40 rows, SQLite opened read-only",
+    "queries": [
+      {
+        "query": "人工智能",
+        "matchCount": 10,
+        "pageRows": 10,
+        "medianMs": 254.63,
+        "maxMs": 263.41
+      },
+      {
+        "query": "machine learning",
+        "matchCount": 1677,
+        "pageRows": 40,
+        "medianMs": 243.88,
+        "maxMs": 263.12
+      }
+    ],
+    "result": "READ_ONLY_LARGE_LIBRARY_QUERY_PASS",
+    "boundary": "This proves bounded SQLite query latency against the accepted 25k-paper library. It does not prove visible UI request counts, IME behavior, or perceived responsiveness."
+  },
+  "implementation": {
+    "commitAuthority": "paper_import_commits in the main library",
+    "reviewReceiptReconciliation": "best-effort from the authoritative main-library ledger",
+    "statusWithoutReviewStore": true,
+    "restartFrozenBatchSelection": "latest updated batch fallback",
+    "localSearchTrigger": "Enter, explicit search button, or explicit refresh only",
+    "imeGuard": true,
+    "emptyAndSameQueryNoOp": true,
+    "staleResponseIsolation": "request sequence",
+    "failurePreservesDisplayedResults": true,
+    "queryExecution": "Rust and SQLite",
+    "pageSize": 40,
+    "sorting": ["newest", "oldest", "title"]
+  },
+  "automatedValidation": [
+    "node_modules/.bin/tsc.CMD -b",
+    "node_modules/.bin/vite.CMD build",
+    "cargo test --manifest-path src-tauri/core/Cargo.toml import_commit::tests -j 2",
+    "cargo test --manifest-path src-tauri/core/Cargo.toml --target-dir src-tauri/target/hotspot-second-core -j 2 all_skip_keeps_revision_and_receipt_reconciles_review_store -- --nocapture",
+    "cargo test --manifest-path src-tauri/core/Cargo.toml --target-dir src-tauri/target/hotspot-second-core -j 2 --test import_rollback_real_copy -- --ignored --nocapture --test-threads=1",
+    "cargo check --manifest-path src-tauri/Cargo.toml -j 2"
+  ],
+  "automatedSafety": {
+    "institutionNetworkRequests": 0,
+    "providerCalls": 0,
+    "fullTextDownloads": 0,
+    "hotspotRebuilds": 0
+  },
+  "nativeUnverified": [
+    "A restarted visible desktop renders the committed batch, source records, and history already verified on disk.",
+    "The visible desktop rollback action reproduces the whole-commit behavior already proven on an exact real-library copy.",
+    "The visible desktop reports and preserves a later-edit rollback conflict already proven on an exact real-library copy.",
+    "Typing at least 20 characters causes zero queries; Enter causes exactly one query.",
+    "IME composition, empty query, repeated same query, stale responses, failure, and cancellation preserve the contract.",
+    "A 25k-paper library remains responsive under bounded SQLite pagination."
+  ]
+}

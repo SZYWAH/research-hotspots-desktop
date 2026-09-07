@@ -1,0 +1,127 @@
+{
+  "package": "Sidera-012-R3",
+  "development": "开发 012-R3 / 冷启动动态快照重建闭环",
+  "date": "2026-08-06",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeStartup": "PASS",
+  "userVisualAcceptance": "UNVERIFIED",
+  "supersedes": "开发 012-R2 / NATIVE STARTUP FAIL",
+  "repository": {
+    "branch": "codex/sidera-m2-rag",
+    "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+    "dirtyWorktreePreserved": true,
+    "commitCreated": false,
+    "pushOrPullRequest": false
+  },
+  "rootCause": {
+    "databasePath": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\src-tauri\\target\\v022-desktop-acceptance-2\\library\\research-hotspots-v7.sqlite",
+    "schemaVersion": 14,
+    "libraryRevision": 1,
+    "paperCount": 25473,
+    "activeAnalysisStateRows": 0,
+    "readySnapshots": 4,
+    "latestReadySnapshot": {
+      "snapshotId": "project-default:v20:1784985129835",
+      "libraryRevision": 0,
+      "sourcePaperCount": 25463,
+      "hotspotRows": 160,
+      "membershipRows": 25463,
+      "distinctMembershipPapers": 25463
+    },
+    "latestFormalImport": {
+      "commitId": "commit-ffadd38d024591653ae4484f",
+      "batchId": "review-1785991301858-077ef8a26648",
+      "revisionBefore": 0,
+      "revisionAfter": 1,
+      "paperCountBefore": 25463,
+      "paperCountAfter": 25473
+    },
+    "confirmedCause": "P2b correctly advanced the library revision and removed the active V20 pointer without starting hotspot analysis. load_agent_immersive_background then called read_analysis_state as a hard prerequisite, so AGENT_IMMERSIVE_ACTIVE_SNAPSHOT_MISSING was raised before the WebGL canvas could mount.",
+    "notTheCause": [
+      "wrong database path",
+      "database migration failure",
+      "missing historical V20 rows",
+      "foreign-key corruption"
+    ]
+  },
+  "contract": {
+    "activeSnapshot": "An explicit active V20 source must be ready, current for the library revision, and structurally intact. It is never silently replaced when present but invalid.",
+    "historicalVisualSource": "When no active pointer exists, startup may select the latest structurally intact ready snapshot only as historical visual data and must expose stale-by-library-revision metadata.",
+    "analysisSemantics": "A historical visual source is not the current hotspot-analysis result and is labeled in the UI with source/current revision and paper counts.",
+    "importSemantics": "Formal import still does not automatically start hotspot analysis.",
+    "failureSemantics": "Payload loading has a 15 second failure deadline and mounting has a 20 second failure deadline; either enters an explicit failed terminal state rather than waiting forever.",
+    "startupReady": "Only the first successful frame from the selected real dynamic WebGL renderer can release the splash. Static background remains an explicit diagnostic action only."
+  },
+  "implementation": {
+    "rustCore": "select_immersive_background_visual_source validates active or historical V20 visual sources, aggregate counts, and orphan references with stable errors.",
+    "tauriPayload": "load_agent_immersive_background returns visualSourceKind, analysisFreshness, stale reason, source/current revision, and source/current paper counts.",
+    "frontend": "String rejections preserve Rust error codes; historical visual data is visibly labeled; payload and mounting deadlines terminate in failure; cold-start theory-not-ready may select the real immersive renderer before the first frame.",
+    "audit": "sidera_dynamic_startup_r3_audit.mjs locks the no-static-fallback, explicit-terminal-state, metadata, and actual-first-frame contracts."
+  },
+  "automatedResults": {
+    "typescript": "PASS; tsc -b --pretty false",
+    "vite": "PASS; Vite 6.4.3; 1919 modules",
+    "rustCore": "PASS; 11 passed, 0 failed, 206 filtered",
+    "cargoCheck": "PASS; cargo check --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/hotspot-second-cargo -j 2; 13 existing institution-protocol dead-code warnings",
+    "realDatabaseImmersiveAudit": "PASS; historical-v20; stale-by-library-revision; source r0/current r1; 6000 unique sampled papers; 160 unique hotspots; repeat hash stable; alternate seed changed 9024 IDs; read-only",
+    "dynamicStartupR3Audit": "PASS; 15 checks",
+    "p2bCommitAudit": "PASS",
+    "p2bV14CompatibilityAudit": "PASS",
+    "p2bR2Audit": "PASS",
+    "f1aAudit": "PASS",
+    "desktopShellAudit": "PASS; 16 checks",
+    "documentationAudit": "PASS; 545 checks",
+    "diffCheck": "PASS; existing LF to CRLF warnings only"
+  },
+  "nativeRuns": [
+    {
+      "run": 1,
+      "startedAtCst": "2026-08-06T20:35:13+08:00",
+      "window": "visible=true; maximized=true; Sidera title in Console session",
+      "startup": "PASS; no retry, fallback, or static-background click; splashCount=0; failureText empty",
+      "renderer": "immersive; rendererCount=1; gpgpu; one WebGL canvas; context not lost",
+      "visualSource": "historical-v20; stale-by-library-revision; source r0/25463 papers; current r1/25473 papers",
+      "frameComparison": "PASS; 900 ms interval; distinct SHA-256 hashes; 120885 pixels changed at RGB threshold 12; 3.0871 percent",
+      "normalWindow": "PASS; visible=true; maximized=false; inner 2040x1290; outer 2062x1303; immersive gpgpu canvas remained active",
+      "restoredMaximized": "PASS; visible=true; maximized=true; inner 2560x1528; immersive gpgpu canvas remained active"
+    },
+    {
+      "run": 2,
+      "startedAtCst": "2026-08-06T20:42:17+08:00",
+      "window": "visible=true; maximized=true; Sidera title in Console session",
+      "startup": "PASS; no retry, fallback, or static-background click; splashCount=0; failureText empty",
+      "renderer": "immersive; rendererCount=1; gpgpu; one WebGL canvas; context not lost",
+      "visualSource": "historical-v20; stale-by-library-revision; source r0/25463 papers; current r1/25473 papers",
+      "frameComparison": "PASS; 900 ms interval; distinct SHA-256 hashes; 119364 pixels changed at RGB threshold 12; 3.0483 percent"
+    },
+    {
+      "run": 3,
+      "startedAtCst": "2026-08-06T20:43:44+08:00",
+      "window": "visible=true; maximized=true; Sidera title in Console session",
+      "startup": "PASS; no retry, fallback, or static-background click; splashCount=0; failureText empty",
+      "renderer": "immersive; rendererCount=1; gpgpu; one WebGL canvas; context not lost",
+      "visualSource": "historical-v20; stale-by-library-revision; source r0/25463 papers; current r1/25473 papers",
+      "frameComparison": "PASS; 900 ms interval; distinct SHA-256 hashes; 116300 pixels changed at RGB threshold 12; 2.9700 percent",
+      "leftRunning": "PASS; PID 41708; exactly one responding Sidera process remained"
+    }
+  ],
+  "nativeMethod": {
+    "actualTauri": "The inspected page was the WebView owned by research-hotspots-desktop.exe, not a standalone browser. tasklist reported one Sidera window in Console session 1, and Tauri native window commands reported visible=true.",
+    "visualInspection": "Actual Tauri WebView screenshots included the custom title bar, live galaxy, historical-source notice, and agent input surface.",
+    "dynamicProof": "Two screenshots per cold start were decoded and compared; WebGL context state and native window state came from the same running Tauri WebView.",
+    "computerUseHelper": "UNAVAILABLE; list_apps/list_windows failed with 0x80070003 after one reset and retry. This helper failure was not treated as a Sidera product failure."
+  },
+  "postRevisionGate": "PASS; all three runs used the current real library after the earlier formal import advanced revision 0 to 1 while no active V20 pointer existed. No additional import or library mutation was performed during this validation.",
+  "safety": {
+    "providerCalls": 0,
+    "institutionNetworkRequests": 0,
+    "fullTextDownloads": 0,
+    "libraryWrites": 0,
+    "hotspotRebuilds": 0,
+    "staticFallbackSelections": 0,
+    "retrySelections": 0,
+    "unrelatedProcessesStopped": 0
+  },
+  "remainingBoundary": "User visual acceptance remains UNVERIFIED even though the actual Tauri native runtime gate passed."
+}

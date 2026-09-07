@@ -1,0 +1,38 @@
+{
+  "package": "Sidera-P1b-R2",
+  "task": "开发 003",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeDiscoveryAuth": "UNVERIFIED",
+  "latestNativeFact": "DISCOVERY AUTH CALLBACK/STATE SYNC FAIL",
+  "p1Status": "IN PROGRESS",
+  "scope": [
+    "independent academic discovery authentication state",
+    "managed same-environment discovery authentication popup",
+    "versioned DOM success inspection and parent result reload",
+    "same-task pause and resume with stale callback fencing"
+  ],
+  "automatedGates": {
+    "typescript": "PASS",
+    "vite": "PASS (6.4.3, 1918 modules)",
+    "rustCoreTargeted": "PASS (21 tests)",
+    "cargoCheckJobs2": "PASS",
+    "p1bR2Fixtures": "PASS (12 fixtures)",
+    "p1bR1Fixtures": "PASS (8 fixtures)",
+    "institutionRegressions": "PASS",
+    "projectDocumentationAudit": "PASS",
+    "rustfmtModifiedFiles": "PASS",
+    "gitDiffCheck": "PASS"
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "downloads": 0,
+  "nativeAcceptanceRequired": [
+    "open unified discovery login",
+    "observe already-signed-in marker",
+    "close or allow automatic popup completion",
+    "confirm parent changes to ready and the same task produces native structured papers",
+    "restart Sidera and confirm the isolated UDF session is reused"
+  ]
+}

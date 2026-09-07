@@ -1,0 +1,55 @@
+{
+  "package": "Sidera-P1c",
+  "title": "开发 004 / 通用机构浏览器内核、应用内认证与下载基座",
+  "date": "2026-08-04",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeBasicShellSmoke": "PASS",
+  "nativeInstitutionBrowser": "UNVERIFIED",
+  "p1Status": "IN PROGRESS",
+  "latestNativeFact": "DISCOVERY AUTH CALLBACK/STATE SYNC FAIL",
+  "scope": {
+    "sharedProfile": "institution-shared-v1",
+    "sharedUdf": "institution-webview-v1/whu",
+    "ordinaryNavigation": "in-app child WebView tabs",
+    "authenticationPopup": "single app-owned WebviewWindow with opener semantics",
+    "downloadStaging": "institution-downloads-v1",
+    "downloadIdentity": ["size", "sha256", "mimeType", "manifest", "provenance"],
+    "nativeExtraction": "separate hidden task-bound WebViews"
+  },
+  "automated": {
+    "browserCoreTests": "PASS",
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "p1cAudit": "PASS",
+    "institutionRegressions": "PASS",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS"
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "automatedDownloads": 0,
+  "nativeGate": [
+    "arbitrary HTTP and HTTPS navigation in tabs",
+    "database SSO and personal library authentication remain inside Sidera",
+    "ordinary links open tabs and true authentication popups use one modal",
+    "academic discovery, database direct and catalog flows remain usable",
+    "record and full-text routes open in the shared browser",
+    "manual PDF or attachment download produces a manifest and SHA-256",
+    "cross-page hiding and return to native results preserve state",
+    "restart reuses institution login data and reloads download manifests",
+    "paper library revision and Provider requests remain unchanged"
+  ],
+  "notes": [
+    "Automated validation used no real institution request and no paid Provider call.",
+    "rustfmt passed for the new browser core/runtime and institution runtime modules; full-workspace formatting remains outside this package because the preserved dirty tree contains pre-existing formatting drift.",
+    "Download cancellation is best-effort through WebView stop; the Finished event finalizes deletion of incomplete files.",
+    "Shared-session reset clears an existing browser or legacy institution WebView and falls back to an invisible one-shot WebView when no institution surface has been created yet.",
+    "Raw tokenized download URLs are kept only in runtime memory, so retry after restart returns to provenance rather than persisting credentials.",
+    "The latest visible native Tauri candidate opened the shared institution browser shell and loaded the Wuhan University Library home page inside the same Sidera window; arbitrary address entry, authentication popup routing, downloads and restart reuse remain unverified.",
+    "P1 remains IN PROGRESS until the latest visible native Tauri loop passes."
+  ]
+}

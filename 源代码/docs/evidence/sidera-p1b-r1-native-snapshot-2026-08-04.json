@@ -1,0 +1,41 @@
+{
+  "package": "Sidera-P1b-R1",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeAcademicDiscovery": "UNVERIFIED",
+  "priorNativeFinding": "NATIVE_ACADEMIC_DISCOVERY_FAIL",
+  "manualCoreWebFlow": "PASS_SEPARATE_CHAIN",
+  "implemented": {
+    "taskBoundResultWebview": true,
+    "binding": ["taskId", "epoch", "sequence", "webviewGeneration", "label"],
+    "facetModes": ["combined", "sequential"],
+    "resourceTypes": ["article", "conference-paper", "thesis"],
+    "maxPagesPerFacet": 3,
+    "rawPageDefault": "hidden"
+  },
+  "automatedChecks": {
+    "typescriptAndVite": "PASS (1918 modules)",
+    "rustInstitutionSearchCore": "PASS (19/19)",
+    "rustRuntimeTestHost": "ENVIRONMENT_FAIL (0xc0000139 TaskDialogIndirect before tests)",
+    "cargoCheckJobs": 2,
+    "cargoCheck": "PASS",
+    "rustfmtModifiedFiles": "PASS",
+    "p1bR1Audit": "PASS",
+    "institutionRegressions": "PASS (L0 through P1b static audits)",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS"
+  },
+  "nativeAcceptance": {
+    "academicQueryChinese": "UNVERIFIED",
+    "academicQueryEnglish": "UNVERIFIED",
+    "nativeStructuredSnapshot": "UNVERIFIED",
+    "recordOpen": "UNVERIFIED",
+    "fullTextRouteOpen": "UNVERIFIED",
+    "crossPageContinuity": "UNVERIFIED",
+    "restartSessionReuse": "UNVERIFIED"
+  },
+  "externalInstitutionRequests": 0,
+  "providerCalls": 0,
+  "paperLibraryWrites": 0,
+  "downloads": 0
+}

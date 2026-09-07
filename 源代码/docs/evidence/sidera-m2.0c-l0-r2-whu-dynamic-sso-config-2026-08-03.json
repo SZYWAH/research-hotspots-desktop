@@ -1,0 +1,104 @@
+{
+  "package": "M2.0c-L0-R2",
+  "title": "武汉大学动态 SSO 配置解析修复",
+  "date": "2026-08-03",
+  "baseline": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "branch": "codex/sidera-m2-rag",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "institutionAccess": "NATIVE_ACCESS_PROBE_PASS"
+  },
+  "supersedes": {
+    "package": "M2.0c-L0-R1",
+    "nativeResult": "FAIL",
+    "cause": "official-homepage-is-a-javascript-shell-and-the-sso-target-is-in-a-same-origin-public-configuration-script"
+  },
+  "officialConfiguration": {
+    "discoveredFromHomepage": true,
+    "allowedHosts": [
+      "www.lib.whu.edu.cn",
+      "lib.whu.edu.cn"
+    ],
+    "exactPath": "/whuWebsite.js",
+    "allowedQueryKeys": [
+      "v"
+    ],
+    "executed": false,
+    "contentTypes": [
+      "application/javascript",
+      "text/javascript"
+    ],
+    "timeoutSeconds": 8,
+    "redirectLimit": 5,
+    "responseLimitBytes": 262144,
+    "fetchOrder": "after-home-and-direct-directory-probes",
+    "maxConcurrentRequests": 2
+  },
+  "staticParsing": {
+    "requiresDatabaseNavigationBinding": true,
+    "requiresJumpDatabasesCall": true,
+    "scope": "jumpDatabases-function-body",
+    "validCandidateCount": 1,
+    "acceptedTarget": "MetaAuth 242010 -> WHU MetaERS personalIndex",
+    "databaseDetailWithNestedParametersRejected": true
+  },
+  "networkBoundaries": {
+    "chaoxingBackendRequests": 0,
+    "metaAuthBackendRequests": 0,
+    "ssoTargetBackendRequests": 0,
+    "usernameForwarded": false,
+    "cookies": false,
+    "providerCalls": 0,
+    "automatedExternalNetworkRequests": 0
+  },
+  "navigationTargets": {
+    "lifetime": "current-runtime-memory-only",
+    "fullSsoUrlRendered": false,
+    "fullSsoUrlLogged": false,
+    "databaseFallback": "https://www.lib.whu.edu.cn/"
+  },
+  "validation": {
+    "rustCoreFixtures": {
+      "status": "PASS",
+      "passed": 15,
+      "failed": 0,
+      "externalNetworkRequests": 0
+    },
+    "typescript": "PASS",
+    "vite": "PASS",
+    "cargoCheckJobs2": "PASS",
+    "l0R2Audit": "PASS",
+    "l0R1Regression": "PASS",
+    "l0Regression": "PASS",
+    "r4R3Regression": "PASS",
+    "r4R2Regression": "PASS",
+    "projectDocumentation": "PASS",
+    "gitDiffCheck": "PASS",
+    "paperDatabaseWrites": 0,
+    "conversationWrites": 0,
+    "credentialWrites": 0
+  },
+  "nativeAcceptance": {
+    "status": "PASS",
+    "requiresUserAtrustLogin": true,
+    "observedProbe": "database row reports official SSO parsed",
+    "observedRoute": "MetaAuth 242010 -> WHU catalog multi-database search",
+    "queries": [
+      "人工智能",
+      "machine learning"
+    ],
+    "queryOutcome": "PASS",
+    "fullTextDownloads": 0,
+    "paperImports": 0,
+    "scopeNote": "native access probe pass does not claim all-library integration, controlled metadata import, or full-text support"
+  },
+  "boundaries": {
+    "legacyCnkiSeleniumChanged": false,
+    "embeddedBrowserAdded": false,
+    "documentSchemaChanged": false,
+    "agentLibraryToolsAdded": false,
+    "committed": false,
+    "pushed": false
+  }
+}

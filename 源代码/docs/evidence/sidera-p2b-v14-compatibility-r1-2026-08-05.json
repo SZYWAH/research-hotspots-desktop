@@ -1,0 +1,80 @@
+{
+  "package": "Sidera-P2b-R1",
+  "date": "2026-08-05",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "product": "UNVERIFIED",
+  "nativeCompatibility": "UNVERIFIED",
+  "supersedes": {
+    "package": "Development 011 / P2b",
+    "nativeProductResult": "PRODUCT FAIL / SUPERSEDED",
+    "reason": "The first native setup attempt exposed an early-v14 database whose governance schema did not satisfy the final strict v14 import contract. Development 011 automated evidence remains historical, but it did not prove native setup compatibility."
+  },
+  "classification": {
+    "current": "current-v14",
+    "repairable": "known-precontract-v14",
+    "rejected": "unknown-invalid-v14",
+    "rule": "Classification validates the exact schema, indexes, foreign keys, and project integrity; user_version=14 alone is insufficient."
+  },
+  "repair": {
+    "eligible": "known-precontract-v14 only",
+    "backupPattern": ".pre-v14-contract.<timestamp>.sqlite",
+    "backupSha256": true,
+    "transaction": "BEGIN IMMEDIATE",
+    "postValidation": [
+      "current-v14 strict contract",
+      "foreign_key_check",
+      "governed data fingerprint unchanged"
+    ],
+    "idempotentCurrentV14": true,
+    "overwritesExistingPaperData": false,
+    "unknownContractAutoRepair": false
+  },
+  "setupContract": {
+    "knownPrecontractRequiresExistingMode": true,
+    "seedOrEmptyCannotOverwriteExistingDatabase": true,
+    "resultFields": [
+      "compatibilityRepairApplied",
+      "migrationBackupPath",
+      "migrationBackupSha256",
+      "schemaContractStatus"
+    ]
+  },
+  "validation": {
+    "coreCompatibilityFixtures": {
+      "status": "PASS",
+      "focusedTests": "18/18",
+      "coverage": [
+        "empty early-v14 repair with backup and idempotent reopen",
+        "populated governance-row preservation and composite foreign keys",
+        "unknown invalid v14 rejection without backup or mutation",
+        "transaction rollback restores the original pre-contract schema",
+        "unknown index and foreign-key shapes remain rejected",
+        "cross-project mismatches remain rejected",
+        "backup collision and insufficient-space guards preserve the original database"
+      ]
+    },
+    "firstRunCompatibilityFixtures": "PASS (1/1)",
+    "typescript": "PASS",
+    "vite": "PASS (1919 modules)",
+    "cargoCheckJ2": "PASS",
+    "rustfmtModifiedFiles": "PASS",
+    "staticAudit": "PASS (20/20)",
+    "gitDiffCheck": "PASS",
+    "nativeEarlyV14Setup": "UNVERIFIED"
+  },
+  "automatedSafety": {
+    "liveSelectedDatabaseMutations": 0,
+    "syntheticTemporaryDatabasesOnly": true,
+    "providerCalls": 0,
+    "institutionNetworkRequests": 0,
+    "fullTextDownloads": 0
+  },
+  "nativeAcceptance": [
+    "Open the actual early-v14 library through existing-library mode and confirm the pre-v14-contract backup and SHA-256 are shown.",
+    "Confirm the repaired library opens with all papers, hotspots, memberships, review batches, and source-governance rows preserved.",
+    "Restart and reopen the same current-v14 library; no second compatibility backup or repair may occur.",
+    "Present an unknown malformed v14 fixture and confirm setup rejects it without mutation or backup.",
+    "Only after these checks may native compatibility be recorded as PASS; this evidence does not claim that result."
+  ]
+}

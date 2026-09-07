@@ -1,0 +1,141 @@
+{
+  "package": "Sidera-014-R5",
+  "title": "多分面公平分页与远端继续性真值窄修",
+  "capturedAt": "2026-08-28",
+  "branch": "codex/sidera-m2-rag",
+  "head": "ede6e0b4ddc3980816ec4e4d694f59c33461b159",
+  "status": {
+    "implementation": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativePaginationTruth": "PASS_BOUNDED",
+    "nativeSearchTruth": "PARTIAL PASS",
+    "nativeUx": "PASS_BOUNDED",
+    "statusLine": "IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE PAGINATION TRUTH PASS_BOUNDED / NATIVE SEARCH TRUTH PARTIAL PASS / NATIVE UX PASS_BOUNDED"
+  },
+  "problem": {
+    "historicalEnglishResultCount": 3,
+    "historicalReportedPagesScanned": 20,
+    "historicalHasMore": null,
+    "historicalCompletionReason": "page-limit",
+    "finding": "The sequential facet fallback allowed the first selected facet to consume the shared page budget and then synthesized a page-limit terminal without checking whether the last observed result page had a real continuation."
+  },
+  "implementation": {
+    "fairSequentialFacetBudget": true,
+    "minimumBudgetReservedForRemainingFacets": true,
+    "globalAndScopeBudgetsSeparated": true,
+    "facetLocalObservedPageNumber": true,
+    "readOnlyNextPageProbeBeforePageLimit": true,
+    "probeMutatesRemotePage": false,
+    "ipcNamesOrJsonChanged": false
+  },
+  "automatedTechnical": {
+    "researchCore": "PASS; 26/26",
+    "institutionWorkspaceR5Audit": "PASS; 8/8",
+    "institutionWorkspaceR4Audit": "PASS; 52 checks",
+    "p2aR1Audit": "PASS; 99 checks",
+    "p2aR2Audit": "PASS; 84 checks",
+    "institutionWorkspaceR1Audit": "PASS; 117/117",
+    "pnpmBuild": "PASS; 1929 modules",
+    "cargoCheckTestsJ2": "PASS; 13 existing dead_code warnings",
+    "cargoCheckJ2": "PASS; 13 existing dead_code warnings",
+    "cargoBuildJ2": "PASS"
+  },
+  "nativeClosure": {
+    "status": "PARTIAL PASS",
+    "singleLatestTauriInstance": true,
+    "isolatedLibrary": "src-tauri/.codex-tmp/dev017-r1-native-isolated/library",
+    "officialAuthentication": {
+      "status": "PASS",
+      "completedByUser": true,
+      "credentialsOrSessionMaterialCaptured": false,
+      "sessionCleared": false
+    },
+    "englishMatrix": {
+      "query": "machine learning",
+      "target": 100,
+      "recordTypes": [
+        "journal",
+        "conference"
+      ],
+      "yearRange": {
+        "from": 2020,
+        "to": 2025
+      },
+      "results": 3,
+      "pagesScanned": 2,
+      "supplierCoverage": 4,
+      "receivedCandidates": 6,
+      "examinedCandidates": 16,
+      "targetReached": false,
+      "hasMore": false,
+      "totalHits": null,
+      "completionReason": "source-exhausted",
+      "completionCode": "SIDERA_RESEARCH_SEARCH_SOURCE_EXHAUSTED",
+      "adapter": "whu-academic-discovery-v1-dom-fallback",
+      "transport": "experimental hidden-web extraction",
+      "protocolCandidate": "structured interface"
+    },
+    "providers": {
+      "Crossref": "2/8",
+      "ScienceDirect": "2/2",
+      "SwePub": "0/2",
+      "PubMed": "2/4"
+    },
+    "visibleResults": [
+      {
+        "title": "Resilient Machine Learning for Networked Cyber Physical Systems: A Survey for Machine Learning Security to Securing Machine Learning for CPS",
+        "provider": "Crossref",
+        "year": 2021,
+        "recordType": "journal"
+      },
+      {
+        "title": "Machine learning for combinatorial optimization: A methodological tour d’horizon",
+        "provider": "ScienceDirect",
+        "year": 2021,
+        "recordType": "journal"
+      },
+      {
+        "title": "Machine Learning for Surgical Phase Recognition: A Systematic Review",
+        "provider": "PubMed",
+        "year": 2021,
+        "recordType": "journal"
+      }
+    ],
+    "localInteraction": {
+      "selectionRetained": 1,
+      "pageSize": 10,
+      "crossPageSelection": "UNVERIFIED; the real result set has one local page",
+      "sortInvokeCount": "AUTOMATED PASS; zero search IPC by source audit",
+      "sortNativeRetest": "UNVERIFIED; Computer Use rejected the dropdown option click because the WebView child HWND did not match the Tauri parent target. No unsafe retry was used. The 2026-08-27 R4 native sort PASS remains historical evidence."
+    },
+    "visibleDesktop": {
+      "normalWindowFirstResultVisible": true,
+      "maximizedWindowFirstResultVisible": true,
+      "institutionBrowserHidden": true,
+      "mainWindowClickable": true,
+      "visibleSideraTopLevelWindows": 1,
+      "cmdOrOrphanAuthWindows": 0
+    },
+    "correction": "The same three filtered results now terminate after two observed pages with hasMore=false/source-exhausted instead of reporting twenty scanned pages with hasMore=null/page-limit.",
+    "boundedReason": "The real source returned only three filtered candidates. The 100-result target, a visible conference result, cross-page selection, and the complete observed/synthesized matrix therefore remain unverified."
+  },
+  "safety": {
+    "realPaperLibraryAccessed": false,
+    "realPaperLibraryWrites": 0,
+    "v20Rebuilds": 0,
+    "providerCalls": 0,
+    "fullTextDownloads": 0,
+    "otherProcessesAffected": false,
+    "staged": false,
+    "committed": false,
+    "pushed": false,
+    "published": false
+  },
+  "boundaries": {
+    "p1": "PARTIAL / ADAPTER DEFERRED",
+    "next": "Implement or validate the stronger structured-interface adapter, then repeat a result-rich cross-page matrix without manufacturing remote totals.",
+    "wosConnector": "NOT IMPLEMENTED; P6",
+    "cnkiConnector": "NOT IMPLEMENTED; P6",
+    "scopusConnector": "NOT IMPLEMENTED; P6"
+  }
+}

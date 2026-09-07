@@ -1,0 +1,53 @@
+{
+  "package": "Sidera-012-R2",
+  "development": "开发 012-R2 / 冷启动真实动态首帧闭环",
+  "date": "2026-08-06",
+  "status": "IMPLEMENTED",
+  "automatedTechnical": "PASS",
+  "nativeStartup": "UNVERIFIED",
+  "nativeCompletionGate": "NATIVE STARTUP PASS",
+  "supersedes": "开发 012-R1 / PRODUCT FAIL",
+  "invariant": "The application startup gate may become ready only after the selected dynamic WebGL background has initialized and submitted one real error-free frame.",
+  "removedBehavior": [
+    "No automatic eight-second promotion from mounting-agent to ready.",
+    "No automatic switch to the static background when the dynamic background is still pending.",
+    "No requestAnimationFrame dependency before the background payload can mount.",
+    "Runtime quality diagnostics no longer own the root startup lifecycle."
+  ],
+  "implementation": {
+    "payloadMount": "A macrotask releases the previous renderer before mounting the next background; cold-window requestAnimationFrame scheduling is not used as a prerequisite.",
+    "immersiveBackground": "Initialization ends with a synchronous renderer.render call; an exactly-once ready callback follows only after that render succeeds.",
+    "theoryBackground": "The runtime gate is followed by a synchronous first render and WebGL error drain; onFirstFrame is the startup-ready signal.",
+    "errorPath": "Initialization and first-frame errors enter the explicit failed state. Errors after the first successful frame remain runtime errors and cannot roll startup back.",
+    "staticBackground": "Available only as an explicit user diagnostic choice and never counted as a normal startup pass."
+  },
+  "automatedValidation": [
+    "node_modules/.bin/tsc.CMD -b",
+    "node_modules/.bin/vite.CMD build",
+    "node scripts/sidera_desktop_shell_audit.mjs",
+    "node scripts/project_documentation_audit.mjs",
+    "git -c safe.directory=* diff --check"
+  ],
+  "automatedResults": {
+    "typescript": "PASS",
+    "vite": "PASS; Vite 6.4.3; 1919 modules",
+    "desktopShellAudit": "PASS; 16 checks",
+    "documentationAudit": "PASS",
+    "diffCheck": "PASS; existing LF to CRLF warnings only",
+    "rust": "NOT REQUIRED; frontend startup lifecycle change only"
+  },
+  "automatedSafety": {
+    "institutionNetworkRequests": 0,
+    "providerCalls": 0,
+    "mainLibraryWrites": 0,
+    "fullTextDownloads": 0,
+    "hotspotRebuilds": 0
+  },
+  "nativeUnverified": [
+    "Cold-start the unique latest visible Tauri desktop build without selecting the static diagnostic background.",
+    "Verify the splash exits only after the selected dynamic background is visibly rendering.",
+    "Verify both immersive and theory backgrounds complete the same cold-start contract.",
+    "Verify an induced initialization failure produces the explicit startup error state instead of entering the application.",
+    "Repeat cold start in normal and maximized windows and confirm no indefinite splash, static substitution, or duplicate renderer."
+  ]
+}
