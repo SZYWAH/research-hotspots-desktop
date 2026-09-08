@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "date": "2026-09-08",
-  "workPackage": "beta.3-installed-startup-compatibility",
-  "installedBuild": {
+  "workPackage": "beta.3-installed-startup-compatibility-and-delivery",
+  "initialInstalledBuild": {
     "version": "0.22.0-beta.3",
     "sourceCommit": "19dfb4e23baff2b6b845c736b1dff45d71027798",
     "installerSha256": "17d425079fd60b86044ac3fa6e9f9a202b8a2b8c010fed9cba7d9d5bf1772c3c",
@@ -25,21 +25,73 @@
     "inferenceBoundary": "The exact external library path was not read from browser storage. The installed seed was validated read-only, and the backend can emit this stable code only after opening the configured library and finding no accepted visual source."
   },
   "change": {
+    "sourceCommit": "af57d1d4c7ab526f66fd4e6bad7387debb728768",
     "scope": "frontend startup state machine only",
     "behavior": "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING automatically selects the existing static background and emits a bounded informational notice. Payload deadlines, mount timeouts, invalid active snapshots, revision mismatches, database errors and all other failures remain terminal.",
     "libraryMutation": false,
     "settingsMutation": false,
     "cookieOrCredentialAccess": false
   },
+  "correctedFullDemo": {
+    "version": "0.22.0-beta.3",
+    "sourceCommit": "af57d1d4c7ab526f66fd4e6bad7387debb728768",
+    "sourceDirty": false,
+    "installerPath": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\release\\windows\\rebuild-af57d1d\\0.22.0-beta.3\\Research-Hotspots-Desktop_0.22.0-beta.3_x64-full-setup.exe",
+    "installerSizeBytes": 496124036,
+    "installerSha256": "DC052BF28E5A6F8E1CB1A587649855B4780A61C1F58E5E36D356A825D3502A02",
+    "installerAudit": "PASS_ALL_SHA256SUMS_AND_BUILD_METADATA",
+    "installDirectory": "D:\\wenjian\\Desktop\\Sidera",
+    "installedExecutablePath": "D:\\wenjian\\Desktop\\Sidera\\research-hotspots-desktop.exe",
+    "installedExecutableSizeBytes": 54973952,
+    "installedExecutableSha256": "21F9E00F175352F7FAF2884D71A3D1F262334738F8E112264ADC295061F7C781"
+  },
+  "installedNativeAcceptance": {
+    "developmentServerRunning": false,
+    "startup": {
+      "status": "PASS",
+      "observation": "The installed application opened the main Sidera UI while the selected external library reported no V20 snapshot. The existing static background was used and AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING did not block startup."
+    },
+    "normalExit": {
+      "status": "PASS",
+      "method": "normal Alt+F4 window close",
+      "processAbsentAfterClose": true,
+      "forcedTermination": false
+    },
+    "institutionSilentRestore": {
+      "status": "PARTIAL PASS_LIMITATION",
+      "trigger": "first entry into literature-workbench institution resources",
+      "startingStateObserved": true,
+      "automaticAuthenticationWindowOpened": false,
+      "capabilities": {
+        "database": "login-required",
+        "discovery": "ready",
+        "personalLibrary": "login-required"
+      },
+      "interpretation": "Silent restoration and capability truth are working, but the current official database and personal-library sessions are no longer valid. Unified discovery availability does not prove those two authenticated capabilities.",
+      "manualAuthenticationPerformed": false
+    },
+    "structuredMultiPageSearch": {
+      "status": "UNVERIFIED_INSTALLED_BUILD_OFFICIAL_DATABASE_AUTH_REQUIRED",
+      "historicalDevelopmentBuildEvidence": "sidera-014-r6-structured-pagination-2026-09-01.json",
+      "reason": "The installed-build short acceptance did not repeat official authentication or blind login attempts. Earlier R6 native multi-page evidence remains valid for the feature, but is not relabeled as installed-build acceptance."
+    },
+    "computerControlLaunchCaveat": {
+      "status": "RECORDED",
+      "observation": "The computer-control app registry once resolved the generic Sidera application identity to an older beta.1 installation under D:\\wenjian\\Desktop\\Research Hotspots Desktop. That window was closed and was excluded from acceptance.",
+      "requiredLaunchMethod": "Use the exact installed executable path D:\\wenjian\\Desktop\\Sidera\\research-hotspots-desktop.exe."
+    }
+  },
   "gates": {
     "dynamicStartupAudit": "PASS_15_OF_15",
     "desktopShellAudit": "PASS_16_OF_16",
     "frontendProductionBuild": "PASS_1929_MODULES",
     "diffCheck": "PASS",
-    "patchedInstalledNativeStartup": "UNVERIFIED_PENDING_REBUILD",
-    "replacementInstallerAudit": "UNVERIFIED_PENDING_REBUILD",
-    "normalExitAfterReplacement": "UNVERIFIED_PENDING_REBUILD"
+    "replacementInstallerAudit": "PASS",
+    "patchedInstalledNativeStartup": "PASS",
+    "normalExitAfterReplacement": "PASS",
+    "installedInstitutionSilentRestore": "PARTIAL PASS_LIMITATION",
+    "installedStructuredMultiPageSearch": "UNVERIFIED_OFFICIAL_AUTH_REQUIRED"
   },
-  "privacy": "No Cookie, credential, ticket, account field, raw institutional page, or browser-storage value was read, copied, logged or persisted.",
-  "nextGate": "Commit the scoped compatibility change, rebuild Full Demo from that clean commit, audit it, install over the explicit test installation and verify non-blocking startup plus normal exit."
+  "privacy": "No Cookie, credential, ticket, account field, raw institutional page, browser-storage value or user paper body was read, copied, logged or persisted.",
+  "deliveryConclusion": "The corrected beta.3 Full Demo is independently installable, starts without a V20 visual source and exits normally. Cross-restart institutional sign-in is not guaranteed; database and personal-library access currently require official manual authentication."
 }

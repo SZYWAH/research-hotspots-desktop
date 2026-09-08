@@ -1,10 +1,12 @@
 # 科研 Agent 当前状态
 
-## 2026-09-08 beta.3 安装版启动兼容修复（优先于下方历史结论）
+## 2026-09-08 beta.3 安装版交付结果（优先于下方历史结论）
 
 提交 `19dfb4e23baff2b6b845c736b1dff45d71027798` 构建的 beta.3 Full Demo 已通过安装并成功启动 EXE，但在沿用旧 IndexedDB 设置时停在 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。这不是安装目录错误：安装目录中的 schema 13 默认库经只读核对包含 25,463 篇论文、1 个 ready V20 快照及正确 active 指针。根因是稳定应用标识复用了此前选择的外部论文库，而该库没有后端可接受的 active 或 historical V20 视觉源。
 
-当前窄修只对该稳定缺源码自动使用现有静态背景并显示限时说明，不修改论文库、设置、Cookie 或凭据；载荷/挂载超时、数据库错误、损坏快照与 revision 不一致仍为终止错误。动态启动 15/15、桌面壳 16/16、前端生产构建 1,929 modules 与差异检查已通过。旧安装包的安装版启动为 `FAIL`，修正源码为 `AUTOMATED TECHNICAL PASS / PATCHED INSTALLED NATIVE UNVERIFIED`；必须从修正提交重新构建、审计并安装复验后才能恢复交付结论。
+当前窄修只对该稳定缺源码自动使用现有静态背景并显示限时说明，不修改论文库、设置、Cookie 或凭据；载荷/挂载超时、数据库错误、损坏快照与 revision 不一致仍为终止错误。动态启动 15/15、桌面壳 16/16、前端生产构建 1,929 modules 与差异检查已通过。修正提交为 `af57d1d4c7ab526f66fd4e6bad7387debb728768`；由其干净构建的 Full Demo 已完成校验和审计，并在 `D:\\wenjian\\Desktop\\Sidera` 完成独立启动和正常退出，状态为 `AUTOMATED TECHNICAL PASS / INSTALLER AUDIT PASS / INSTALLED NATIVE STARTUP PASS / NORMAL EXIT PASS`。
+
+安装版 R7 首次进入机构资源时先静默确认，没有自动打开认证窗；最终为数据库 `login-required`、统一发现 `ready`、个人图书馆 `login-required`。这证明能力分类和静默生命周期有效，但不证明完整会话持久化，故为 `PARTIAL PASS / LIMITATION`。本次遵循边界未重复认证，安装版结构化多页检索为 `UNVERIFIED_OFFICIAL_AUTH_REQUIRED`；开发版 R6 多页原生证据保持独立有效。
 
 证据：[beta.3 安装启动兼容](./evidence/sidera-beta3-installed-startup-compatibility-2026-09-08.json)。
 
@@ -14,7 +16,7 @@
 
 证据：[本轮分门记录](./evidence/sidera-beta3-exit-delivery-2026-09-07.json)。
 
-更新时间：2026-09-05
+更新时间：2026-09-08
 
 当前分支：`codex/sidera-m2-rag`
 

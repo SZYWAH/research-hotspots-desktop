@@ -2,7 +2,9 @@
 
 ## 2026-09-08 beta.3 安装启动停止门
 
-beta.3 Full Demo 的安装目录与内置默认库已验证完整；实际阻断来自稳定应用标识沿用旧设置后打开了一个没有 V20 视觉源的外部论文库。产品不得因装饰性视觉源缺失阻断本地论文工作台，也不得擅自切换、覆盖或重建用户论文库。当前只允许对 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 自动进入静态背景；其他动态启动或数据一致性错误继续明确失败。修正安装包完成独立启动与正常退出前，beta.3 安装版交付保持 `FAIL / REBUILD REQUIRED`。
+beta.3 Full Demo 的安装目录与内置默认库已验证完整；实际阻断来自稳定应用标识沿用旧设置后打开了一个没有 V20 视觉源的外部论文库。产品不得因装饰性视觉源缺失阻断本地论文工作台，也不得擅自切换、覆盖或重建用户论文库。提交 `af57d1d4c7ab526f66fd4e6bad7387debb728768` 只允许对 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 自动进入静态背景；其他动态启动或数据一致性错误继续明确失败。由该干净提交构建的 beta.3 Full Demo 已在开发服务器关闭时完成安装版启动和正常退出，状态更新为 `INSTALLED NATIVE STARTUP PASS / NORMAL EXIT PASS`。
+
+同一安装版首次进入机构资源时完成静默确认且没有自动认证弹窗；最终能力为数据库 `login-required`、统一发现 `ready`、个人图书馆 `login-required`。因此 R7 记为 `PARTIAL PASS / OFFICIAL AUTHENTICATION LIMITATION`，不承诺跨重启免登录或永久登录；本次未重复官方认证，安装版结构化多页检索保持 `UNVERIFIED`，不挪用旧开发版证据冒充通过。
 
 证据：[beta.3 安装启动兼容](./evidence/sidera-beta3-installed-startup-compatibility-2026-09-08.json)。
 
@@ -14,7 +16,7 @@ beta.3 Full Demo 的安装目录与内置默认库已验证完整；实际阻断
 
 状态：权威事实入口
 
-更新时间：2026-09-05
+更新时间：2026-09-08
 
 ## 当前交付线：开发 014-R6 已完成，开发 014-R7 已完成静默恢复与登录失效真值修复；完整有效会话跨重启仍待复验；开发 017、016、015 已收口
 

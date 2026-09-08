@@ -1,10 +1,12 @@
 # 科研 Agent 开发总账
 
-## 2026-09-08 beta.3 安装启动兼容
+## 2026-09-08 beta.3 安装启动兼容与交付
 
 用户安装并启动提交 `19dfb4e` 的 Full Demo 后，EXE 可响应但启动页显示 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。只读检查证明 `D:\\wenjian\\Desktop\\Sidera` 中的内置 schema 13 默认库包含 25,463 篇论文、1 个 ready V20 快照及正确 active 指针；安装目录无误。稳定 identifier 复用了旧 IndexedDB 设置，实际选择的旧外部论文库没有可接受视觉源。未读取浏览器存储中的具体路径、Cookie、账号或凭据。
 
-窄修改为：只有稳定缺源码自动选择已有静态背景并给出 8 秒信息通知；不改库、不改设置、不建模。动态启动审计 15/15、桌面壳 16/16、`pnpm build` 1,929 modules 与 `git diff --check` 通过。旧安装包原生启动记录为 `FAIL`，修正安装版仍为 `UNVERIFIED`，下一步必须提交后干净重建、审计并安装复验。根 Tauri 测试宿主继续禁止运行。
+窄修改为：只有稳定缺源码自动选择已有静态背景并给出 8 秒信息通知；不改库、不改设置、不建模。动态启动审计 15/15、桌面壳 16/16、`pnpm build` 1,929 modules 与 `git diff --check` 通过。修正已提交为 `af57d1d`，从该干净提交构建的 Full Demo 安装包为 `release/windows/rebuild-af57d1d/0.22.0-beta.3/Research-Hotspots-Desktop_0.22.0-beta.3_x64-full-setup.exe`，SHA-256 为 `DC052BF28E5A6F8E1CB1A587649855B4780A61C1F58E5E36D356A825D3502A02`。安装到 `D:\\wenjian\\Desktop\\Sidera` 后，在开发服务器关闭时可进入主界面；所选旧外部库显示 V20 不可用但静态背景正常接管，随后正常关闭且对应进程释放，安装版启动和退出均为 `PASS`。
+
+安装版进入机构资源时先静默恢复且没有自动认证弹窗，最终能力为数据库 `login-required`、统一发现 `ready`、个人图书馆 `login-required`。一次电脑操控的通用应用身份误启动旧 beta.1，已立即关闭且不计验收；正确安装版只从精确路径 `D:\\wenjian\\Desktop\\Sidera\\research-hotspots-desktop.exe` 启动。随后手工“连接机构”窗口被测试操作误触打开，未填写凭据并立即关闭；没有继续盲目认证。安装版多页检索因此保持 `UNVERIFIED_OFFICIAL_AUTH_REQUIRED`，根 Tauri 测试宿主继续禁止运行。
 
 证据：[beta.3 安装启动兼容](./evidence/sidera-beta3-installed-startup-compatibility-2026-09-08.json)。
 
@@ -16,7 +18,7 @@
 
 状态：权威开发过程入口
 
-更新时间：2026-09-05
+更新时间：2026-09-08
 
 ## 文档职责
 
