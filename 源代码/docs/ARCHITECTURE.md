@@ -1,5 +1,9 @@
 # 科研 Agent 架构
 
+## beta.4 Agent 背景库身份与代次
+
+Agent 背景的运行时所有权为 `normalize(databaseDir) + projectId + epoch`。`databaseDir` 只为身份比较进行大小写、斜杠和尾部分隔符规范化，不改写持久设置。设置事务完成校验、准备、持久化和数据刷新后才推进 epoch；推进会清除上一库产生的静态缺源锁存并重挂载背景。首帧和初始化错误回调捕获创建时 epoch，只有等于根组件当前 epoch 才能改变启动或静态降级状态。该层不读取视觉正文、不改 V20、不运行分析，也不改变对外 IPC。
+
 ## 2026-09-08 无 V20 视觉源的安装启动兼容
 
 稳定 Tauri identifier 会让安装版与此前开发版共享 IndexedDB 设置；因此 Full Demo 即使携带有效默认库，也可能继续打开用户此前选择的外部论文库。若该库不存在 `select_immersive_background_visual_source` 可接受的 active 或 ready historical V20，后端返回 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。前端启动状态机仅把这一稳定“能力缺失”码映射到已有静态背景，并在静态层提交 ready 后正常退出启动页；它不改写数据库目录，不复制默认库，不运行建模，也不把静态背景算作动态 WebGL 首帧。

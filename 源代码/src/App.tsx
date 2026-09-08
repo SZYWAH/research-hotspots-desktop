@@ -92,6 +92,13 @@ import type {
 } from "./lib/documentReaderContract";
 import { createDesktopDocumentReaderComposition } from "./lib/documentReaderDesktopService";
 import { readAgentVisualReviewScenario } from "./lib/agentVisualReview";
+import {
+  agentBackgroundLibraryIdentity,
+  agentBackgroundMountKey,
+  isCurrentAgentBackgroundEpoch,
+  transitionAgentBackgroundLibrary,
+  type AgentBackgroundLibraryLifecycle,
+} from "./lib/agentBackgroundLifecycle";
 import type {
   SideraNavigationLayout,
   SideraPipelineSpatialState,
@@ -845,6 +852,10 @@ export default function App() {
   const sideraAgentStartupSettledRef = useRef(bypassSideraBoot);
   const sideraAgentFirstFrameReadyRef = useRef(bypassSideraBoot);
   const sideraMissingVisualFallbackStartedRef = useRef(false);
+  const agentBackgroundLifecycleRef = useRef<AgentBackgroundLibraryLifecycle>({
+    identity: "",
+    epoch: 0,
+  });
   const edgeNavigationTimerRef = useRef<number | null>(null);
   const edgeNavigationCloseTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -887,6 +898,18 @@ export default function App() {
   const piDatabaseDir = libraryStatus?.databaseDir.trim()
     || settings?.databaseDir.trim()
     || "";
+
+  useEffect(() => {
+    if (
+      !settings
+      || !activeProject
+      || agentBackgroundLifecycleRef.current.identity
+    ) return;
+    agentBackgroundLifecycleRef.current = {
+      ...agentBackgroundLifecycleRef.current,
+      identity: agentBackgroundLibraryIdentity(settings.databaseDir, activeProject.id),
+    };
+  }, [activeProject, settings]);
 
   const showNotice = useCallback<AppNoticeHandler>((message, kind = "info", options) => {
     if (
@@ -2234,7 +2257,11 @@ export default function App() {
     };
   }, [agentNavigationOpen, closeAgentNavigation, openAgentNavigation]);
 
-  const handleAgentInitialReady = useCallback(() => {
+  const handleAgentInitialReady = useCallback((lifecycleEpoch: number) => {
+    if (!isCurrentAgentBackgroundEpoch(
+      lifecycleEpoch,
+      agentBackgroundLifecycleRef.current.epoch,
+    )) return;
     if (bypassSideraBoot || sideraAgentStartupSettledRef.current) return;
     sideraAgentStartupSettledRef.current = true;
     sideraAgentFirstFrameReadyRef.current = true;
@@ -2243,12 +2270,11 @@ export default function App() {
     ));
   }, [bypassSideraBoot]);
 
-  const handleAgentInitialError = useCallback((message: string) => {
-    if (
-      !sideraSplashMountedRef.current
-      || bypassSideraBoot
-      || sideraAgentStartupSettledRef.current
-    ) return;
+  const handleAgentInitialError = useCallback((lifecycleEpoch: number, message: string) => {
+    if (!isCurrentAgentBackgroundEpoch(
+      lifecycleEpoch,
+      agentBackgroundLifecycleRef.current.epoch,
+    )) return;
     if (
       isMissingImmersiveVisualSource(message)
       && !sideraMissingVisualFallbackStartedRef.current
@@ -2258,7 +2284,9 @@ export default function App() {
       setSideraStaticBackground(true);
       setSideraStaticFallbackAllowed(false);
       setSideraBootError("");
-      setSideraBootPhase("mounting-agent");
+      if (sideraSplashMountedRef.current && !bypassSideraBoot) {
+        setSideraBootPhase("mounting-agent");
+      }
       showNotice(
         "当前论文库尚未生成可用动态星图，已使用静态背景进入应用。",
         "info",
@@ -2266,11 +2294,40 @@ export default function App() {
       );
       return;
     }
+    if (
+      !sideraSplashMountedRef.current
+      || bypassSideraBoot
+      || sideraAgentStartupSettledRef.current
+    ) return;
     sideraAgentStartupSettledRef.current = true;
     setSideraBootError(message);
     setSideraStaticFallbackAllowed(true);
     setSideraBootPhase("failed");
   }, [bypassSideraBoot, showNotice]);
+
+  const agentInitialCallbacks = useMemo(() => {
+    const lifecycleEpoch = agentMountRevision;
+    return {
+      ready: () => handleAgentInitialReady(lifecycleEpoch),
+      error: (message: string) => handleAgentInitialError(lifecycleEpoch, message),
+    };
+  }, [agentMountRevision, handleAgentInitialError, handleAgentInitialReady]);
+
+  const advanceAgentBackgroundLibrary = useCallback((databaseDir: string, projectId: string) => {
+    const transition = transitionAgentBackgroundLibrary(
+      agentBackgroundLifecycleRef.current,
+      databaseDir,
+      projectId,
+    );
+    if (!transition.changed) return false;
+    agentBackgroundLifecycleRef.current = transition.current;
+    sideraMissingVisualFallbackStartedRef.current = false;
+    setSideraStaticBackground(false);
+    setSideraStaticFallbackAllowed(false);
+    setSideraBootError("");
+    setAgentMountRevision(transition.current.epoch);
+    return true;
+  }, []);
 
   const retrySideraBoot = () => {
     sideraBootStartedAtRef.current = performance.now();
@@ -2284,7 +2341,12 @@ export default function App() {
     setSideraStaticBackground(false);
     setSideraStaticFallbackAllowed(false);
     setSideraBootPhase("booting-data");
-    setAgentMountRevision((value) => value + 1);
+    const nextEpoch = agentBackgroundLifecycleRef.current.epoch + 1;
+    agentBackgroundLifecycleRef.current = {
+      ...agentBackgroundLifecycleRef.current,
+      epoch: nextEpoch,
+    };
+    setAgentMountRevision(nextEpoch);
     setSideraBootRevision((value) => value + 1);
   };
 
@@ -2600,7 +2662,11 @@ export default function App() {
             aria-hidden={activeView !== "agent"}
           >
             <AgentDualBackgroundPage
-              key={`agent-shell-${agentMountRevision}`}
+              key={agentBackgroundMountKey(
+                settings.databaseDir,
+                activeProject.id,
+                agentMountRevision,
+              )}
               settings={settings}
               activeProject={activeProject}
               hotspots={hotspots}
@@ -2626,8 +2692,8 @@ export default function App() {
               onDecideToolApproval={(decision) => void decidePiToolApproval(decision)}
               onStopGeneration={stopSideraGeneration}
               onOpenSettings={() => setActiveView("settings")}
-              onInitialReady={handleAgentInitialReady}
-              onInitialError={handleAgentInitialError}
+              onInitialReady={agentInitialCallbacks.ready}
+              onInitialError={agentInitialCallbacks.error}
               forceStaticBackground={sideraStaticBackground}
               onOpenPaperDetail={(paperId, title) => {
                 setSearchFocusIntent({ query: title || "", paperId, timestamp: Date.now() });
@@ -2811,13 +2877,24 @@ export default function App() {
   );
 
   async function saveSettings(next: AiSettings) {
+    const currentLibraryIdentity = settings && activeProject
+      ? agentBackgroundLibraryIdentity(settings.databaseDir, activeProject.id)
+      : "";
+    const nextLibraryIdentity = activeProject
+      ? agentBackgroundLibraryIdentity(next.databaseDir, activeProject.id)
+      : "";
+    const changesLibrary = Boolean(
+      settings
+      && activeProject
+      && currentLibraryIdentity !== nextLibraryIdentity,
+    );
     const changesPiSession = Boolean(settings && (
       next.provider !== settings.provider
       || next.baseUrl.trim() !== settings.baseUrl.trim()
       || next.model.trim() !== settings.model.trim()
       || next.useEnvKey !== settings.useEnvKey
       || next.sideraCacheRetention !== settings.sideraCacheRetention
-      || next.databaseDir.trim() !== settings.databaseDir.trim()
+      || changesLibrary
     ));
     if (changesPiSession && !await preparePiConversationChange("修改 Agent 配置")) {
       showNotice("已保留当前 Agent 回答，设置未保存。", "info");
@@ -2838,7 +2915,7 @@ export default function App() {
         mysql: { ...next.mysql, password: "", credentialConfigured: mysqlCredentialConfigured },
       };
     }
-    if (settings && next.databaseDir.trim() !== settings.databaseDir.trim()) {
+    if (settings && changesLibrary) {
       const nextDir = next.databaseDir.trim();
       if (!nextDir) throw new Error("SQLite 论文库目录不能为空。");
       const useExisting = await validateLibraryLocation(nextDir, "existing");
@@ -2870,6 +2947,9 @@ export default function App() {
     }
     await saveAiSettings(effectiveSettings);
     await refreshAll();
+    if (changesLibrary && activeProject) {
+      advanceAgentBackgroundLibrary(effectiveSettings.databaseDir, activeProject.id);
+    }
     showNotice("设置已保存。", "success");
   }
 

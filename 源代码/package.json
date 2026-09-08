@@ -1,7 +1,7 @@
 {
   "name": "research-hotspots-desktop",
   "private": true,
-  "version": "0.22.0-beta.3",
+  "version": "0.22.0-beta.4",
   "type": "module",
   "scripts": {
     "prepare:semantic-model": "node scripts/prepare_semantic_embedding_model.mjs",
@@ -47,6 +47,7 @@
     "audit:sidera-desktop-shell": "node scripts/sidera_desktop_shell_audit.mjs",
     "audit:sidera-dynamic-startup-r3": "node scripts/sidera_dynamic_startup_r3_audit.mjs",
     "audit:sidera-agent-theory-availability-r1": "node scripts/sidera_agent_theory_availability_r1_audit.mjs",
+    "audit:sidera-agent-library-switch-r1": "node --experimental-strip-types scripts/sidera_agent_library_switch_r1_audit.mjs",
     "audit:sidera-unified-shell": "node scripts/sidera_unified_shell_audit.mjs",
     "audit:sidera-background-ownership": "node scripts/sidera_background_ownership_audit.mjs",
     "audit:sidera-workbench-surfaces": "node scripts/sidera_workbench_surfaces_audit.mjs",

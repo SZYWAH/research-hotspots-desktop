@@ -24,7 +24,7 @@ if (existsSync(manifestPath)) {
     database.close();
     checks.releaseDatabaseSchema11 = version === 11;
     checks.releaseHasNoAgentHistory = runtimeRows === 0;
-  } else if (["0.22.0-beta.2", "0.22.0-beta.3"].includes(manifest.appVersion)) {
+  } else if (["0.22.0-beta.2", "0.22.0-beta.3", "0.22.0-beta.4"].includes(manifest.appVersion)) {
     checks.releaseManifestSchema13 = manifest.manifestSchemaVersion === 5
       && manifest.generatorVersion === "semantic-seed-5"
       && manifest.databaseSchemaVersion === 13;

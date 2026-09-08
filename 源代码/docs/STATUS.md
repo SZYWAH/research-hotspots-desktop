@@ -1,5 +1,19 @@
 # 科研 Agent 当前状态
 
+## 2026-09-08 beta.4 星图热切换窄修（自动门通过，原生门待验）
+
+已实现论文库背景代次：首次加载只建立身份基线；实际切库必须在设置保存和 `refreshAll()` 成功后才清除 `sideraStaticBackground`、复位缺源标记并递增 Agent 挂载 epoch。React key 同时包含规范化数据库目录、项目和 epoch，回调闭包携带 epoch，旧库迟到回调不能污染新实例。Windows 路径的大小写、斜杠和尾部分隔符会规范化，因此同目录重复保存不会误重挂载。新库缺源仍进入明确静态兼容背景，用户的沉浸/理论偏好保持不变。
+
+自动证据：生命周期 8/8、动态启动 15/15、双背景载荷 `PASS`、R6 16 项、R7 26 项、机构检索 Core 23/23、机构浏览 Core 14/14、生产前端 1,930 modules、两个 Cargo check 均 `PASS`。版本已对齐为 `0.22.0-beta.4`。严格状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE HOT-SWITCH UNVERIFIED / INSTALLER UNVERIFIED`。
+
+## 2026-09-08 beta.3 运行中切库后星图保持静态（已确认缺陷）
+
+用户在同一安装版进程内将一条论文的测试库切换为 Full Demo 工作副本后，论文列表立即恢复为 25,463 篇，但 Agent 的沉浸星图和理论星图均未挂载；正常退出并从精确 beta.3 EXE 路径重新启动后，两种星图恢复正常。只读数据库核验确认新库为 schema 14、library revision 0，包含 1 个 `ready` 且 active 的 V20 快照、160 个热点和 25,463 条 membership，因此不是论文导入、默认库或 V20 数据缺失。
+
+根因已定位为当前进程的静态降级状态锁存：旧测试库在冷启动时触发 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 后，根组件将 `sideraStaticBackground` 设为 `true`；设置页随后切换 `databaseDir` 只保存并刷新数据，没有清除该状态或重新挂载 Agent 背景，`forceStaticBackground` 因而继续阻止两种动态背景。该代码缺口已由 beta.4 窄修覆盖，当前结论为 `NATIVE REPRODUCED / RESTART WORKAROUND PASS / CODE FIX AUTOMATED PASS / NATIVE RETEST PENDING`。修复不修改数据库、快照或用户背景偏好。
+
+证据：[运行中切库背景重挂载缺陷](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
+
 ## 2026-09-08 beta.3 安装版交付结果（优先于下方历史结论）
 
 提交 `19dfb4e23baff2b6b845c736b1dff45d71027798` 构建的 beta.3 Full Demo 已通过安装并成功启动 EXE，但在沿用旧 IndexedDB 设置时停在 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。这不是安装目录错误：安装目录中的 schema 13 默认库经只读核对包含 25,463 篇论文、1 个 ready V20 快照及正确 active 指针。根因是稳定应用标识复用了此前选择的外部论文库，而该库没有后端可接受的 active 或 historical V20 视觉源。

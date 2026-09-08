@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-08",
+  "scope": "beta.3 installed runtime library switch and Agent background lifecycle",
+  "status": {
+    "nativeReproduction": "PASS",
+    "restartWorkaround": "PASS",
+    "codeFix": "IMPLEMENTED",
+    "automatedTechnical": "PASS",
+    "nativeHotSwitch": "UNVERIFIED",
+    "beta4Package": "NOT_BUILT"
+  },
+  "observedSequence": [
+    "The installed beta.3 process started while the persisted database directory still selected a one-paper fixture library.",
+    "Cold-start visual-source acquisition failed for that fixture and the process entered the explicit static-background fallback.",
+    "The database directory was changed in Settings to D:\\wenjian\\Desktop\\Sidera-Data\\library while the same process remained alive.",
+    "The paper workspace refreshed to 25,463 papers, but neither immersive nor theory Agent background mounted.",
+    "After a normal process restart from D:\\wenjian\\Desktop\\Sidera\\research-hotspots-desktop.exe, both backgrounds returned."
+  ],
+  "readOnlyDatabaseEvidence": {
+    "databaseSchemaVersion": 14,
+    "paperCount": 25463,
+    "projectId": "project-default",
+    "libraryRevision": 0,
+    "activeSnapshotCount": 1,
+    "snapshotStatus": "ready",
+    "snapshotPaperCount": 25463,
+    "hotspotCount": 160,
+    "membershipCount": 25463
+  },
+  "rootCause": {
+    "classification": "in-process UI lifecycle state latch",
+    "detail": "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING sets sideraStaticBackground=true. A later successful databaseDir change saves settings and refreshes data but does not clear the prior static fallback or remount the Agent background. forceStaticBackground therefore continues to suppress both background modes until process restart.",
+    "excluded": [
+      "installer directory error",
+      "paper import failure",
+      "missing V20 snapshot",
+      "missing hotspot memberships"
+    ]
+  },
+  "temporaryWorkaround": "Normally exit and relaunch the exact installed beta.3 executable after switching to the complete library.",
+  "requiredNarrowFix": [
+    "After a changed databaseDir is validated and prepared successfully, invalidate callbacks from the previous library identity.",
+    "Clear the previous missing-source static fallback and remount the selected background once against the new library.",
+    "Do not rebuild hotspots, modify snapshots, or overwrite the user's saved background preference.",
+    "Cover missing-source to ready, ready to missing-source, and late-callback isolation."
+  ],
+  "implementedContract": {
+    "identity": "normalized databaseDir + projectId + monotonic epoch",
+    "commitBoundary": "validate, prepare, save settings, refresh all, then advance background lifecycle",
+    "lateCallbackRule": "only callbacks whose captured epoch equals the current root epoch may update root startup or fallback state",
+    "sameDirectoryRule": "case, slash, whitespace, and trailing-separator equivalent Windows paths do not remount",
+    "preferenceRule": "the saved immersive or theory preference is not overwritten"
+  },
+  "automatedEvidence": {
+    "librarySwitchAudit": "PASS 8/8",
+    "dynamicStartupAudit": "PASS 15/15",
+    "dualBackgroundAudit": "PASS",
+    "institutionWorkspaceR6Audit": "PASS 16 checks",
+    "institutionSessionR7Audit": "PASS 26 checks",
+    "institutionSearchCore": "PASS 23/23",
+    "institutionBrowserCore": "PASS 14/14",
+    "frontendBuild": "PASS 1930 modules",
+    "cargoCheckTests": "PASS",
+    "cargoCheck": "PASS"
+  },
+  "privacy": "No Cookie, credential, query text, document body, or account data was read or recorded."
+}

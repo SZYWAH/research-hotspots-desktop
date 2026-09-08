@@ -1,5 +1,13 @@
 # 科研 Agent 项目目标
 
+## 2026-09-08 beta.4 星图热切换稳定化
+
+beta.4 只修复运行中切换论文库后的 Agent 背景生命周期，不扩展 M4 功能。新内部契约把背景挂载绑定到规范化的 `databaseDir + projectId + epoch`：只有目录实际变化并依次完成校验、准备、设置保存和全量刷新后，才清除旧库产生的静态降级、递增 epoch 并重挂载；旧 epoch 的首帧或错误回调一律拒绝。同目录保存不重挂载，新库仍缺视觉源时继续如实进入既有静态兼容背景，沉浸/理论偏好不被覆盖。
+
+当前实现已通过换库生命周期 8/8、动态启动 15/15、双背景载荷、R6 16 项、R7 26 项、机构检索 Core 23/23、机构浏览 Core 14/14、`pnpm build` 1,930 modules、`cargo check --tests -j 2` 与 `cargo check -j 2`。状态为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE HOT-SWITCH UNVERIFIED / BETA.4 PACKAGE NOT BUILT`；只有安装版在同一进程完成“缺源库→完整库”且两种星图无需重启恢复，才能提升原生状态。
+
+证据：[beta.4 换库背景生命周期](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
+
 ## 2026-09-08 beta.3 安装启动停止门
 
 beta.3 Full Demo 的安装目录与内置默认库已验证完整；实际阻断来自稳定应用标识沿用旧设置后打开了一个没有 V20 视觉源的外部论文库。产品不得因装饰性视觉源缺失阻断本地论文工作台，也不得擅自切换、覆盖或重建用户论文库。提交 `af57d1d4c7ab526f66fd4e6bad7387debb728768` 只允许对 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 自动进入静态背景；其他动态启动或数据一致性错误继续明确失败。由该干净提交构建的 beta.3 Full Demo 已在开发服务器关闭时完成安装版启动和正常退出，状态更新为 `INSTALLED NATIVE STARTUP PASS / NORMAL EXIT PASS`。

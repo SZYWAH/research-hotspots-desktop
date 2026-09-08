@@ -14,7 +14,7 @@ function declaration(name, next) {
 }
 const functions = declaration("buildInstaller", "verifyInstallerPair")
   + declaration("removeSelectedOutputs", "installerPath");
-const version = "0.22.0-beta.3";
+const version = "0.22.0-beta.4";
 const old = "Research Hotspots Desktop_0.22.0-beta.1_x64-setup.exe";
 const current = `Research Hotspots Desktop_${version}_x64-setup.exe`;
 function fixture(before = {}, after = before, output = []) {
@@ -41,7 +41,7 @@ function fixture(before = {}, after = before, output = []) {
 const stamp = (size, mtimeMs) => ({ size, mtimeMs });
 let count = 0;
 function check(name, run) { run(); count++; console.log(`PASS ${name}`); }
-check("preserve old installer and select fresh beta.3", () => {
+check("preserve old installer and select fresh beta.4", () => {
   const f = fixture({ [old]: stamp(10, 1) }, { [old]: stamp(10, 1), [current]: stamp(20, 2) });
   vm.runInContext('buildInstaller("full", "revision")', f.context);
   assert.equal(f.copies.length, 1);
@@ -56,7 +56,7 @@ check("reject a fresh wrong-version installer", () => {
   const f = fixture({}, { [old]: stamp(10, 3) });
   assert.throws(() => vm.runInContext('buildInstaller("full", "revision")', f.context), /found 0/);
 });
-check("reject ambiguous fresh beta.3 installers", () => {
+check("reject ambiguous fresh beta.4 installers", () => {
   const f = fixture({}, { [current]: stamp(20, 2), [`other_${version}_setup.exe`]: stamp(30, 3) });
   assert.throws(() => vm.runInContext('buildInstaller("full", "revision")', f.context), /found 2/);
   assert.equal(f.copies.length, 0);

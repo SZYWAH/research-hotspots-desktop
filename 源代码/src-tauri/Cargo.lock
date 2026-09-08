@@ -3462,7 +3462,7 @@ dependencies = [
 
 [[package]]
 name = "research-hotspots-core"
-version = "0.22.0-beta.3"
+version = "0.22.0-beta.4"
 dependencies = [
  "csv",
  "fs2",
@@ -3477,7 +3477,7 @@ dependencies = [
 
 [[package]]
 name = "research-hotspots-desktop"
-version = "0.22.0-beta.3"
+version = "0.22.0-beta.4"
 dependencies = [
  "csv",
  "fastembed",

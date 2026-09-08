@@ -10,8 +10,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $ProductName = 'Research Hotspots Desktop'
-$PreviousVersion = '0.22.0-beta.2'
-$CurrentVersion = '0.22.0-beta.3'
+$PreviousVersion = '0.22.0-beta.3'
+$CurrentVersion = '0.22.0-beta.4'
 $PreviousFullInstaller = Join-Path $ReleaseRoot "$PreviousVersion\Research-Hotspots-Desktop_${PreviousVersion}_x64-full-setup.exe"
 $CurrentFullInstaller = Join-Path $ReleaseRoot "$CurrentVersion\Research-Hotspots-Desktop_${CurrentVersion}_x64-full-setup.exe"
 $CurrentLiteInstaller = Join-Path $ReleaseRoot "$CurrentVersion\Research-Hotspots-Desktop_${CurrentVersion}_x64-lite-setup.exe"

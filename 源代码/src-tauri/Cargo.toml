@@ -1,6 +1,6 @@
 [package]
 name = "research-hotspots-desktop"
-version = "0.22.0-beta.3"
+version = "0.22.0-beta.4"
 description = "Local-first research hotspot analysis and scientific literature exploration desktop application"
 authors = ["Research Hotspots Desktop"]
 edition = "2021"

@@ -30,7 +30,7 @@ const outputRoot = process.env.SIDERA_RELEASE_OUTPUT_DIR
 const outputDir = join(outputRoot, version);
 const expected = { papers: 25463, hotspots: 160, memberships: 25463 };
 
-assert(version === "0.22.0-beta.3", `unexpected package version ${version}`);
+assert(version === "0.22.0-beta.4", `unexpected package version ${version}`);
 assert(tauri.version === version, "Tauri/package version mismatch");
 for (const path of ["src-tauri/Cargo.toml", "src-tauri/core/Cargo.toml"]) {
   assert(new RegExp(`^version = "${escapeRegExp(version)}"$`, "m").test(text(path)), `${path} version mismatch`);
@@ -60,8 +60,8 @@ assert(Object.values(liteResources).includes("semantic-model/model.cpu-portable.
 assert(!Object.values(liteResources).includes("semantic-model/model.gpu.onnx"), "Lite config must not contain GPU semantic model");
 assert(!Object.keys(liteResources).some((value) => /default-library|research-hotspots-v7\.sqlite/.test(value)), "Lite config must not contain a default library");
 assert(!Object.values(liteResources).some((value) => value.startsWith("ocr-model/")), "Lite config must not contain OCR resources");
-assert(/\$PreviousVersion\s*=\s*'0\.22\.0-beta\.2'/.test(installSmoke), "install smoke previous version mismatch");
-assert(/\$CurrentVersion\s*=\s*'0\.22\.0-beta\.3'/.test(installSmoke), "install smoke current version mismatch");
+assert(/\$PreviousVersion\s*=\s*'0\.22\.0-beta\.3'/.test(installSmoke), "install smoke previous version mismatch");
+assert(/\$CurrentVersion\s*=\s*'0\.22\.0-beta\.4'/.test(installSmoke), "install smoke current version mismatch");
 assert(/databaseSchemaVersion\s+-eq\s+13/.test(installSmoke), "install smoke must require schema 13");
 assert(!/0\.21\.0-beta\.1|\$(?:Beta1|Beta2|FullBeta1|FullBeta2|LiteBeta2)\b|databaseSchemaVersion\s+-eq\s+(?:8|11|12)/.test(installSmoke), "legacy beta variables, versions, or schema assertions remain in install smoke");
 assert(/src-tauri\\target\\windows-install-smoke/.test(installSmoke), "install smoke work root must stay under src-tauri target");

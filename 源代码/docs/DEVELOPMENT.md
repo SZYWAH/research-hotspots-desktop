@@ -1,5 +1,21 @@
 # 科研 Agent 开发总账
 
+## 2026-09-08 beta.4 星图热切换实现
+
+新增纯内部 `agentBackgroundLifecycle` 契约，规范化 Windows 库目录并以 `databaseDir + projectId + epoch` 生成 Agent 挂载身份。根组件首次载入只登记身份；设置页只有在真实目录变化且新目录校验、数据库准备、设置持久化和 `refreshAll()` 全部成功后，才同步使旧 epoch 失效、清除静态降级和缺源锁存并重挂载一次。初始回调捕获挂载 epoch，旧组件即使在卸载后迟到返回也不能修改新状态；运行中选到缺源库仍允许既有静态兼容背景，模式偏好不被写回。
+
+自动门：换库专项 8/8、012-R3 动态启动 15/15、双背景真实载荷、014-R6 16 项、014-R7 26 项、Core 机构检索 23/23、Core 机构浏览 14/14、`pnpm build` 1,930 modules、`cargo check --tests -j 2` 与 `cargo check -j 2` 均通过。根 Tauri lib 测试 EXE 未运行，继续规避其历史 `TaskDialogIndirect / STATUS_ENTRYPOINT_NOT_FOUND` 宿主问题。通用发布审计对旧默认 seed 报告文件大小与 manifest 不一致；beta.4 Full Demo 将使用隔离 demo staging 重盖章，不改活动论文库。当前等待安装版原生热切换和交付门。
+
+## 2026-09-08 beta.3 运行中切换论文库后的 Agent 背景生命周期缺口
+
+用户先启动仍指向一条 fixture 论文的安装版，冷启动因该库缺少 V20 视觉源进入静态背景；随后在同一进程内把 SQLite 论文库目录切换到 `D:\\wenjian\\Desktop\\Sidera-Data\\library`。新库于进程启动后生效，论文列表成功变为 25,463 篇，但沉浸星图和理论星图均未显示；正常退出并重新启动精确安装版 EXE 后恢复正常。
+
+只读 SQLite 核验排除了数据侧原因：工作副本为 schema 14，`papers=25463`、`library_revision_state=(project-default, 0)`，`v20_analysis_state` 指向唯一 `ready` 快照；该快照为 25,463 篇论文、160 个热点和 25,463 条 membership，热点与 membership 实表计数一致。源码调用链确认：缺源分支在 `handleAgentInitialError` 中锁存 `sideraStaticBackground=true`；`saveSettings` 对 `databaseDir` 的成功变更只执行目录校验、数据库准备、设置保存和 `refreshAll()`，未复位静态降级或递增 Agent 挂载 revision；`AgentDualBackgroundPage` 收到 `forceStaticBackground` 后会卸载背景并短路两种模式的挂载。该问题不是安装目录、论文导入或 WebGL 数据损坏。
+
+该缺口现已由 beta.4 内部生命周期窄修覆盖并通过自动门。临时绕过仍为切库后正常重启；用户此前已确认重启后两种星图恢复。状态：`NATIVE REPRODUCED / USER WORKAROUND PASS / IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE RETEST PENDING`。
+
+证据：[运行中切库背景重挂载缺陷](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
+
 ## 2026-09-08 beta.3 安装启动兼容与交付
 
 用户安装并启动提交 `19dfb4e` 的 Full Demo 后，EXE 可响应但启动页显示 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。只读检查证明 `D:\\wenjian\\Desktop\\Sidera` 中的内置 schema 13 默认库包含 25,463 篇论文、1 个 ready V20 快照及正确 active 指针；安装目录无误。稳定 identifier 复用了旧 IndexedDB 设置，实际选择的旧外部论文库没有可接受视觉源。未读取浏览器存储中的具体路径、Cookie、账号或凭据。
