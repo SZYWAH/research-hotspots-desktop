@@ -217,6 +217,11 @@ import {
 } from "./lib/sideraResearchPresentation";
 
 const SIDERA_AGENT_MOUNT_DEADLINE_MS = 20_000;
+const SIDERA_IMMERSIVE_VISUAL_SOURCE_MISSING = "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING";
+
+function isMissingImmersiveVisualSource(message: string) {
+  return message.includes(SIDERA_IMMERSIVE_VISUAL_SOURCE_MISSING);
+}
 
 const documentReaderComposition = createDesktopDocumentReaderComposition({
   loadPdfJs: async () => await import("pdfjs-dist") as unknown as BundledPdfJsModule,
@@ -839,6 +844,7 @@ export default function App() {
   const sideraSplashMountedRef = useRef(!bypassSideraBoot);
   const sideraAgentStartupSettledRef = useRef(bypassSideraBoot);
   const sideraAgentFirstFrameReadyRef = useRef(bypassSideraBoot);
+  const sideraMissingVisualFallbackStartedRef = useRef(false);
   const edgeNavigationTimerRef = useRef<number | null>(null);
   const edgeNavigationCloseTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -1331,6 +1337,7 @@ export default function App() {
       if (!bypassSideraBoot) {
         sideraAgentStartupSettledRef.current = false;
         sideraAgentFirstFrameReadyRef.current = false;
+        sideraMissingVisualFallbackStartedRef.current = false;
         setSideraBootPhase("booting-data");
         setSideraBootError("");
         setSideraStaticFallbackAllowed(false);
@@ -2242,16 +2249,34 @@ export default function App() {
       || bypassSideraBoot
       || sideraAgentStartupSettledRef.current
     ) return;
+    if (
+      isMissingImmersiveVisualSource(message)
+      && !sideraMissingVisualFallbackStartedRef.current
+    ) {
+      sideraMissingVisualFallbackStartedRef.current = true;
+      sideraAgentFirstFrameReadyRef.current = false;
+      setSideraStaticBackground(true);
+      setSideraStaticFallbackAllowed(false);
+      setSideraBootError("");
+      setSideraBootPhase("mounting-agent");
+      showNotice(
+        "当前论文库尚未生成可用动态星图，已使用静态背景进入应用。",
+        "info",
+        { dismissAfterMs: 8_000 },
+      );
+      return;
+    }
     sideraAgentStartupSettledRef.current = true;
     setSideraBootError(message);
     setSideraStaticFallbackAllowed(true);
     setSideraBootPhase("failed");
-  }, [bypassSideraBoot]);
+  }, [bypassSideraBoot, showNotice]);
 
   const retrySideraBoot = () => {
     sideraBootStartedAtRef.current = performance.now();
     sideraAgentStartupSettledRef.current = false;
     sideraAgentFirstFrameReadyRef.current = false;
+    sideraMissingVisualFallbackStartedRef.current = false;
     setSideraSplashMounted(true);
     setSideraSplashExiting(false);
     setSideraBootStatusVisible(false);
@@ -2286,6 +2311,7 @@ export default function App() {
       onRetry={retrySideraBoot}
       onOpenSettings={() => void openSettingsFromSplash()}
       onUseStaticBackground={() => {
+        sideraMissingVisualFallbackStartedRef.current = true;
         sideraAgentStartupSettledRef.current = false;
         sideraAgentFirstFrameReadyRef.current = false;
         setSideraStaticBackground(true);

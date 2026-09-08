@@ -1,5 +1,13 @@
 # 科研 Agent 开发总账
 
+## 2026-09-08 beta.3 安装启动兼容
+
+用户安装并启动提交 `19dfb4e` 的 Full Demo 后，EXE 可响应但启动页显示 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。只读检查证明 `D:\\wenjian\\Desktop\\Sidera` 中的内置 schema 13 默认库包含 25,463 篇论文、1 个 ready V20 快照及正确 active 指针；安装目录无误。稳定 identifier 复用了旧 IndexedDB 设置，实际选择的旧外部论文库没有可接受视觉源。未读取浏览器存储中的具体路径、Cookie、账号或凭据。
+
+窄修改为：只有稳定缺源码自动选择已有静态背景并给出 8 秒信息通知；不改库、不改设置、不建模。动态启动审计 15/15、桌面壳 16/16、`pnpm build` 1,929 modules 与 `git diff --check` 通过。旧安装包原生启动记录为 `FAIL`，修正安装版仍为 `UNVERIFIED`，下一步必须提交后干净重建、审计并安装复验。根 Tauri 测试宿主继续禁止运行。
+
+证据：[beta.3 安装启动兼容](./evidence/sidera-beta3-installed-startup-compatibility-2026-09-08.json)。
+
 ## 2026-09-07 退出顺序补丁与 beta.3 交付准备
 
 已保存 HEAD、原脏工作区清单和关键文件 SHA-256。旧 EXE 哈希为 34A90D4E1C7BB10BD0C414EA159B39BFD420C4A5ADB83AF32582366F504201EF，PID 18328 曾不响应；只读 WCT 无可解释依赖链。新增 windows_wait_chain.ps1 仅检查 Sidera 数字线程等待拓扑，不读进程正文、锁名称或 Cookie。退出顺序补丁哈希 E83206AA787316E11CD011A58E0AA88D609E2DC0DA1344F7BB255BDD08E41575 已在空闲、机构三项就绪、认证窗口打开三种状态正常退出，profile 子进程均释放且未强杀。R7 26/26、R4 52/52、R6 16/16、恢复 core 2/2、前端构建与两项 Rust `-j 2` 检查通过；Full Demo 输出保护 mock 6/6 通过。跨进程对照只恢复数据库 SSO，统一发现一次超时、个人图书馆仍需认证，记录为限制。根 Tauri lib 测试宿主继续不运行，以免重现 TaskDialogIndirect 弹窗；安装包待干净提交构建。

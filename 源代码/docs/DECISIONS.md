@@ -1216,6 +1216,14 @@ ReadingContextScope 仅有 `selected-anchor / current-page / document-retrieval`
 
 2026-09-05 校正跨重启证据：旧进程曾在主窗口关闭后继续存活，因此撤回历史有效会话恢复 `PARTIAL PASS` 解释。主窗口关闭现走 Tauri `AppHandle::exit(0)`；哈希已核验新版 PID 26540 经主窗正常关闭后，精确 PID、全部 Sidera 进程及窗口均消失，通用 `NATIVE PROCESS EXIT` 已为 `PASS`。有效会话恢复仍为 `UNVERIFIED`，必须另行证明认证前态、新进程启动和认证能力恢复。不得从统一发现的公开可访问性推断 Cookie 已恢复，也不得在未验证 Cookie 元数据的条件下断言官方 Cookie 已过期或只在进程内有效。
 
+## D-176：缺少 V20 视觉源是可降级能力缺失，不得阻断已可用论文库
+
+状态：已接受；约束 beta.3 安装启动兼容及后续桌面冷启动
+
+Full Demo 与开发版保持稳定应用标识并复用用户设置，不能假定安装目录中的默认库一定是当前所选库。若已选择的论文库可以正常打开，但 `select_immersive_background_visual_source` 明确返回 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`，前端只允许使用既有静态背景完成启动，并给出限时说明；不得擅自切换到内置库、覆盖用户库、重建 V20 或修改设置。
+
+该例外仅匹配稳定缺源码，含义是视觉能力不存在，不是渲染器成功。D-162 对存在视觉源的动态冷启动仍完全有效；载荷/挂载超时、数据库错误、active 快照损坏、revision 不一致和未知错误继续终止，不能自动静态降级。安装包审计必须验证内置默认库自身仍有 ready V20 快照和正确 active 指针，避免用前端兼容掩盖资源打包缺陷。
+
 ## D-162：冷启动完成必须由首个真实动态 WebGL 帧确认，计时器不得代替成功
 
 状态：已接受并实现开发 012-R2；`AUTOMATED TECHNICAL PASS / NATIVE STARTUP UNVERIFIED`

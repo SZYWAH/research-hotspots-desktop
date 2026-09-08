@@ -1,5 +1,11 @@
 # 科研 Agent 架构
 
+## 2026-09-08 无 V20 视觉源的安装启动兼容
+
+稳定 Tauri identifier 会让安装版与此前开发版共享 IndexedDB 设置；因此 Full Demo 即使携带有效默认库，也可能继续打开用户此前选择的外部论文库。若该库不存在 `select_immersive_background_visual_source` 可接受的 active 或 ready historical V20，后端返回 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。前端启动状态机仅把这一稳定“能力缺失”码映射到已有静态背景，并在静态层提交 ready 后正常退出启动页；它不改写数据库目录，不复制默认库，不运行建模，也不把静态背景算作动态 WebGL 首帧。
+
+D-162 的动态首帧门继续约束所有存在视觉源的冷启动。载荷 15 秒、挂载 20 秒超时、数据库错误、active 快照损坏、revision 契约不一致及其他未知错误都继续进入失败页，不能自动静态提升成功。
+
 ## 2026-09-07 主窗口退出顺序窄修
 
 main 的 CloseRequested 先 prevent_close，再调用 AppHandle::exit(0)，由正常应用退出路径统一结束生命周期。依据本地 Tauri runtime，exit 请求通过事件队列派发，不能任由默认 owner 销毁先于该请求处理。新增 SIDERA_EXIT_TRACE=1 可选 stderr 固定阶段码；不记录 URL、页面或认证数据，不增加强退超时。补丁已在空闲、机构能力就绪、认证子窗打开三种状态完成原生退出，均观察到四段事件码并释放机构 WebView profile 子进程；旧 PID 的精确阻塞栈仍未知，不反推为已证实死锁。机构恢复公开接口及固定 profile 不变。

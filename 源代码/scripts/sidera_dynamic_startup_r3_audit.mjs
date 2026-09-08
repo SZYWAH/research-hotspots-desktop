@@ -193,20 +193,27 @@ check(
 );
 
 check(
-  "only real WebGL frames report ready",
+  "visual-source cold starts still require real WebGL frames",
   immersiveSource.includes("renderSceneAndReportReady(performance.now())")
     && immersiveSource.includes("renderer.render(scene, camera)")
     && theorySource.includes("onFirstFrame={() =>")
     && galaxySource.includes("onFirstFrameRef.current?.()"),
-  "Both immersive and theory render paths preserve an error-free WebGL render before their first-frame callback.",
+  "Both dynamic render paths preserve an error-free WebGL render before their first-frame callback when a source exists.",
 );
 
 check(
-  "static background remains an explicit diagnostic action",
+  "only missing visual source auto-selects the static compatibility background",
   splashSource.includes("使用静态背景继续")
     && appSource.includes("onUseStaticBackground")
-    && !appSource.includes("动态星图初始化超时，已使用静态背景进入应用。"),
-  "There is no automatic static promotion; the existing explicit user action remains available only after a failure.",
+    && appSource.includes('const SIDERA_IMMERSIVE_VISUAL_SOURCE_MISSING = "AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING"')
+    && appSource.includes("isMissingImmersiveVisualSource(message)")
+    && appSource.includes("当前论文库尚未生成可用动态星图，已使用静态背景进入应用。")
+    && !section(
+      appSource,
+      "SIDERA_AGENT_MOUNT_TIMEOUT",
+      "}, [bypassSideraBoot, sideraBootPhase, sideraSplashMounted])",
+    ).includes("setSideraStaticBackground(true)"),
+  "The stable missing-source code may enter a non-blocking static background; timeouts and all other startup failures remain explicit.",
 );
 
 check(

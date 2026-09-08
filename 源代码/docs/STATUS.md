@@ -1,5 +1,13 @@
 # 科研 Agent 当前状态
 
+## 2026-09-08 beta.3 安装版启动兼容修复（优先于下方历史结论）
+
+提交 `19dfb4e23baff2b6b845c736b1dff45d71027798` 构建的 beta.3 Full Demo 已通过安装并成功启动 EXE，但在沿用旧 IndexedDB 设置时停在 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING`。这不是安装目录错误：安装目录中的 schema 13 默认库经只读核对包含 25,463 篇论文、1 个 ready V20 快照及正确 active 指针。根因是稳定应用标识复用了此前选择的外部论文库，而该库没有后端可接受的 active 或 historical V20 视觉源。
+
+当前窄修只对该稳定缺源码自动使用现有静态背景并显示限时说明，不修改论文库、设置、Cookie 或凭据；载荷/挂载超时、数据库错误、损坏快照与 revision 不一致仍为终止错误。动态启动 15/15、桌面壳 16/16、前端生产构建 1,929 modules 与差异检查已通过。旧安装包的安装版启动为 `FAIL`，修正源码为 `AUTOMATED TECHNICAL PASS / PATCHED INSTALLED NATIVE UNVERIFIED`；必须从修正提交重新构建、审计并安装复验后才能恢复交付结论。
+
+证据：[beta.3 安装启动兼容](./evidence/sidera-beta3-installed-startup-compatibility-2026-09-08.json)。
+
 ## 2026-09-07 beta.3 交付复核（优先于下方历史结论）
 
 基线 HEAD 为 `26cb7d6770516f8536872fd4d9ef2c1cb58d6575`。原 PID 18328 曾被提权 CIM 确认为不响应，随后由既有开发 watcher 的重编译/重启消失；全程未强杀，该消失不计退出 PASS。补丁哈希 `E83206AA787316E11CD011A58E0AA88D609E2DC0DA1344F7BB255BDD08E41575` 已通过空闲、机构三项就绪、认证窗口打开三种正常退出门，固定退出事件链完整，主窗、认证窗、应用进程和机构 WebView 子进程均无残留。R7 同一哈希新进程对照仅恢复数据库 SSO，统一发现一次 10 秒超时、个人图书馆仍需认证，完整跨重启免登录为 `PARTIAL PASS / LIMITATION`。R7 26/26、R4 52/52、R6 16/16、恢复 core 2/2、前端构建、`cargo check --tests -j 2` 与 `cargo check -j 2` 均通过；根 Tauri 测试宿主仍因 `TaskDialogIndirect` 不运行。beta.3 安装包尚待干净提交构建；未提交推送。
