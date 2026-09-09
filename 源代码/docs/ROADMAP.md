@@ -1,12 +1,14 @@
 # 科研 Agent 路线图
 
-## 2026-09-08 beta.4 稳定化门
+## 2026-09-09 beta.4 稳定化门已完成
 
-本门位于 M3 收口与 M5 发布工程预备之间，不进入 M4 功能扩展。运行中换库背景生命周期已实现并通过自动门；剩余顺序固定为：形成干净实现提交 → 构建 beta.4 Full Demo → 安装版原生“缺源→完整”热切换、双模式、窗口与退出门 → R6/R7 最小回归 → 证据提交与普通推送。未通过原生热切换前不得把本门标记完成，也不得开始真实星系生成。
+本门位于 M3 收口与 M5 发布工程预备之间，不进入 M4 功能扩展。提交 `b9868ad`、beta.4 Full Demo 安装包与已安装 EXE 已完成一致性核验；安装版在同一进程完成“一篇论文缺源库→完整库”后无需重启即恢复星图，沉浸/理论双模式、15 秒迟到回调、普通/最大化窗口和正常退出均通过本轮用户观察或原生进程门。R7 静默检查为数据库 `login-required`、统一发现 `ready`、个人图书馆 `login-required` 且无自动认证弹窗；R6 因官方认证不可用保持 `UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。beta.4 验收收口完成，后续小问题另行汇总，不在本轮进入 M4。
+
+证据：[beta.4 安装版热切换验收](./evidence/sidera-beta4-installed-hot-switch-2026-09-09.json)。
 
 ## 2026-09-08 beta.3 后续窄修：运行中切库重挂载 Agent 背景
 
-已确认 Full Demo 工作库本身包含完整且 active 的 V20 快照；异常只发生在同一进程先因旧测试库缺少视觉源进入静态降级、再从设置页切换到完整库时。论文数据会立即刷新，但旧 `forceStaticBackground` 状态仍锁存，导致沉浸星图和理论星图继续隐藏；重启同一 beta.3 后恢复。beta.4 已实现规范化库身份、单调 epoch、成功刷新后的静态降级复位及旧回调隔离，自动门为 `PASS`；当前为 `REPRODUCED / WORKAROUND PASS / FIX AUTOMATED PASS / NATIVE RETEST PENDING`，仍不运行热点重建、不改写 V20 快照。
+已确认 Full Demo 工作库本身包含完整且 active 的 V20 快照；异常只发生在同一进程先因旧测试库缺少视觉源进入静态降级、再从设置页切换到完整库时。论文数据会立即刷新，但旧 `forceStaticBackground` 状态仍锁存，导致沉浸星图和理论星图继续隐藏；重启同一 beta.3 后恢复。beta.4 已实现规范化库身份、单调 epoch、成功刷新后的静态降级复位及旧回调隔离，并完成安装版原生复验。当前为 `REPRODUCED / WORKAROUND PASS / FIX AUTOMATED PASS / USER-OBSERVED NATIVE HOT-SWITCH PASS`，仍不运行热点重建、不改写 V20 快照。
 
 证据：[运行中切库背景重挂载缺陷](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
 
@@ -24,7 +26,7 @@ R6 不重新扩展。主窗正常退出已在空闲、机构三项就绪、认�
 
 状态：权威路线入口
 
-更新时间：2026-09-08
+更新时间：2026-09-09
 
 详细阶段说明见 [科研 Agent 分阶段实施路线](./RESEARCH_AGENT_IMPLEMENTATION_ROADMAP.md)。
 

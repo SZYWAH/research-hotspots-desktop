@@ -1,10 +1,14 @@
 # 科研 Agent 开发总账
 
-## 2026-09-08 beta.4 星图热切换实现
+## 2026-09-09 beta.4 安装版热切换验收与交付收口
 
 新增纯内部 `agentBackgroundLifecycle` 契约，规范化 Windows 库目录并以 `databaseDir + projectId + epoch` 生成 Agent 挂载身份。根组件首次载入只登记身份；设置页只有在真实目录变化且新目录校验、数据库准备、设置持久化和 `refreshAll()` 全部成功后，才同步使旧 epoch 失效、清除静态降级和缺源锁存并重挂载一次。初始回调捕获挂载 epoch，旧组件即使在卸载后迟到返回也不能修改新状态；运行中选到缺源库仍允许既有静态兼容背景，模式偏好不被写回。
 
-自动门：换库专项 8/8、012-R3 动态启动 15/15、双背景真实载荷、014-R6 16 项、014-R7 26 项、Core 机构检索 23/23、Core 机构浏览 14/14、`pnpm build` 1,930 modules、`cargo check --tests -j 2` 与 `cargo check -j 2` 均通过。根 Tauri lib 测试 EXE 未运行，继续规避其历史 `TaskDialogIndirect / STATUS_ENTRYPOINT_NOT_FOUND` 宿主问题。通用发布审计对旧默认 seed 报告文件大小与 manifest 不一致；beta.4 Full Demo 将使用隔离 demo staging 重盖章，不改活动论文库。当前等待安装版原生热切换和交付门。
+提交 `b9868adcfb9c23a148522a81197c95d60e520bb2` 的自动门、`0.22.0-beta.4` Full Demo 包与安装 EXE 已完成一致性核验。安装版从一篇论文且无 V20 源的 fixture 切到 `D:\\wenjian\\Desktop\\Sidera-Data\\library` 后，同一进程直接恢复星图；沉浸/理论双模式、15 秒旧回调隔离、普通/最大化窗口和主界面可点击均由用户确认通过。用户同时说明仍有其他小问题留待后续统一调整，本轮只把既定 beta.4 门记为通过，不声明零缺陷。
+
+退出验证先废弃一次没有确认关闭动作的观察，获用户授权清理残留 PID 31148 后重新从精确安装路径启动。有效复测 PID 10060 经用户点击标题栏关闭按钮后自然退出，`SIDERA_EXIT_MAIN_CLOSE_REQUESTED → SIDERA_EXIT_REQUEST_QUEUED → SIDERA_EXIT_REQUEST_DISPATCHED → SIDERA_EXIT_EVENT` 四段固定码完整。随后精确启动 PID 24204 进入机构资源，未自动弹出认证窗口；数据库和个人图书馆均为 `login-required`，统一发现为 `ready`。R7 记 `PASS_BOUNDED`，R6 因本轮不重新认证记 `UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。
+
+本轮不重建安装包，不运行全量 Cargo/前端构建，也不运行可能卸载或重装软件的 Windows 安装审计；既有精确提交自动门和安装包哈希继续作为构建证据。状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER-OBSERVED NATIVE HOT-SWITCH PASS / NATIVE PROCESS EXIT PASS / R7 PASS_BOUNDED / R6 UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。证据：[beta.4 安装版热切换验收](./evidence/sidera-beta4-installed-hot-switch-2026-09-09.json)。
 
 ## 2026-09-08 beta.3 运行中切换论文库后的 Agent 背景生命周期缺口
 
@@ -12,7 +16,7 @@
 
 只读 SQLite 核验排除了数据侧原因：工作副本为 schema 14，`papers=25463`、`library_revision_state=(project-default, 0)`，`v20_analysis_state` 指向唯一 `ready` 快照；该快照为 25,463 篇论文、160 个热点和 25,463 条 membership，热点与 membership 实表计数一致。源码调用链确认：缺源分支在 `handleAgentInitialError` 中锁存 `sideraStaticBackground=true`；`saveSettings` 对 `databaseDir` 的成功变更只执行目录校验、数据库准备、设置保存和 `refreshAll()`，未复位静态降级或递增 Agent 挂载 revision；`AgentDualBackgroundPage` 收到 `forceStaticBackground` 后会卸载背景并短路两种模式的挂载。该问题不是安装目录、论文导入或 WebGL 数据损坏。
 
-该缺口现已由 beta.4 内部生命周期窄修覆盖并通过自动门。临时绕过仍为切库后正常重启；用户此前已确认重启后两种星图恢复。状态：`NATIVE REPRODUCED / USER WORKAROUND PASS / IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE RETEST PENDING`。
+该缺口现已由 beta.4 内部生命周期窄修覆盖并通过自动门和安装版复验。beta.3 的重启绕过与原始失败经过继续保留为历史事实；beta.4 当前状态为 `NATIVE REPRODUCED / USER WORKAROUND PASS / IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER-OBSERVED NATIVE HOT-SWITCH PASS`。
 
 证据：[运行中切库背景重挂载缺陷](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
 
@@ -34,7 +38,7 @@
 
 状态：权威开发过程入口
 
-更新时间：2026-09-08
+更新时间：2026-09-09
 
 ## 文档职责
 

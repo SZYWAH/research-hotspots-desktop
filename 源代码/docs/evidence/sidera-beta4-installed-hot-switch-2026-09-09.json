@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-09",
+  "scope": "beta.4 Full Demo installed native hot-switch acceptance and delivery closure",
+  "status": {
+    "overall": "PASS_WITH_DEFERRED_MINOR_ISSUES",
+    "implementation": "PASS",
+    "automatedTechnical": "PASS",
+    "fullDemoPackage": "PASS",
+    "installedExecutable": "PASS",
+    "nativeHotSwitch": "USER_OBSERVED_NATIVE_HOT_SWITCH_PASS",
+    "dualBackground": "USER_OBSERVED_PASS_WITH_DEFERRED_MINOR_ISSUES",
+    "windowModes": "USER_OBSERVED_PASS_WITH_DEFERRED_MINOR_ISSUES",
+    "lateCallbackDelay": "USER_OBSERVED_PASS_WITH_DEFERRED_MINOR_ISSUES",
+    "normalProcessExit": "NATIVE_PROCESS_EXIT_PASS",
+    "institutionSilentRestore": "PASS_BOUNDED",
+    "institutionR6MinimumRegression": "UNVERIFIED_OFFICIAL_AUTH_REQUIRED"
+  },
+  "implementationBoundary": {
+    "commit": "b9868adcfb9c23a148522a81197c95d60e520bb2",
+    "version": "0.22.0-beta.4",
+    "branch": "codex/sidera-m2-rag",
+    "change": "Remount the Agent background only after a real database-directory change completes validate, prepare, settings persistence and refreshAll; reject callbacks from older library epochs.",
+    "excluded": [
+      "M4 feature work",
+      "hotspot rebuild",
+      "database or snapshot mutation",
+      "background preference overwrite"
+    ]
+  },
+  "artifacts": {
+    "fullDemoInstaller": {
+      "path": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\release\\windows\\0.22.0-beta.4\\Research-Hotspots-Desktop_0.22.0-beta.4_x64-full-setup.exe",
+      "bytes": 496304447,
+      "fileVersion": "0.22.0-beta.4",
+      "sha256": "fb6d8ba540a94e1f46dc0edbbdf95a4b14eb8c850b293a1762cea744f7da35fd"
+    },
+    "installedExecutable": {
+      "path": "D:\\wenjian\\Desktop\\Sidera-beta4-test\\Sidera\\research-hotspots-desktop.exe",
+      "bytes": 54967296,
+      "fileVersion": "0.22.0-beta.4",
+      "sha256": "4baec0a06bc46d4e1f18f1e395b3c3e8ed57405dc875e9ddd254680c9dc7011c"
+    },
+    "installedDefaultLibrary": {
+      "path": "D:\\wenjian\\Desktop\\Sidera-beta4-test\\Sidera\\default-library\\research-hotspots-v7.sqlite",
+      "bytes": 166973440,
+      "sha256": "8487d91d31a4175811f55c4934b4fbcef412a1ccf442ddfdefff5101a66ec1a4",
+      "manifestSchemaVersion": 5,
+      "databaseSchemaVersion": 13,
+      "papers": 25463,
+      "hotspots": 160,
+      "memberships": 25463,
+      "quickCheck": "ok",
+      "manifestHashAndSize": "MATCH"
+    }
+  },
+  "readOnlyDatabaseEvidence": {
+    "missingSourceFixture": {
+      "directory": "D:\\wenjian\\Desktop\\综合课程设计\\源代码\\.codex-tmp\\dev016-r1-native\\library",
+      "databaseSchemaVersion": 14,
+      "papers": 1,
+      "v20StateRows": 0,
+      "v20Snapshots": 0,
+      "hotspots": 0,
+      "memberships": 0,
+      "quickCheck": "ok"
+    },
+    "completeLibrary": {
+      "directory": "D:\\wenjian\\Desktop\\Sidera-Data\\library",
+      "databaseSchemaVersion": 14,
+      "papers": 25463,
+      "activeSnapshotId": "project-default:v20:1788955427189",
+      "activeSnapshotStatus": "ready",
+      "activeSnapshotAlgorithm": "v20-semantic-e5-small-3",
+      "activeSnapshotPaperCount": 25463,
+      "activeSnapshotHotspots": 160,
+      "activeSnapshotMemberships": 25463,
+      "libraryRevision": 0,
+      "readySnapshotCount": 2,
+      "quickCheck": "ok"
+    }
+  },
+  "nativeAcceptance": {
+    "hotSwitchSequence": [
+      "The installed beta.4 process first used the one-paper library with no V20 visual source.",
+      "Without restarting, the user changed the database directory to D:\\wenjian\\Desktop\\Sidera-Data\\library.",
+      "The star-map background appeared directly after the directory switch."
+    ],
+    "userObservedChecks": {
+      "immersiveBackground": "PASS",
+      "theoryBackground": "PASS",
+      "fifteenSecondLateCallbackIsolation": "PASS",
+      "normalWindow": "PASS",
+      "maximizedWindow": "PASS",
+      "mainInterfaceClickable": "PASS",
+      "finalLibraryDirectory": "D:\\wenjian\\Desktop\\Sidera-Data\\library"
+    },
+    "acceptanceQualification": "The user asked to count the listed beta.4 acceptance checks as passed while explicitly noting that other minor issues remain for a later consolidated adjustment. This is not a zero-defect claim, and the minor issues were not individually characterized in this closure.",
+    "processExit": {
+      "discardedAttempt": {
+        "pid": 31148,
+        "status": "INVALID_NO_CONFIRMED_CLOSE_ACTION",
+        "cleanup": "Terminated only after explicit user authorization; not counted as an exit result."
+      },
+      "validRetest": {
+        "pid": 10060,
+        "startedAt": "2026-09-09 20:41:58 +08:00",
+        "action": "User closed the main window with the title-bar close button.",
+        "result": "PASS",
+        "remainingProcess": false,
+        "trace": [
+          "SIDERA_EXIT_MAIN_CLOSE_REQUESTED",
+          "SIDERA_EXIT_REQUEST_QUEUED",
+          "SIDERA_EXIT_REQUEST_DISPATCHED",
+          "SIDERA_EXIT_EVENT"
+        ]
+      }
+    }
+  },
+  "institutionRegression": {
+    "installedProcess": {
+      "pid": 24204,
+      "startedAt": "2026-09-09 21:06:36 +08:00",
+      "path": "D:\\wenjian\\Desktop\\Sidera-beta4-test\\Sidera\\research-hotspots-desktop.exe"
+    },
+    "r7": {
+      "automaticAuthenticationPopup": false,
+      "databaseAccess": "login-required",
+      "unifiedDiscovery": "ready",
+      "personalLibrary": "login-required",
+      "result": "PASS_BOUNDED"
+    },
+    "r6": {
+      "query": "人工智能",
+      "target": 40,
+      "result": "UNVERIFIED_OFFICIAL_AUTH_REQUIRED",
+      "reason": "The existing official database and personal-library sessions required authentication. The acceptance boundary prohibited re-authentication, so no institutional search was started."
+    }
+  },
+  "automatedEvidence": {
+    "versionAlignment": "PASS",
+    "librarySwitchAudit": "PASS 8/8",
+    "dynamicStartupAudit": "PASS 15/15",
+    "dualBackgroundAudit": "PASS",
+    "institutionSessionR7Audit": "PASS 26/26",
+    "projectDocumentationAudit": "PASS",
+    "demoFullReleaseAudit": "PASS",
+    "jsonParse": "PASS",
+    "gitDiffCheck": "PASS",
+    "heavyBuildsRerun": false,
+    "windowsInstallAuditRerun": false
+  },
+  "historicalEvidence": {
+    "beta3FailureRecord": "sidera-beta3-library-switch-background-remount-2026-09-08.json",
+    "rule": "The beta.3 failure sequence remains historical truth and is not overwritten by this beta.4 acceptance."
+  },
+  "privacy": "No Cookie, credential, password, document body or account data was read or recorded. Institution capability states were observed without authentication."
+}

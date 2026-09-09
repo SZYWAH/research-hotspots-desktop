@@ -1,16 +1,20 @@
 # 科研 Agent 当前状态
 
-## 2026-09-08 beta.4 星图热切换窄修（自动门通过，原生门待验）
+## 2026-09-09 beta.4 安装版验收已收口
 
 已实现论文库背景代次：首次加载只建立身份基线；实际切库必须在设置保存和 `refreshAll()` 成功后才清除 `sideraStaticBackground`、复位缺源标记并递增 Agent 挂载 epoch。React key 同时包含规范化数据库目录、项目和 epoch，回调闭包携带 epoch，旧库迟到回调不能污染新实例。Windows 路径的大小写、斜杠和尾部分隔符会规范化，因此同目录重复保存不会误重挂载。新库缺源仍进入明确静态兼容背景，用户的沉浸/理论偏好保持不变。
 
-自动证据：生命周期 8/8、动态启动 15/15、双背景载荷 `PASS`、R6 16 项、R7 26 项、机构检索 Core 23/23、机构浏览 Core 14/14、生产前端 1,930 modules、两个 Cargo check 均 `PASS`。版本已对齐为 `0.22.0-beta.4`。严格状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE HOT-SWITCH UNVERIFIED / INSTALLER UNVERIFIED`。
+提交 `b9868adcfb9c23a148522a81197c95d60e520bb2`、Full Demo 安装包与已安装 EXE 均为 `0.22.0-beta.4`，安装包 SHA-256 为 `fb6d8ba540a94e1f46dc0edbbdf95a4b14eb8c850b293a1762cea744f7da35fd`，安装 EXE SHA-256 为 `4baec0a06bc46d4e1f18f1e395b3c3e8ed57405dc875e9ddd254680c9dc7011c`。只读检查确认一篇论文 fixture 无 V20 源，完整库为 schema 14、25,463 篇论文并有 active ready V20 快照。
+
+用户确认安装版在同一进程切到完整库后直接显示星图；沉浸/理论双模式、15 秒旧回调观察、普通/最大化窗口和主界面可点击均记为 `USER-OBSERVED PASS`。有效退出复测 PID 10060 经标题栏关闭后自然消失，固定四段退出事件完整。R7 首次进入无认证弹窗，数据库 `login-required`、统一发现 `ready`、个人图书馆 `login-required`；R6 因官方认证不可用保持 `UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。严格状态：`IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER-OBSERVED NATIVE HOT-SWITCH PASS / NATIVE PROCESS EXIT PASS / R7 PASS_BOUNDED / R6 UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。用户同时声明尚有小问题待后续统一调整，因此本状态不表示零缺陷。
+
+证据：[beta.4 安装版热切换验收](./evidence/sidera-beta4-installed-hot-switch-2026-09-09.json)。
 
 ## 2026-09-08 beta.3 运行中切库后星图保持静态（已确认缺陷）
 
 用户在同一安装版进程内将一条论文的测试库切换为 Full Demo 工作副本后，论文列表立即恢复为 25,463 篇，但 Agent 的沉浸星图和理论星图均未挂载；正常退出并从精确 beta.3 EXE 路径重新启动后，两种星图恢复正常。只读数据库核验确认新库为 schema 14、library revision 0，包含 1 个 `ready` 且 active 的 V20 快照、160 个热点和 25,463 条 membership，因此不是论文导入、默认库或 V20 数据缺失。
 
-根因已定位为当前进程的静态降级状态锁存：旧测试库在冷启动时触发 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 后，根组件将 `sideraStaticBackground` 设为 `true`；设置页随后切换 `databaseDir` 只保存并刷新数据，没有清除该状态或重新挂载 Agent 背景，`forceStaticBackground` 因而继续阻止两种动态背景。该代码缺口已由 beta.4 窄修覆盖，当前结论为 `NATIVE REPRODUCED / RESTART WORKAROUND PASS / CODE FIX AUTOMATED PASS / NATIVE RETEST PENDING`。修复不修改数据库、快照或用户背景偏好。
+根因已定位为当前进程的静态降级状态锁存：旧测试库在冷启动时触发 `AGENT_IMMERSIVE_VISUAL_SOURCE_MISSING` 后，根组件将 `sideraStaticBackground` 设为 `true`；设置页随后切换 `databaseDir` 只保存并刷新数据，没有清除该状态或重新挂载 Agent 背景，`forceStaticBackground` 因而继续阻止两种动态背景。该代码缺口已由 beta.4 窄修覆盖并完成安装版原生复验，当前结论为 `NATIVE REPRODUCED / RESTART WORKAROUND PASS / CODE FIX AUTOMATED PASS / USER-OBSERVED NATIVE HOT-SWITCH PASS`。修复不修改数据库、快照或用户背景偏好。
 
 证据：[运行中切库背景重挂载缺陷](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
 
@@ -30,7 +34,7 @@
 
 证据：[本轮分门记录](./evidence/sidera-beta3-exit-delivery-2026-09-07.json)。
 
-更新时间：2026-09-08
+更新时间：2026-09-09
 
 当前分支：`codex/sidera-m2-rag`
 
@@ -42,9 +46,9 @@ M1.3e 文档检查点：`07de19d`
 
 M1.3f 失败归档提交：`220a5c4`
 
-当前 HEAD：`ede6e0b4ddc3980816ec4e4d694f59c33461b159`
+beta.4 实现提交：`b9868adcfb9c23a148522a81197c95d60e520bb2`
 
-当前阶段：开发 014-R6 已完成为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STRUCTURED TRANSPORT PASS / NATIVE STRUCTURED PAGINATION PASS / NATIVE SEARCH TRUTH PASS / NATIVE CANCELLATION PASS / NATIVE UX PASS`。开发 014-R7 已通过自动技术、静默流程、登录页分类和主窗口进程退出原生门；有效登录态跨进程恢复和最终用户体验仍待复验。统一发现可访问不等于恢复了登录态。开发 016/017 已完整收口，真实论文库、V20、Provider 与星图背景不在 014-R6/R7 范围。
+当前阶段：beta.4 热切换、双背景、窗口和正常退出已完成安装版验收；R7 静默能力分类受限通过，R6 本轮因官方认证不可用保持未验证。开发 014-R6 的既有实现仍为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE STRUCTURED TRANSPORT PASS / NATIVE STRUCTURED PAGINATION PASS / NATIVE SEARCH TRUTH PASS / NATIVE CANCELLATION PASS / NATIVE UX PASS`，但不得挪作本次安装版 R6 证据；统一发现可访问不等于恢复了官方登录态。开发 016/017 已完整收口；本轮停止于 beta.4 证据交付，不进入 M4。
 
 ## 2026-09-05 开发 014-R7｜主窗口退出修复与重启证据校正
 

@@ -45,8 +45,17 @@ const readEvidenceJson = (fileName) => {
   }
 };
 
+const expectedUpdateDate = {
+  "PROJECT.md": "2026-09-09",
+  "ROADMAP.md": "2026-09-09",
+  "STATUS.md": "2026-09-09",
+  "DEVELOPMENT.md": "2026-09-09",
+  "ARCHITECTURE.md": "2026-09-08",
+  "DECISIONS.md": "2026-09-08",
+};
+
 for (const name of requiredDocs) {
-  requireText(name, "更新时间：2026-09-08", "current update date");
+  requireText(name, `更新时间：${expectedUpdateDate[name]}`, "current update date");
   requireText(name, "P1c-R2", "current native research and side browser package");
   requireText(name, "NATIVE SPLIT WORKSPACE UNVERIFIED", "native split workspace gate");
   requireText(name, "P1c-R3", "main window ownership repair package");

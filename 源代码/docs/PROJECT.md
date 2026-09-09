@@ -1,12 +1,14 @@
 # 科研 Agent 项目目标
 
-## 2026-09-08 beta.4 星图热切换稳定化
+## 2026-09-09 beta.4 安装版热切换验收收口
 
 beta.4 只修复运行中切换论文库后的 Agent 背景生命周期，不扩展 M4 功能。新内部契约把背景挂载绑定到规范化的 `databaseDir + projectId + epoch`：只有目录实际变化并依次完成校验、准备、设置保存和全量刷新后，才清除旧库产生的静态降级、递增 epoch 并重挂载；旧 epoch 的首帧或错误回调一律拒绝。同目录保存不重挂载，新库仍缺视觉源时继续如实进入既有静态兼容背景，沉浸/理论偏好不被覆盖。
 
-当前实现已通过换库生命周期 8/8、动态启动 15/15、双背景载荷、R6 16 项、R7 26 项、机构检索 Core 23/23、机构浏览 Core 14/14、`pnpm build` 1,930 modules、`cargo check --tests -j 2` 与 `cargo check -j 2`。状态为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / NATIVE HOT-SWITCH UNVERIFIED / BETA.4 PACKAGE NOT BUILT`；只有安装版在同一进程完成“缺源库→完整库”且两种星图无需重启恢复，才能提升原生状态。
+提交 `b9868adcfb9c23a148522a81197c95d60e520bb2` 的 `0.22.0-beta.4` Full Demo 安装包、安装 EXE 和内置默认库已完成版本、哈希与只读数据核验。用户在同一安装进程把一篇论文的缺源库切到 `D:\\wenjian\\Desktop\\Sidera-Data\\library` 后，无需重启即恢复星图；沉浸/理论两种背景、15 秒迟到回调观察、普通/最大化窗口和主界面可点击均按用户观察记为通过。带固定阶段码的有效复测中，PID 10060 经标题栏正常关闭后自然退出，四段退出事件完整。
 
-证据：[beta.4 换库背景生命周期](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
+安装版 R7 首次进入机构资源没有自动认证弹窗，数据库为 `login-required`、统一发现为 `ready`、个人图书馆为 `login-required`，记为受限通过；因现有官方会话要求认证且本轮禁止重新认证，R6 中文“人工智能”40 条回归保持 `UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。beta.4 收口状态为 `IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER-OBSERVED NATIVE HOT-SWITCH PASS / NATIVE PROCESS EXIT PASS / R7 PASS_BOUNDED / R6 UNVERIFIED_OFFICIAL_AUTH_REQUIRED`。用户同时说明仍有若干小问题待后续统一整理，因此本结论不是零缺陷声明，也不进入 M4。
+
+证据：[beta.4 安装版热切换验收](./evidence/sidera-beta4-installed-hot-switch-2026-09-09.json)；beta.3 原始失败经过继续保留在[换库背景生命周期记录](./evidence/sidera-beta3-library-switch-background-remount-2026-09-08.json)。
 
 ## 2026-09-08 beta.3 安装启动停止门
 
@@ -24,7 +26,7 @@ beta.3 Full Demo 的安装目录与内置默认库已验证完整；实际阻断
 
 状态：权威事实入口
 
-更新时间：2026-09-08
+更新时间：2026-09-09
 
 ## 当前交付线：开发 014-R6 已完成，开发 014-R7 已完成静默恢复与登录失效真值修复；完整有效会话跨重启仍待复验；开发 017、016、015 已收口
 
